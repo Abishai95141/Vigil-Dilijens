@@ -42,7 +42,7 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 - [x] **01 M2** Class carriage convention named in component contracts
 - [~] **02 M1** Ontology schema v1 — skeleton done; freeze conceptual structures as authoring contract
 - [ ] **02 M2** Reference-graph encoding begun (the 842-node graph → schema v1; doc 14 A14 workstream)
-- [ ] **03 M1** Identity model + CEI scheme (both layers, coordinates, minting rules) — survives churn-scenario review
+- [x] **03 M1** Identity model + CEI scheme — both layers, minting, role derivation; churn tests pass (restart/reschedule/scale/**recreate-same-name honeypot**). `obsd/internal/identity/cei.go`
 - [ ] **03 M2** Normalization maps: cAdvisor + kube-state-metrics first, then node-exporter, then OTel semconv
 - [ ] **03 M3** Lifecycle state machine + succession (restart/reschedule/scale/recreate-same-name)
 - [ ] **03 M4** Timestamped edges + validity semantics; staleness budgets per type (params wired ✅)
@@ -136,7 +136,10 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 ---
 
 ### ▶ Immediate next step
-**Phase 0a — the identity layer (doc 03), prerequisite zero.** Start with 03 M1 (CEI
-scheme) + 05 M1 (stream conventions) + the client-go informer + own-scraper wiring,
-driven against the kind cluster on the Linux box. Everything downstream is only as
-correct as this join, so it is gated hardest.
+**Identity layer (doc 03) — M1 done.** Next: **03 M2 — normalization maps**
+(cAdvisor + kube-state-metrics first, then node-exporter, then OTel semconv): the
+declarative rules that translate each exporter's label dialect into CEI coordinates,
+with unjoinable streams quarantined (never guessed). Pure-Go, unit-tested here with
+fixture label sets — including the cAdvisor honeypot (`container=""` pod-aggregate
+and `container="POD"` sandbox rows; no pod-UID label → resolve via (ns,pod,container)→UID).
+Then M3 (lifecycle + informers, fake-client tested) and M4 (timestamped edges).
