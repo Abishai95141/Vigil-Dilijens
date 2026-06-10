@@ -43,7 +43,7 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 - [~] **02 M1** Ontology schema v1 — skeleton done; freeze conceptual structures as authoring contract
 - [ ] **02 M2** Reference-graph encoding begun (the 842-node graph → schema v1; doc 14 A14 workstream)
 - [x] **03 M1** Identity model + CEI scheme — both layers, minting, role derivation; churn tests pass (restart/reschedule/scale/**recreate-same-name honeypot**). `obsd/internal/identity/cei.go`
-- [ ] **03 M2** Normalization maps: cAdvisor + kube-state-metrics first, then node-exporter, then OTel semconv
+- [x] **03 M2** Normalization maps — cAdvisor + KSM + node-exporter (`obsd/internal/identity/normalize.go`). All doc 14 §3.2 traps encoded + tested: no-pod-UID time-aware join, `container=""`→pod aggregate, `container="POD"`→deliberate drop, KSM terminated-pod persistence, class-aware container routing, node-name join, **same-name recreate race incl. genuinely-late samples (EventTime vs receive time)**. Quarantine-never-guess; typed reasons; join audit records; versioned maps. Adversarially verified (4 confirmed findings fixed). *OTel semconv = 4th lane, Phase 0b–1 per doc 14 §3.2.*
 - [ ] **03 M3** Lifecycle state machine + succession (restart/reschedule/scale/recreate-same-name)
 - [ ] **03 M4** Timestamped edges + validity semantics; staleness budgets per type (params wired ✅)
 - [ ] **03 M5** Join-audit tooling + health metrics
@@ -136,10 +136,9 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 ---
 
 ### ▶ Immediate next step
-**Identity layer (doc 03) — M1 done.** Next: **03 M2 — normalization maps**
-(cAdvisor + kube-state-metrics first, then node-exporter, then OTel semconv): the
-declarative rules that translate each exporter's label dialect into CEI coordinates,
-with unjoinable streams quarantined (never guessed). Pure-Go, unit-tested here with
-fixture label sets — including the cAdvisor honeypot (`container=""` pod-aggregate
-and `container="POD"` sandbox rows; no pod-UID label → resolve via (ns,pod,container)→UID).
-Then M3 (lifecycle + informers, fake-client tested) and M4 (timestamped edges).
+**Identity layer (doc 03) — M1 + M2 done.** Next: **03 M3 — lifecycle state machine
++ succession** (discovered → active → terminated/tombstoned; succession records;
+the client-go informer wiring that feeds it and implements the time-aware `Lookup`
+the normalizer consumes), then **03 M4 — timestamped edges + validity semantics**
+(budgets already in params). M3 is fake-client tested here; live informer behavior
+integration-tested against kind on the Linux box (`integration` build tag).
