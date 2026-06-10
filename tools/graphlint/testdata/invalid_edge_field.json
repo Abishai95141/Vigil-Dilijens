@@ -1,0 +1,9 @@
+{
+  "nodes": [
+    { "id": "S", "type": "Signal", "name": "x", "modality": "Metric", "data_type": "Gauge" },
+    { "id": "P", "type": "CorrelationGroup", "label": "p", "span": "entity-local", "signals": [["a", "required", "T0", "n"]] }
+  ],
+  "edges": [
+    { "type": "participates_in", "src": "S", "src_type": "Signal", "dst": "P", "dst_type": "CorrelationGroup", "temporl_order": "T0" }
+  ]
+}

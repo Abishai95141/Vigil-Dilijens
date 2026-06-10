@@ -1,0 +1,10 @@
+{
+  "_meta": { "schema_version": "test" },
+  "nodes": [
+    { "id": "SIG_x", "type": "Signal", "name": "X working set", "modality": "Metric", "data_type": "Gauge" },
+    { "id": "PHEN_x", "type": "CorrelationGroup", "label": "X pattern", "span": "entity-local", "traversal_edge_types": [], "signals": [["pat", "required", "T0", "note"]] }
+  ],
+  "edges": [
+    { "type": "participates_in", "src": "SIG_x", "src_type": "Signal", "dst": "PHEN_x", "dst_type": "CorrelationGroup", "role": "required", "temporal_order": "T0", "why": "test" }
+  ]
+}

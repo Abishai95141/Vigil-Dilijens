@@ -1,0 +1,6 @@
+{
+  "nodes": [
+    { "id": "SIG_x", "type": "Signal" }
+  ],
+  "edges": []
+}

@@ -37,6 +37,8 @@ jobs:
           fi
       - name: test (race, hermetic)
         run: go test -race ./...
+      - name: graphlint (ontology KG validation + gap report)
+        run: go run ./tools/graphlint
 
   proto:
     name: proto (lint · format · gen freshness)

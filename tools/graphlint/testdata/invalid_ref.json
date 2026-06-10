@@ -1,0 +1,8 @@
+{
+  "nodes": [
+    { "id": "SIG_x", "type": "Signal", "name": "X", "modality": "Metric", "data_type": "Gauge" }
+  ],
+  "edges": [
+    { "type": "participates_in", "src": "SIG_x", "src_type": "Signal", "dst": "PHEN_missing", "dst_type": "CorrelationGroup" }
+  ]
+}

@@ -76,6 +76,11 @@ gen:
     cd proto && buf lint && buf generate
     @echo "regenerated proto/gen — remember to commit it"
 
+# Validate the ontology KG (schema + referential integrity) and print the authoring
+# gap report (doc 02 M3 / doc 14 A14). Add --strict to fail on gaps.
+graphlint *ARGS:
+    go run ./tools/graphlint {{ARGS}}
+
 # Fail if generated code is stale relative to the protos (CI guard).
 gen-check:
     #!/usr/bin/env bash

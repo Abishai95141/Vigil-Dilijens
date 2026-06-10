@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigil/ontology/kg.schema.json",
+  "title": "Vigil Ontology Knowledge Graph",
+  "description": "Schema for the authoritative Type-A Signal/Observability knowledge graph (the 842-node reference graph, doc 02 / doc 14 A14). The graph is a node/edge artifact; this schema validates its ENVELOPE and structure. The richer authoring invariants of doc 02 §3.6 — referential integrity, every phenomenon declaring a span+traversal edges, threshold-rule presence — are enforced by graphlint (Go), which also produces the gap report. Everything here is AUTHORED-class (doc 02 §4).",
+  "type": "object",
+  "required": ["nodes", "edges"],
+  "properties": {
+    "_meta": { "type": "object" },
+    "stats": { "type": "object" },
+    "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
+    "edges": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/edge" } }
+  },
+  "$defs": {
+    "nodeType": {
+      "enum": [
+        "Signal", "Entity", "Tool", "Modality", "EquivalenceGroup",
+        "CapabilityPrereq", "DistroVersionGate", "Gotcha", "CorrelationGroup", "Agent"
+      ]
+    },
+    "edgeType": {
+      "enum": [
+        "attaches_to", "emitted_by", "has_modality", "in_equivalence_group",
+        "requires_capability", "behaves_differently_in", "has_gotcha",
+        "participates_in", "derived_from", "owned_by_agent", "cross_reference",
+        "phenomenon_relation"
+      ]
+    },
+    "modality": {
+      "enum": ["Metric", "Log", "State", "Event", "Trace", "Profile", "Audit"],
+      "description": "Only Metric is a numeric series (doc 02 §2)."
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "$ref": "#/$defs/nodeType" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "Signal" } } },
+          "then": {
+            "required": ["name", "modality", "data_type"],
+            "properties": {
+              "modality": { "$ref": "#/$defs/modality" },
+              "data_type": { "type": "string", "description": "Free-text in the graph; forecast-eligibility is DERIVED (doc 09), not read." }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "CorrelationGroup" } } },
+          "then": {
+            "required": ["label", "signals"],
+            "properties": {
+              "signals": {
+                "type": "array",
+                "description": "Authored member tuples [pattern, role, temporal_tag, note].",
+                "items": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "EquivalenceGroup" } } },
+          "then": { "required": ["patterns"], "properties": { "patterns": { "type": "array", "items": { "type": "string" } } } }
+        }
+      ]
+    },
+    "edge": {
+      "type": "object",
+      "description": "The edge property set is closed and fully known, so additionalProperties is false — a misspelled edge field (e.g. temporl_order) is rejected rather than silently dropped, which would lose an authored temporal_order/why on a detection edge.",
+      "required": ["type", "src", "src_type", "dst", "dst_type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/$defs/edgeType" },
+        "src": { "type": "string", "minLength": 1 },
+        "dst": { "type": "string", "minLength": 1 },
+        "src_type": { "$ref": "#/$defs/nodeType" },
+        "dst_type": { "$ref": "#/$defs/nodeType" },
+        "role": { "type": "string" },
+        "temporal_order": { "type": "string" },
+        "why": { "type": "string" },
+        "how": { "type": "string" },
+        "threshold": { "type": "string" }
+      }
+    }
+  }
+}
