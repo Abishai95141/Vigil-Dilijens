@@ -35,17 +35,19 @@ func makePod(ns, name, uid string, created time.Time, owners ...metav1.OwnerRefe
 	}
 }
 
-// startWatcher starts a synced watcher over the given fake clientset.
-func startWatcher(t *testing.T, client *fake.Clientset, st *Store) (context.CancelFunc, *Watcher) {
+// startWatcher starts a synced watcher over the given fake clientset, returning the
+// edge store it feeds alongside the cancel and watcher.
+func startWatcher(t *testing.T, client *fake.Clientset, st *Store) (context.CancelFunc, *Watcher, *EdgeStore) {
 	t.Helper()
-	w, err := NewWatcher(client, st, cluster, 0, quietLogger())
+	es := NewEdgeStore(st.clock, testBudgets, 30*time.Minute) // share the lifecycle store's clock
+	w, err := NewWatcher(client, st, es, cluster, 0, quietLogger())
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = w.Run(ctx) }()
 	waitFor(t, 3*time.Second, w.HasSynced)
-	return cancel, w
+	return cancel, w, es
 }
 
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
@@ -69,7 +71,7 @@ func TestInformerDiscoversPodWithDeploymentRole(t *testing.T) {
 	client := fake.NewSimpleClientset(rs)
 	clk := newFakeClock(lcBase)
 	st := newTestStore(clk)
-	cancel, _ := startWatcher(t, client, st)
+	cancel, _, _ := startWatcher(t, client, st)
 	defer cancel()
 
 	pod := makePod("shop", "web-x", "pod-uid-1", lcBase, ownerRefMeta("ReplicaSet", "web-abc", "rs-uid"))
@@ -95,7 +97,7 @@ func TestInformerTerminatesPodOnDelete(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	clk := newFakeClock(lcBase)
 	st := newTestStore(clk)
-	cancel, _ := startWatcher(t, client, st)
+	cancel, _, _ := startWatcher(t, client, st)
 	defer cancel()
 
 	pod := makePod("shop", "cart-1", "uid-cart", lcBase)
@@ -116,7 +118,7 @@ func TestInformerSameNameRecreate(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	clk := newFakeClock(lcBase)
 	st := newTestStore(clk)
-	cancel, _ := startWatcher(t, client, st)
+	cancel, _, _ := startWatcher(t, client, st)
 	defer cancel()
 
 	// Pod v1 born at lcBase.
@@ -158,7 +160,7 @@ func TestInformerDiscoversNode(t *testing.T) {
 	client := fake.NewSimpleClientset(node)
 	clk := newFakeClock(lcBase)
 	st := newTestStore(clk)
-	cancel, _ := startWatcher(t, client, st)
+	cancel, _, _ := startWatcher(t, client, st)
 	defer cancel()
 
 	waitFor(t, 3*time.Second, func() bool {

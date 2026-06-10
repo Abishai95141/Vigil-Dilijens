@@ -45,7 +45,7 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 - [x] **03 M1** Identity model + CEI scheme — both layers, minting, role derivation; churn tests pass (restart/reschedule/scale/**recreate-same-name honeypot**). `obsd/internal/identity/cei.go`
 - [x] **03 M2** Normalization maps — cAdvisor + KSM + node-exporter (`obsd/internal/identity/normalize.go`). All doc 14 §3.2 traps encoded + tested: no-pod-UID time-aware join, `container=""`→pod aggregate, `container="POD"`→deliberate drop, KSM terminated-pod persistence, class-aware container routing, node-name join, **same-name recreate race incl. genuinely-late samples (EventTime vs receive time)**. Quarantine-never-guess; typed reasons; join audit records; versioned maps. Adversarially verified (4 confirmed findings fixed). *OTel semconv = 4th lane, Phase 0b–1 per doc 14 §3.2.*
 - [x] **03 M3** Lifecycle state machine + succession + client-go informer wiring (`lifecycle.go`, `resolver.go`, `informer.go`, `cluster.go`). Two-tier tombstones (15m full / 24h stub / 250k LRU cap, evicted-before-horizon metric); time-aware `Lookup` (heap-backed, clock-injected, horizon-enforced at read); succession + same-name honeypot at store level; role chain resolver (RS→Deployment, Job→CronJob, degraded fallback); SharedInformers (pods/nodes/RS/jobs) with `HasSynced` gate; cluster id = kube-system UID (A9). Fake-clientset tested + `-race`; live wiring in `obsd --kubeconfig`; integration test behind `integration` tag. Adversarially verified.
-- [ ] **03 M4** Timestamped edges + validity semantics; staleness budgets per type (params wired ✅)
+- [x] **03 M4** Timestamped topology edges + validity-intersection contract (`edges.go`, `edges_watch.go`). EdgeStore: assertions with asserted/last-confirmed/retracted stamps; per-type staleness budgets (params); `Traverse(type,from,to,window)` → valid/suspect/absent (pure fn of state+window — replayable; horizon is a GC boundary, not a traversal input); retracted-edge 30m horizon; monotonic reassert. Wiring from informers: runs-on (pod→node, reconciled on reschedule), mounts (pod→PVC), selects (service→pod, **reconciled across ALL slices** — survives EndpointSlice rebalance), node-lease (node liveness via Lease RenewTime). Fake-client + store tests, `-race` (87 identity tests). Adversarially verified: 5 confirmed defects fixed incl. **blocking** slice-rebalance spurious retraction.
 - [ ] **03 M5** Join-audit tooling + health metrics
 - [ ] **05 M1** Stream conventions: CEI stamping, canonical naming, cadence classes, retention tiers
 - [ ] Own scraper (exposition-format parser for KSM/kubelet/node-exporter) — doc 14 A1
@@ -136,13 +136,12 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 ---
 
 ### ▶ Immediate next step
-**Identity layer (doc 03) — M1 + M2 + M3 done.** Next: **03 M4 — timestamped edges
-+ validity semantics** (doc 03 §3.5): topology edges (`runs-on`, `mounts`, `selects`,
-node-lease) as assertions with asserted/last-confirmed/retracted stamps; per-edge
-staleness budgets (already in params §1.2); the **validity-intersection traversal
-contract** (a walk must intersect edge validity with the evaluation window — the
-rule that stops detection fabricating a 2-hop correlation through a stale edge).
-Built from informer events (EndpointSlice→selects, pod.spec.nodeName→runs-on,
-volumes→mounts, Leases→node liveness). Then **03 M5** — join-audit tooling + the
-Phase-0a exit gate (join accuracy on reference clusters; all misses are quarantines).
-Run the live demo on the Linux box: `just up && go run ./obsd/cmd/obsd --kubeconfig ~/.kube/config`.
+**Identity layer (doc 03) — M1–M4 done.** Next and final identity milestone: **03 M5 —
+join-audit tooling + health metrics**, which carries the **Phase-0a exit gate**
+(doc 03 §6, doc 11 gate row 0a): continuous join audits sampling streams against
+control-plane truth; published health metrics (join accuracy, orphan/quarantine
+rate, edge staleness distribution per type — the latter already in `EdgeStore.Metrics`);
+exit criterion = **join accuracy ≥ target on reference clusters with all misses
+explained as quarantines, not mis-joins**. This is the gate that lets Phase 0a exit.
+Run the live demo on the Linux box: `just up && go run ./obsd/cmd/obsd --kubeconfig ~/.kube/config`
+(now prints edges_live/suspect/retracted alongside the entity inventory).

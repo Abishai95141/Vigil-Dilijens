@@ -34,7 +34,8 @@ func TestIdentityAgainstLiveCluster(t *testing.T) {
 	t.Logf("cluster id (kube-system UID): %s", clusterID)
 
 	store := NewStore(time.Now, 15*time.Minute, 24*time.Hour, 250000)
-	w, err := NewWatcher(client, store, clusterID, 30*time.Second, quietLogger())
+	edges := NewEdgeStore(time.Now, testBudgets, 30*time.Minute)
+	w, err := NewWatcher(client, store, edges, clusterID, 30*time.Second, quietLogger())
 	if err != nil {
 		t.Fatalf("watcher: %v", err)
 	}

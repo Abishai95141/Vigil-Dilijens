@@ -99,12 +99,21 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		p.Identity.Tombstone.StubRetention.Duration(),
 		p.Identity.Tombstone.MaxEntries,
 	)
-	watcher, err := identity.NewWatcher(client, store, clusterID, p.Identity.Reconciliation.Duration(), logger)
+	// Convert the parameters file's string-keyed edge budgets (doc 14 §1.2) to the
+	// typed map the edge store wants. Kept here so the identity package stays free
+	// of a params dependency.
+	budgets := make(map[identity.EdgeType]time.Duration, len(p.Identity.EdgeBudgets))
+	for k, v := range p.Identity.EdgeBudgets {
+		budgets[identity.EdgeType(k)] = v.Duration()
+	}
+	edges := identity.NewEdgeStore(time.Now, budgets, p.Identity.RetractedEdgeHorizon.Duration())
+
+	watcher, err := identity.NewWatcher(client, store, edges, clusterID, p.Identity.Reconciliation.Duration(), logger)
 	if err != nil {
 		return fmt.Errorf("identity watcher: %w", err)
 	}
 
-	go inventoryLoop(ctx, logger, store, p.Observation.EvaluationTick.Duration())
+	go inventoryLoop(ctx, logger, store, edges, p.Observation.EvaluationTick.Duration())
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop")
 	return watcher.Run(ctx)
@@ -112,7 +121,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 
 // inventoryLoop periodically logs the identity inventory: the live, correctly-
 // joined entity counts and the layer's health metrics (doc 03 §6).
-func inventoryLoop(ctx context.Context, logger *slog.Logger, store *identity.Store, every time.Duration) {
+func inventoryLoop(ctx context.Context, logger *slog.Logger, store *identity.Store, edges *identity.EdgeStore, every time.Duration) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -124,6 +133,7 @@ func inventoryLoop(ctx context.Context, logger *slog.Logger, store *identity.Sto
 			return
 		case <-ticker.C:
 			m := store.Metrics()
+			e := edges.Metrics()
 			logger.Info("identity inventory",
 				"active", m.Active,
 				"full_tombstones", m.FullTombstones,
@@ -133,6 +143,9 @@ func inventoryLoop(ctx context.Context, logger *slog.Logger, store *identity.Sto
 				"successions", m.Successions,
 				"degraded_joins", m.DegradedJoins,
 				"evicted_before_horizon", m.EvictedBeforeHorizon,
+				"edges_live", e.Live,
+				"edges_suspect", e.Suspect,
+				"edges_retracted", e.Retracted,
 			)
 		}
 	}
