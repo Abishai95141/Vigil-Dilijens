@@ -34,9 +34,15 @@ type Watcher struct {
 	pvcLister   corelisters.PersistentVolumeClaimLister
 	svcLister   corelisters.ServiceLister
 	sliceLister discoverylisters.EndpointSliceLister
+	podLister   corelisters.PodLister
+	nodeLister  corelisters.NodeLister
+	podIndexer  cache.Indexer // pods indexed by UID (for the join audit's PodExistsByUID)
 	synced      []cache.InformerSynced
 	logger      *slog.Logger
 }
+
+// podUIDIndex is the informer index name for looking up pods by their UID.
+const podUIDIndex = "byUID"
 
 // NewWatcher constructs a Watcher over the given clientset, feeding the identity
 // Store (lifecycle) and the EdgeStore (topology). resync is the informer relist
@@ -60,6 +66,8 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 		pvcLister:   f.Core().V1().PersistentVolumeClaims().Lister(),
 		svcLister:   f.Core().V1().Services().Lister(),
 		sliceLister: f.Discovery().V1().EndpointSlices().Lister(),
+		podLister:   f.Core().V1().Pods().Lister(),
+		nodeLister:  f.Core().V1().Nodes().Lister(),
 		logger:      logger,
 	}
 	if w.gcEvery <= 0 {
@@ -77,6 +85,20 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 	sliceInformer := f.Discovery().V1().EndpointSlices().Informer()
 	leaseInformer := f.Coordination().V1().Leases().Informer()
 	svcInformer := f.Core().V1().Services().Informer()
+
+	// Index pods by UID so the join audit can verify a container CEI's owning pod
+	// exists (doc 03 §6) without a full scan.
+	if err := podInformer.AddIndexers(cache.Indexers{
+		podUIDIndex: func(obj any) ([]string, error) {
+			if pod, ok := obj.(*corev1.Pod); ok {
+				return []string{string(pod.UID)}, nil
+			}
+			return nil, nil
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("add pod uid indexer: %w", err)
+	}
+	w.podIndexer = podInformer.GetIndexer()
 
 	handlers := []struct {
 		name     string

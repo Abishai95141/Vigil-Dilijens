@@ -65,4 +65,16 @@ func TestIdentityAgainstLiveCluster(t *testing.T) {
 			t.Errorf("node %q not joinable via NodeUID", name)
 		}
 	}
+
+	// THE PHASE-0a EXIT GATE (doc 03 M5 / doc 11 row 0a): run the live join-audit
+	// against control-plane truth. The hard requirement is ZERO mis-joins (all
+	// misses must be quarantines/lag, never a wrong join). Coverage may lag slightly
+	// right after sync, so allow a moment and use a lenient coverage target here.
+	rep := w.AuditConsistencyNow()
+	g := EvaluateGate(rep, 0.90)
+	t.Logf("join audit: accuracy=%.4f coverage=%.4f misjoins=%d missing=%d checked=%d passed=%v",
+		g.JoinAccuracy, g.Coverage, rep.Misjoins, rep.Missing, rep.CheckedPods+rep.CheckedNodes, g.Passed)
+	if rep.Misjoins != 0 {
+		t.Errorf("PHASE-0a GATE FAILED: %d mis-join(s) — the silent killer; details: %v", rep.Misjoins, rep.Details)
+	}
 }
