@@ -3,19 +3,24 @@
 // clock client (doc 00 §5, techstack §4). One binary, strict internal package
 // boundaries mirroring the blueprint docs.
 //
-// This is the Phase-0a skeleton. It loads and validates the parameters file
-// (doc 14 §5) and prints a startup banner. It does NOT yet stand up informers,
-// scraping, or the identity join — those are the next deliverables on the
-// critical path (doc 03, prerequisite zero). The skeleton is deliberately honest
-// about what is not yet implemented rather than printing a fake inventory.
+// Phase 0a: it loads and validates the parameters file (doc 14 §5), and — when
+// pointed at a cluster — runs the identity & correlation layer (doc 03), printing
+// a live, correctly-joined entity inventory ("prerequisite zero, observable"). It
+// does not yet scrape, bind, or detect.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
 )
@@ -34,6 +39,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		paramsPath  = fs.String("params", "", "path to a parameters override file (overlays embedded dev defaults)")
 		showVersion = fs.Bool("version", false, "print version and exit")
 		logFormat   = fs.String("log", "json", "log format: json|text")
+		kubeconfig  = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
+		inCluster   = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -61,13 +68,74 @@ func run(args []string, stdout, stderr *os.File) error {
 		"tier_b_budget", p.Selection.TierBBudgetPerCycle,
 	)
 
-	// Prerequisite zero (doc 03): the identity & correlation layer is the next
-	// thing built here. Until it exists, obsd has nothing truthful to report
-	// about a live cluster, so it says exactly that instead of inventing output.
-	logger.Warn("identity layer not yet implemented — obsd has no live cluster join to report",
-		"next", "doc 03 M1: CEI scheme + normalization maps",
+	if *kubeconfig == "" && !*inCluster {
+		// No cluster target: there is nothing truthful to report about a live
+		// cluster, so say exactly that rather than inventing output.
+		logger.Warn("no cluster target — pass --kubeconfig or --in-cluster to run the identity layer (doc 03)")
+		return nil
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runIdentity(ctx, logger, p, *kubeconfig)
+}
+
+// runIdentity wires and runs the identity & correlation layer against the cluster,
+// printing a live entity inventory.
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig string) error {
+	client, err := kube.NewClientset(kubeconfig)
+	if err != nil {
+		return fmt.Errorf("kubernetes client: %w", err)
+	}
+	clusterID, err := identity.ClusterID(ctx, client)
+	if err != nil {
+		return fmt.Errorf("resolve cluster id: %w", err)
+	}
+	logger.Info("resolved cluster identity", "cluster_id", clusterID)
+
+	store := identity.NewStore(
+		time.Now,
+		p.Identity.Tombstone.FullRetention.Duration(),
+		p.Identity.Tombstone.StubRetention.Duration(),
+		p.Identity.Tombstone.MaxEntries,
 	)
-	return nil
+	watcher, err := identity.NewWatcher(client, store, clusterID, p.Identity.Reconciliation.Duration(), logger)
+	if err != nil {
+		return fmt.Errorf("identity watcher: %w", err)
+	}
+
+	go inventoryLoop(ctx, logger, store, p.Observation.EvaluationTick.Duration())
+
+	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop")
+	return watcher.Run(ctx)
+}
+
+// inventoryLoop periodically logs the identity inventory: the live, correctly-
+// joined entity counts and the layer's health metrics (doc 03 §6).
+func inventoryLoop(ctx context.Context, logger *slog.Logger, store *identity.Store, every time.Duration) {
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m := store.Metrics()
+			logger.Info("identity inventory",
+				"active", m.Active,
+				"full_tombstones", m.FullTombstones,
+				"stub_tombstones", m.StubTombstones,
+				"discovered_total", m.Discovered,
+				"terminated_total", m.Terminated,
+				"successions", m.Successions,
+				"degraded_joins", m.DegradedJoins,
+				"evicted_before_horizon", m.EvictedBeforeHorizon,
+			)
+		}
+	}
 }
 
 func newLogger(w *os.File, format string) *slog.Logger {

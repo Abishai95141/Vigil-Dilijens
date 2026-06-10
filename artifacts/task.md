@@ -44,7 +44,7 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 - [ ] **02 M2** Reference-graph encoding begun (the 842-node graph → schema v1; doc 14 A14 workstream)
 - [x] **03 M1** Identity model + CEI scheme — both layers, minting, role derivation; churn tests pass (restart/reschedule/scale/**recreate-same-name honeypot**). `obsd/internal/identity/cei.go`
 - [x] **03 M2** Normalization maps — cAdvisor + KSM + node-exporter (`obsd/internal/identity/normalize.go`). All doc 14 §3.2 traps encoded + tested: no-pod-UID time-aware join, `container=""`→pod aggregate, `container="POD"`→deliberate drop, KSM terminated-pod persistence, class-aware container routing, node-name join, **same-name recreate race incl. genuinely-late samples (EventTime vs receive time)**. Quarantine-never-guess; typed reasons; join audit records; versioned maps. Adversarially verified (4 confirmed findings fixed). *OTel semconv = 4th lane, Phase 0b–1 per doc 14 §3.2.*
-- [ ] **03 M3** Lifecycle state machine + succession (restart/reschedule/scale/recreate-same-name)
+- [x] **03 M3** Lifecycle state machine + succession + client-go informer wiring (`lifecycle.go`, `resolver.go`, `informer.go`, `cluster.go`). Two-tier tombstones (15m full / 24h stub / 250k LRU cap, evicted-before-horizon metric); time-aware `Lookup` (heap-backed, clock-injected, horizon-enforced at read); succession + same-name honeypot at store level; role chain resolver (RS→Deployment, Job→CronJob, degraded fallback); SharedInformers (pods/nodes/RS/jobs) with `HasSynced` gate; cluster id = kube-system UID (A9). Fake-clientset tested + `-race`; live wiring in `obsd --kubeconfig`; integration test behind `integration` tag. Adversarially verified.
 - [ ] **03 M4** Timestamped edges + validity semantics; staleness budgets per type (params wired ✅)
 - [ ] **03 M5** Join-audit tooling + health metrics
 - [ ] **05 M1** Stream conventions: CEI stamping, canonical naming, cadence classes, retention tiers
@@ -136,9 +136,13 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 ---
 
 ### ▶ Immediate next step
-**Identity layer (doc 03) — M1 + M2 done.** Next: **03 M3 — lifecycle state machine
-+ succession** (discovered → active → terminated/tombstoned; succession records;
-the client-go informer wiring that feeds it and implements the time-aware `Lookup`
-the normalizer consumes), then **03 M4 — timestamped edges + validity semantics**
-(budgets already in params). M3 is fake-client tested here; live informer behavior
-integration-tested against kind on the Linux box (`integration` build tag).
+**Identity layer (doc 03) — M1 + M2 + M3 done.** Next: **03 M4 — timestamped edges
++ validity semantics** (doc 03 §3.5): topology edges (`runs-on`, `mounts`, `selects`,
+node-lease) as assertions with asserted/last-confirmed/retracted stamps; per-edge
+staleness budgets (already in params §1.2); the **validity-intersection traversal
+contract** (a walk must intersect edge validity with the evaluation window — the
+rule that stops detection fabricating a 2-hop correlation through a stale edge).
+Built from informer events (EndpointSlice→selects, pod.spec.nodeName→runs-on,
+volumes→mounts, Leases→node liveness). Then **03 M5** — join-audit tooling + the
+Phase-0a exit gate (join accuracy on reference clusters; all misses are quarantines).
+Run the live demo on the Linux box: `just up && go run ./obsd/cmd/obsd --kubeconfig ~/.kube/config`.
