@@ -1,0 +1,26 @@
+name: integration
+
+# Opt-in: the kind-in-CI integration job (techstack §12). Manually triggered until
+# tagged integration tests exist (Phase 0a+), so the default CI stays fast and green.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    name: kind cluster + integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - uses: helm/kind-action@v1
+        with:
+          config: deploy/kind/cluster.yaml
+          cluster_name: vigil
+      - name: integration tests (build tag: integration)
+        run: go test -race -tags=integration ./...

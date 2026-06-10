@@ -1,0 +1,35 @@
+# Build output
+/bin/
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Runtime data (qss segments, sqlite findings, graph snapshots, replay bundles)
+/data/
+*.sqlite
+*.sqlite-*
+*.db
+
+# Python (uv-managed; lockfiles ARE committed)
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / web (pnpm; lockfile IS committed)
+node_modules/
+/web/dist/
+/web/.vite/
+
+# Local kube context
+*.kubeconfig
+
+# OS / editor
+.DS_Store
+*.swp
+
+# NOTE: proto/gen/ is intentionally NOT ignored — generated code is committed
+# (techstack §2.6) so it stays greppable.

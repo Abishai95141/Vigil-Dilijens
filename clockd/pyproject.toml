@@ -1,0 +1,40 @@
+[project]
+name = "clockd"
+version = "0.0.0"
+description = "Vigil forecasting 'clock' service — the model-agnostic forecaster (doc 09)."
+requires-python = ">=3.12,<3.13"
+# Base has NO heavy ML deps: the stub clock is pure stdlib so the swap-readiness
+# test (doc 09 M1) runs anywhere. TimesFM/torch land behind the `model` extra in
+# Phase 2, pinned by exact package version AND checkpoint revision (doc 14 A15).
+dependencies = []
+
+[project.optional-dependencies]
+# Phase 2 (doc 09 M1). Pins added when the backtest gate work begins — both the
+# `timesfm` package version and the HF checkpoint `google/timesfm-2.5-200m-pytorch`
+# revision hash (doc 14 A15). gRPC serving deps also live here.
+model = [
+  # "timesfm==<pin>",
+  # "torch==<pin>",
+  # "grpcio==<pin>",
+  # "grpcio-tools==<pin>",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/clockd"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

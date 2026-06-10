@@ -1,0 +1,49 @@
+# Vigil parameters file (v0) — the single versioned source of every tunable constant.
+# Owning doc: 14-implementation-clarifications.md §5 ("Constants adopted now").
+#
+# EVERY value here is an INITIAL value. Per the blueprint's open-question ledgers
+# (doc 13 §6), these are revised by harness evidence (doc 11), never by intuition
+# and never learned per-customer. Each carries its source citation inline.
+#
+# Profile: dev (kind, 3 nodes). The prod profile relaxes reconciliation to 5m and
+# adds the confirm-on-demand probe (doc 14 §1.1).
+version: "0"
+profile: dev
+
+scrape:
+  interval: 15s                     # doc 14 §5 / A1 — we own the scraper, parse exposition format
+
+identity:                           # doc 03 + doc 14 §1
+  reconciliation: 30s               # dev backstop sweep; prod default 5m (doc 14 §1.1)
+  edge_budgets:                     # doc 14 §1.2 — budget = 3 × effective confirmation interval
+    runs-on: 90s                    #   pod → node
+    selects: 90s                    #   service → pod (EndpointSlice-confirmed)
+    mounts: 120s                    #   pod → PVC
+    owns: 600s                      #   pod → ReplicaSet → Deployment (OwnerReference)
+    node-lease: 40s                 #   node liveness (mirrors kube node-monitor grace)
+  retracted_edge_horizon: 30m       # doc 14 §1.3 — retracted edges stay queryable this long
+  tombstone:                        # doc 14 §1.4
+    full_retention: 15m             #   complete identity record (late-sample join)
+    stub_retention: 24h             #   succession stub (role continuity)
+    max_entries: 250000             #   hard LRU cap; early eviction is a published health signal
+
+observation:                        # doc 05 + doc 14 §A3,A5,A6
+  evaluation_tick: 15s              # fingerprint evaluation cadence, aligned to scrape (A3)
+  watermark: 30s                    # late-sample watermark; later samples never retro-change a fingerprint (A3)
+  rate_window: 5m                   # rate primitive window, smoothed first difference (A5)
+  default_cooccurrence_window: 10m  # default co-occurrence window; per-phenomenon override (§5)
+  well_above_factor: 1.10           # A6 fallback: well-above = 1.10 × bar UNLESS bar = factor×limit
+                                    # (factor < 1), in which case well-above = the raw limit itself.
+                                    # The raw-limit branch is applied in observe/detect, not here.
+
+store:                              # doc 05 §3.1 + doc 14 §2.3 — the "qss"
+  hot_ring: 60m                     # in-memory ring capacity; the ONLY hot-path read surface
+  warm_retention: 168h              # 7d on-disk segments (covers max TimesFM context with margin)
+  segment_duration: 2h              # append-only sealed segment files
+  fsync_batch: 1s                   # batched durability; losing ≤1s of telemetry on crash is acceptable
+
+binding:                            # doc 04 + doc 14 §A4
+  bar_reresolution: 30s             # re-resolve affected bars within this budget after a config event
+
+selection:                          # doc 06 + doc 14 §5
+  tier_b_budget_per_cycle: 50       # ceiling on clock invocations per cycle (dev); ranked candidates within it

@@ -1,0 +1,11 @@
+version: v2
+# Generated code is COMMITTED, not gitignored (techstack §2.6): generated types
+# must be greppable by the agent. `clean: true` keeps gen/ in lockstep with protos.
+clean: true
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt: paths=source_relative
+  - remote: buf.build/grpc/go
+    out: gen/go
+    opt: paths=source_relative

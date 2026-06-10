@@ -1,0 +1,10 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  # The clock proto uses a flat package/dir layout; STANDARD covers our needs.
+breaking:
+  use:
+    - FILE

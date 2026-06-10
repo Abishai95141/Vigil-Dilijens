@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vigil/ontology/graph.schema.json",
+  "title": "Vigil Ontology Graph Release",
+  "description": "Schema v1-skeleton for a type-level ontology release (doc 02 §3.3-3.5). This is the authoring contract; the full authoring invariants (doc 02 §3.6) are enforced by graphlint. Everything in a release is AUTHORED-class by construction — there is no field where a measurement or model output could be stored (doc 02 §4).",
+  "type": "object",
+  "required": ["version", "signals", "phenomena"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Semantic version of this immutable release (doc 12 §3.1)."
+    },
+    "signals": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/signal" }
+    },
+    "equivalence_groups": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/equivalence_group" }
+    },
+    "entity_types": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entity_type" }
+    },
+    "edge_types": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge_type" }
+    },
+    "threshold_rules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/threshold_rule" }
+    },
+    "phenomena": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/phenomenon" }
+    }
+  },
+  "$defs": {
+    "modality": {
+      "enum": ["Metric", "Log", "State", "Event", "Trace", "Profile", "Audit"],
+      "description": "Only Metric is a numeric series (doc 02 §2)."
+    },
+    "data_type": {
+      "enum": ["Gauge", "Counter", "Histogram", "Struct", "Event", "Text"]
+    },
+    "identity_scope": {
+      "enum": ["instance", "role", "either"],
+      "description": "Which identity layer the variable binds to (doc 03 §3.1)."
+    },
+    "signal": {
+      "type": "object",
+      "required": ["canonical_id", "modality", "data_type"],
+      "additionalProperties": false,
+      "properties": {
+        "canonical_id": { "type": "string", "description": "Unique, never reused." },
+        "name": { "type": "string" },
+        "modality": { "$ref": "#/$defs/modality" },
+        "data_type": { "$ref": "#/$defs/data_type" },
+        "update_cadence": { "enum": ["scrape", "watch", "event-driven", "streaming"] },
+        "equivalence_group": { "type": "string" },
+        "expected_entity_scope": { "type": "array", "items": { "type": "string" } },
+        "identity_scope": { "$ref": "#/$defs/identity_scope" },
+        "capability_prerequisites": { "type": "array", "items": { "type": "string" } },
+        "distro_gates": { "type": "array", "items": { "type": "string" } },
+        "threshold_rule": { "type": "string", "description": "Reference to a threshold_rule id; may be absent for diagnostic signals." }
+      }
+    },
+    "equivalence_group": {
+      "type": "object",
+      "required": ["id", "canonical_name", "variants"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "canonical_name": { "type": "string" },
+        "variants": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "entity_type": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "supports_role_layer": { "type": "boolean" }
+      }
+    },
+    "edge_type": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "e.g. runs-on, mounts, selects, peers." },
+        "description": { "type": "string" }
+      }
+    },
+    "threshold_rule": {
+      "type": "object",
+      "required": ["id", "kind", "source_precedence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "enum": ["absolute", "config-relative", "rate-of-change", "co-occurrence"] },
+        "source_precedence": {
+          "type": "array",
+          "items": { "enum": ["config", "override", "default"] },
+          "description": "Strict order: config -> override -> default (doc 04 §3.4)."
+        },
+        "config_path": { "type": "string" },
+        "relative_factor": { "type": "number" },
+        "default_value": { "type": "number", "description": "Flagged as a default wherever surfaced (high blast radius, doc 12)." },
+        "window": { "type": "string" }
+      }
+    },
+    "temporal_tag": {
+      "enum": ["T0-", "T0", "T0+"],
+      "description": "Precursor / event / consequence (doc 02 §3.5). Empirical, falsifiable by doc 11."
+    },
+    "member": {
+      "type": "object",
+      "required": ["variable", "entity_role", "temporal_tag", "role", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "variable": { "type": "string", "description": "Reference to a signal canonical_id." },
+        "entity_role": { "type": "string" },
+        "temporal_tag": { "$ref": "#/$defs/temporal_tag" },
+        "role": { "enum": ["required", "supporting"] },
+        "note": { "type": "string", "description": "Authored, human-facing prose (doc 02 §3.6)." }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "required": ["target", "role", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "target": { "type": "string", "description": "Target phenomenon id." },
+        "role": { "enum": ["trigger", "downstream"] },
+        "note": { "type": "string" }
+      }
+    },
+    "phenomenon": {
+      "type": "object",
+      "required": ["id", "name", "span", "traversal_edge_types", "members"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "span": {
+          "enum": ["entity-local", "first-order", "second-order"],
+          "description": "An undeclared span is invalid, never entity-local-by-default (doc 02 §3.6)."
+        },
+        "traversal_edge_types": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Walks follow ONLY declared types (doc 07 §3.2)."
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/member" }
+        },
+        "relations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/relation" }
+        }
+      }
+    }
+  }
+}

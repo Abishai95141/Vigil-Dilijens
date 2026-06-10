@@ -1,0 +1,18 @@
+# Invalid on purpose: the phenomenon omits the required `span` field, and uses an
+# illegal temporal_tag. graphlint must reject this (doc 02 §3.6: an undeclared span
+# is invalid, never entity-local-by-default).
+version: "test-invalid"
+signals:
+  - canonical_id: x.signal
+    modality: Metric
+    data_type: Gauge
+phenomena:
+  - id: p1
+    name: Missing span
+    traversal_edge_types: []
+    members:
+      - variable: x.signal
+        entity_role: container
+        temporal_tag: "WHENEVER"
+        role: required
+        note: "Bad temporal tag and no span."

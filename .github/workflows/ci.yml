@@ -1,0 +1,93 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to keep the agent loop fast.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go (build · vet · fmt · test -race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          check-latest: true
+          cache: true
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "These files need gofmt:"; echo "${unformatted}"; exit 1
+          fi
+      - name: test (race, hermetic)
+        run: go test -race ./...
+
+  proto:
+    name: proto (lint · format · gen freshness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          version: 1.70.0
+      - name: lint
+        run: cd proto && buf lint
+      - name: format check
+        run: cd proto && buf format --diff --exit-code
+      - name: generated code is fresh
+        run: |
+          cd proto && buf generate
+          cd ..
+          if ! git diff --quiet -- proto/gen; then
+            echo "proto/gen is stale — run 'just gen' and commit:"; git --no-pager diff --stat -- proto/gen; exit 1
+          fi
+
+  clockd:
+    name: clockd (ruff · pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: sync
+        run: cd clockd && uv sync --frozen
+      - name: lint
+        run: cd clockd && uv run ruff check .
+      - name: test
+        run: cd clockd && uv run pytest -q
+
+  harness:
+    name: harness (ruff · pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: sync
+        run: cd harness && uv sync --frozen
+      - name: lint
+        run: cd harness && uv run ruff check .
+      - name: test
+        run: cd harness && uv run pytest -q
+
+# Web surfaces (doc 10) enter CI in Phase 0b once the app exists.
+# The kind-in-CI integration job lives in integration.yml (opt-in until tagged
+# integration tests exist), per techstack §12.

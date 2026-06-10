@@ -1,0 +1,58 @@
+# Read-only RBAC for the in-cluster obsd Deployment (Phase 1, doc 14 A2; techstack §6).
+# We WATCH, we never reconcile cluster state — no write verbs, no CRDs, no
+# controller-runtime. The verb set is exactly get/list/watch on the resources the
+# identity layer (doc 03) needs, plus nodes/proxy for cAdvisor metrics.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vigil-obsd
+  namespace: vigil-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vigil-obsd-readonly
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - nodes
+      - namespaces
+      - services
+      - persistentvolumeclaims
+      - persistentvolumes
+      - events
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"] # cAdvisor metrics via the API-server proxy path (doc 14 A1/A2)
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"] # EndpointSlice only; legacy Endpoints is deprecated (doc 14 A11)
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"] # node liveness via kube-node-lease (doc 14 §1.2)
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vigil-obsd-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vigil-obsd-readonly
+subjects:
+  - kind: ServiceAccount
+    name: vigil-obsd
+    namespace: vigil-system

@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package vigil.clock.v1;
+
+option go_package = "github.com/Abishai95141/Vigil-Dilijens/proto/gen/go/vigil/clock/v1;clockv1";
+
+// ForecastService is the model-agnostic "clock" (doc 09 §3.1). The model answers
+// exactly one question: when does this number cross that number.
+//
+// CHARTER INVARIANT (doc 01 §4, techstack §5): this service carries NO string
+// fields anywhere. The "model never sees labels, names, units, or graph structure"
+// rule becomes a compile-time property — only float arrays, horizon ints, and
+// quantile arrays cross this boundary. A conformance test (clock/conformance_test.go)
+// reflects over the generated descriptor and FAILS if any field of kind string is
+// ever added. Do not add strings to this proto.
+service ForecastService {
+  // Forecast projects the shape of one bare, scale-normalized series.
+  rpc Forecast(ForecastRequest) returns (ForecastResponse);
+  // Health reports model readiness for the Tier-B degradation panel (doc 14 A13).
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message ForecastRequest {
+  // One bare float series. Scale normalization happens INSIDE the clock
+  // (reversible instance norm); the caller sends raw floats only.
+  repeated double series = 1;
+
+  // Number of steps to forecast forward (the horizon).
+  uint32 horizon = 2;
+
+  // Requested quantile levels in (0, 1), e.g. [0.1, 0.5, 0.9]. The band is the
+  // outer quantiles; it never collapses to a line (doc 01 §3, doc 09 §3.6).
+  repeated double quantiles = 3;
+
+  // Optional known-future covariate channel, kept OUTSIDE the main inference path
+  // (doc 09 §3.5). Future values must be genuinely knowable (a scheduled job).
+  // Empty when no covariate is admitted. Length, when present, equals horizon.
+  repeated double covariate_future = 4;
+}
+
+message ForecastResponse {
+  // Point forecast, one value per horizon step (length == horizon).
+  repeated double point = 1;
+
+  // Quantile bands flattened row-major as [num_quantiles][horizon]. Reshape using
+  // num_quantiles and horizon below. Quantile ordering matches the request.
+  repeated double quantile_values = 2;
+
+  uint32 num_quantiles = 3;
+  uint32 horizon = 4;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  // True once the model is loaded and warm.
+  bool ready = 1;
+
+  // Status as a numeric code, never a string (charter). 0 = ok; non-zero = a
+  // degradation class the client maps to operator-facing text on its side.
+  uint32 status_code = 2;
+}

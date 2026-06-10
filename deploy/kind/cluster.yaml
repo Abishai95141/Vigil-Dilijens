@@ -1,0 +1,17 @@
+# Dev cluster (doc 14 §3.1): 1 control-plane + 2 workers. Two workers is the FLOOR,
+# not a nicety — runs-on topology, node-pressure phenomena, and the 2-hop
+# noisy-neighbour walk (pod A -> node -> pod B) are unrepresentable on one node.
+#
+# Honest caveat (doc 14 §3.1): all kind "nodes" share the host kernel. Container-
+# scoped phenomena (working-set -> OOM, CPU throttling) are real; node-level
+# memory/IO pressure realism is limited — stand up the k3s-on-VMs staging cluster
+# before the node-pressure falsification corpus (doc 11 M3) is treated as authoritative.
+#
+# Runs on the Linux/Ubuntu box: `just up`.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: vigil
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

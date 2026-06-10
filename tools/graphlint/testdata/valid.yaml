@@ -1,0 +1,16 @@
+version: "test-valid"
+signals:
+  - canonical_id: x.signal
+    modality: Metric
+    data_type: Gauge
+phenomena:
+  - id: p1
+    name: A phenomenon
+    span: entity-local
+    traversal_edge_types: []
+    members:
+      - variable: x.signal
+        entity_role: container
+        temporal_tag: "T0"
+        role: required
+        note: "A required member."

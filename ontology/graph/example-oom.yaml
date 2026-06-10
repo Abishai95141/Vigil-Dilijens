@@ -1,0 +1,103 @@
+# SCAFFOLD EXAMPLE — not the authoritative ontology.
+#
+# This is a hand-written, schema-valid illustration of the OOM pattern (doc 02 §3.5
+# worked example) so the loader and graphlint have a real fixture. The authoritative
+# 842-node reference graph is a named workstream (doc 14 A14, doc 02 M2): schema v1
+# -> mechanical conversion -> lint -> human review of every phenomenon's span/edges.
+# Do not treat this file as a release.
+version: "0.0.0-example"
+
+signals:
+  - canonical_id: container.memory.working_set_bytes
+    name: Container working-set memory
+    modality: Metric
+    data_type: Gauge
+    update_cadence: scrape
+    equivalence_group: working_set_memory
+    expected_entity_scope: [Container, Pod]
+    identity_scope: either
+    threshold_rule: working_set_vs_limit
+  - canonical_id: container.oom_kill
+    name: OOM kill
+    modality: Event
+    data_type: Event
+    update_cadence: event-driven
+  - canonical_id: container.restart
+    name: Container restart
+    modality: State
+    data_type: Struct
+    update_cadence: watch
+  - canonical_id: node.memory.available_bytes
+    name: Node available memory
+    modality: Metric
+    data_type: Gauge
+    update_cadence: scrape
+    expected_entity_scope: [Node]
+    identity_scope: instance
+
+equivalence_groups:
+  - id: working_set_memory
+    canonical_name: container.memory.working_set_bytes
+    variants:
+      - container_memory_working_set_bytes # cAdvisor
+      - k8s.container.memory.working_set # OTel semconv
+
+entity_types:
+  - id: Pod
+    supports_role_layer: true
+  - id: Container
+    supports_role_layer: false
+  - id: Node
+    supports_role_layer: false
+
+edge_types:
+  - id: runs-on
+    description: pod -> node
+  - id: mounts
+    description: pod -> PVC
+  - id: selects
+    description: service -> pod
+
+threshold_rules:
+  - id: working_set_vs_limit
+    kind: config-relative
+    source_precedence: [config, override, default]
+    config_path: spec.containers[].resources.limits.memory
+    relative_factor: 0.95
+
+phenomena:
+  - id: oom_kill_pattern
+    name: Container OOM kill
+    span: entity-local
+    traversal_edge_types: []
+    members:
+      - variable: container.memory.working_set_bytes
+        entity_role: container
+        temporal_tag: "T0-"
+        role: required
+        note: "Working-set memory approaches the configured limit pre-OOM."
+      - variable: container.oom_kill
+        entity_role: container
+        temporal_tag: "T0"
+        role: required
+        note: "The OOM kill event."
+      - variable: container.restart
+        entity_role: container
+        temporal_tag: "T0+"
+        role: supporting
+        note: "Restart and last-state evidence follow the kill."
+    relations:
+      - target: node_memory_pressure
+        role: downstream
+        note: "The graph records that an OOM on this pod stresses its node (first-order)."
+
+  - id: node_memory_pressure
+    name: Node memory pressure
+    span: first-order
+    traversal_edge_types: [runs-on]
+    members:
+      - variable: node.memory.available_bytes
+        entity_role: node
+        temporal_tag: "T0"
+        role: required
+        note: "Node available memory is critically low."
