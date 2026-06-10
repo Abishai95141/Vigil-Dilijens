@@ -1,5 +1,6 @@
 # Build output
 /bin/
+/graphlint
 *.test
 *.out
 coverage.txt
