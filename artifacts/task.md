@@ -136,12 +136,15 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 ---
 
 ### ▶ Immediate next step
-**Identity layer (doc 03) — M1–M4 done.** Next and final identity milestone: **03 M5 —
-join-audit tooling + health metrics**, which carries the **Phase-0a exit gate**
-(doc 03 §6, doc 11 gate row 0a): continuous join audits sampling streams against
-control-plane truth; published health metrics (join accuracy, orphan/quarantine
-rate, edge staleness distribution per type — the latter already in `EdgeStore.Metrics`);
-exit criterion = **join accuracy ≥ target on reference clusters with all misses
-explained as quarantines, not mis-joins**. This is the gate that lets Phase 0a exit.
-Run the live demo on the Linux box: `just up && go run ./obsd/cmd/obsd --kubeconfig ~/.kube/config`
-(now prints edges_live/suspect/retracted alongside the entity inventory).
+**Identity layer (doc 03) is COMPLETE — M1–M5 done, 100 tests, pushed.** Three ways forward:
+
+1. **Certify the Phase-0a exit gate on the Linux kind box** (closes Phase 0a): `just up`,
+   deploy the Online Boutique workload, then `go test -tags=integration -run LiveCluster
+   ./obsd/internal/identity/` — asserts **zero mis-joins** and reports join accuracy/coverage.
+   Or watch live: `go run ./obsd/cmd/obsd --kubeconfig ~/.kube/config` → `curl :9095/metrics | grep phase0a_gate_passed`.
+2. **Phase 0b — binding (04) + observation/qss (05)**: compile the ontology onto the bound
+   cluster, the three primitives + fingerprints, the thin time-series store, the coverage report.
+   (Needs the ontology graph loaded — see option 3.)
+3. **Ontology ingestion (02 M2)**: load the authoritative 842-node KG (`~/Desktop/vigil copy/k8s_signal_kg.json`)
+   — reconcile the schema to its node/edge shape, build the `internal/graph` loader, upgrade graphlint,
+   produce the gap report (spans + threshold rules to author). This unblocks binding (04) + detection (07).
