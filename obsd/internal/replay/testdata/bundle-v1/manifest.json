@@ -1,0 +1,25 @@
+{
+  "bundle_version": 1,
+  "created_at": "2026-06-11T12:00:00Z",
+  "cluster_id": "test-cluster",
+  "graph_version": "sha256:3c26469fd971acde1ea328f0580dd31e1d0373121515d2828a2289892ad1657f",
+  "params_version": "0",
+  "profile": "dev",
+  "fp_params": {
+    "ScrapeInterval": 15000000000,
+    "RateWindow": 300000000000,
+    "Watermark": 30000000000,
+    "Band": 0.05,
+    "WellAboveFactor": 1.1,
+    "CooccurrenceWindow": 600000000000
+  },
+  "scrape_interval": 15000000000,
+  "contents": [
+    "readings (qss segments)",
+    "resolved bars per epoch",
+    "evaluation ticks with digests"
+  ],
+  "absent": [
+    "topology log (lands with 07 M2 traversal)"
+  ]
+}

@@ -19,18 +19,21 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
 )
 
@@ -57,6 +60,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		healthAddr  = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
 		ontology    = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
 		overlays    = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
+		storeDir    = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -109,7 +113,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir)
 }
 
 // sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
@@ -118,7 +122,7 @@ const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir string) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -169,21 +173,76 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// identity runs identically if scraping fails (failures are stated, counted).
 	hot := qss.NewHotStore()
 	ingestor := observe.NewIngestor(identity.NewNormalizer(clusterID, store), hot)
-	go scrapeLoop(ctx, logger, ingestor, kube.NewProxyFetcher(client), watcher, p.Scrape.Interval.Duration())
+
+	fpParams := observe.FPParams{
+		ScrapeInterval:     p.Scrape.Interval.Duration(),
+		RateWindow:         p.Observation.RateWindow.Duration(),
+		Watermark:          p.Observation.Watermark.Duration(),
+		Band:               p.Observation.AtThresholdBand,
+		WellAboveFactor:    p.Observation.WellAboveFactor,
+		CooccurrenceWindow: p.Observation.DefaultCooccurrenceWindow.Duration(),
+	}
+
+	// Replay capture (doc 05 M5, doc 14 §2.3): the qss warm tier + bundle writer.
+	// Off when no --store-dir (hot rings only — replay capture off, stated above).
+	// Capture requires the pinned ontology: a bundle without its graph version
+	// could not be replayed exactly, so we refuse to write a half-bundle.
+	var capture *replay.Capture
+	if storeDir != "" {
+		if ontologyGraph == nil {
+			logger.Warn("replay capture disabled: --store-dir set but no ontology release loaded (a bundle must pin its graph version)")
+		} else {
+			c, err := replay.NewCapture(storeDir, qss.WarmConfig{
+				SegmentDuration: p.Store.SegmentDuration.Duration(),
+				Retention:       p.Store.WarmRetention.Duration(),
+				FsyncBatch:      p.Store.FsyncBatch.Duration(),
+			})
+			if err != nil {
+				return fmt.Errorf("replay capture: %w", err)
+			}
+			if err := c.WriteManifest(replay.Manifest{
+				CreatedAt: time.Now().UTC(), ClusterID: clusterID,
+				GraphVersion: ontologyGraph.Version, ParamsVersion: p.Version, Profile: p.Profile,
+				FPParams: fpParams, ScrapeInterval: p.Scrape.Interval.Duration(),
+				Contents: []string{"readings (qss segments, arrival-ordered)", "resolved bars per epoch", "evaluation ticks with digests"},
+				Absent:   []string{"topology log (lands with 07 M2 traversal)", "time-shifted evaluation (lands with harness suites)"},
+			}); err != nil {
+				return fmt.Errorf("replay capture: %w", err)
+			}
+			capture = c
+			defer func() {
+				if err := capture.Close(); err != nil {
+					logger.Error("replay capture: seal on shutdown failed", "err", err)
+				} else {
+					logger.Info("replay bundle sealed", "dir", storeDir)
+				}
+			}()
+			warm := c.Warm()
+			if warm.Recovered.Segments > 0 || warm.Recovered.TruncatedBytes > 0 {
+				logger.Warn("warm tier crash recovery", "sealed_segments", warm.Recovered.Segments, "truncated_bytes", warm.Recovered.TruncatedBytes)
+			}
+			ingestor.SetTap(func(def qss.StreamDef, recv time.Time, s qss.Sample) {
+				if err := warm.Append(def, recv, s); err != nil {
+					logger.Error("warm tier append failed (capture is now incomplete)", "err", err)
+				}
+			})
+			logger.Info("replay capture active (doc 05 M5)", "dir", storeDir,
+				"segment", p.Store.SegmentDuration.Duration().String(), "retention", p.Store.WarmRetention.Duration().String())
+		}
+	}
+
+	// The store gate: scrape cycles write under the write lock; evaluation ticks
+	// read under the read lock. Ticks therefore always observe whole scrape
+	// cycles — the visibility property the replay digest depends on (doc 05 §3.5).
+	// Fetching (network) happens OUTSIDE the lock; only parse+ingest holds it.
+	var gate sync.RWMutex
+
+	go scrapeLoop(ctx, logger, &gate, ingestor, kube.NewProxyFetcher(client), watcher, p.Scrape.Interval.Duration())
 
 	go serveHealth(ctx, logger, ln, registry, watcher)
-	go inventoryLoop(ctx, out, logger, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration(),
-		&binder{
-			graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor,
-			fpParams: observe.FPParams{
-				ScrapeInterval:     p.Scrape.Interval.Duration(),
-				RateWindow:         p.Observation.RateWindow.Duration(),
-				Watermark:          p.Observation.Watermark.Duration(),
-				Band:               p.Observation.AtThresholdBand,
-				WellAboveFactor:    p.Observation.WellAboveFactor,
-				CooccurrenceWindow: p.Observation.DefaultCooccurrenceWindow.Duration(),
-			},
-		})
+	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration(),
+		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
+		capture)
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -227,12 +286,16 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID string, every time.Duration, bnd *binder) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID string, every time.Duration, bnd *binder, capture *replay.Capture) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
 	render := func() {
-		now := time.Now()
+		// Hold the store gate's read side for the whole evaluation so the tick sees
+		// whole scrape cycles, never a half-ingested one (the replay guarantee).
+		gate.RLock()
+		defer gate.RUnlock()
+		now := time.Now().UTC()
 		m := store.Metrics()
 		e := edges.Metrics()
 		logger.Info("identity inventory",
@@ -269,14 +332,37 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, stor
 		// presented adjacently, each from its own source, never fused.
 		active := store.ActiveInstances()
 		renderInventory(out, active, edges, clusterID, now, rep, g)
+		var fps []observe.Fingerprint
+		var findings []detect.Finding
+		barsEpoch := 0
 		if bd := bnd.compile(ctx, active, now); bd != nil {
 			renderBinding(out, bd, boutiqueNamespace)
 			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
 			// now" — re-materialized each tick against fresh samples.
-			fps := bnd.fingerprints(now)
+			fps = bnd.fingerprints(now)
 			renderFingerprints(out, fps, boutiqueNamespace)
 			// Entity-local phenomenon matches (doc 07 M1) over those fingerprints.
-			renderFindings(out, bnd.detectFindings(fps))
+			findings = bnd.detectFindings(fps)
+			renderFindings(out, findings)
+			if capture != nil {
+				epoch, err := capture.SetBars(now, bd.Result.Bindings)
+				if err != nil {
+					logger.Error("replay capture: bars write failed", "err", err)
+				}
+				barsEpoch = epoch
+			}
+		}
+		// The tick digest: the canonical hash of this tick's complete deterministic
+		// output (doc 05 §3.5) — the value replay must reproduce byte-identically.
+		digest, _ := replay.Digest(now, fps, findings)
+		fmt.Fprintf(out, " tick digest sha256:%s…  (full digest in the replay bundle)\n\n", digest[:16])
+		if capture != nil {
+			if err := capture.Tick(replay.TickRecord{
+				EvalNow: now, BarsEpoch: barsEpoch, Digest: digest,
+				Fingerprints: len(fps), Findings: len(findings),
+			}); err != nil {
+				logger.Error("replay capture: tick write failed", "err", err)
+			}
 		}
 	}
 
@@ -301,8 +387,10 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, stor
 // scrapeLoop runs the observation ingest cycle (doc 05 M1): scrape every node's
 // cAdvisor endpoint each scrape interval, log the honest summary (resolved /
 // dropped / quarantined / node errors). The first cycle fires as soon as the
-// informers sync so identity joins are warm.
-func scrapeLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration) {
+// informers sync so identity joins are warm. Fetching happens outside the store
+// gate (network); ingest holds the write side so evaluation ticks never observe
+// a half-ingested cycle (the replay guarantee, doc 05 §3.5).
+func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -312,7 +400,10 @@ func scrapeLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, 
 		for _, n := range nodes {
 			names = append(names, n.Name)
 		}
-		sum := in.ScrapeCAdvisor(ctx, f, names)
+		payloads := observe.FetchCAdvisor(ctx, f, names)
+		gate.Lock()
+		sum := in.IngestPayloads(payloads)
+		gate.Unlock()
 		logger.Info("observation ingest (cAdvisor)", "summary", sum.String(), "streams", in.Hot().Streams())
 	}
 	if waitForSync(ctx, watcher, every) {

@@ -93,19 +93,57 @@ func TestCAdvisorEmptyContainerIsPodAggregate(t *testing.T) {
 	}
 }
 
-// container="POD" is the pause sandbox → deliberate drop, NEVER a container CEI.
+// The pause sandbox is dropped in BOTH dialect shapes, NEVER given a CEI:
+// dockershim-era kubelets label it container="POD"; containerd/CRI-O emit it
+// with container="" plus a concrete name and the pause image (label shapes
+// copied from a real kind/containerd cAdvisor payload). Folding the containerd
+// shape into the pod stream interleaved two cgroups in one ring — a live-caught
+// identity mis-join.
 func TestCAdvisorPauseSandboxDroppedDeliberately(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{"dockershim container=POD", map[string]string{
+			"namespace": "shop", "pod": "currencyservice-x", "container": "POD"}},
+		{"containerd empty container + pause image", map[string]string{
+			"namespace": "shop", "pod": "currencyservice-x", "container": "",
+			"id":    "/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-podUID.slice/cri-containerd-379a6f0d.scope",
+			"image": "registry.k8s.io/pause:3.10", "name": "379a6f0d7bbf4db45b06741ae146249c"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newNorm().Normalize(Series{
+				Family: FamilyCAdvisor,
+				Metric: "container_cpu_usage_seconds_total",
+				Labels: c.labels,
+				At:     at(time.Minute),
+			})
+			if r.Outcome != OutcomeDropped || r.Reason != ReasonPauseSandbox {
+				t.Errorf("sandbox row: outcome=%s reason=%q, want dropped/%s", r.Outcome, r.Reason, ReasonPauseSandbox)
+			}
+			if r.CEI.Kind != "" {
+				t.Errorf("sandbox row must carry no CEI, got %q", r.CEI.Key())
+			}
+		})
+	}
+}
+
+// The pod-slice AGGREGATE (container="" with image="" and name="" — the real
+// containerd label shape) still maps to the pod CEI, untouched by the sandbox
+// discrimination above.
+func TestCAdvisorPodAggregateStillResolves(t *testing.T) {
 	r := newNorm().Normalize(Series{
 		Family: FamilyCAdvisor,
-		Metric: "container_cpu_usage_seconds_total",
-		Labels: map[string]string{"namespace": "shop", "pod": "currencyservice-x", "container": "POD"},
-		At:     at(time.Minute),
+		Metric: "container_memory_working_set_bytes",
+		Labels: map[string]string{
+			"namespace": "shop", "pod": "currencyservice-x", "container": "",
+			"id":    "/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-burstable.slice/kubelet-kubepods-burstable-podUID.slice",
+			"image": "", "name": ""},
+		At: at(time.Minute),
 	})
-	if r.Outcome != OutcomeDropped || r.Reason != ReasonPauseSandbox {
-		t.Errorf("sandbox row: outcome=%s reason=%q, want dropped/%s", r.Outcome, r.Reason, ReasonPauseSandbox)
-	}
-	if r.CEI.Kind != "" {
-		t.Errorf("sandbox row must carry no CEI, got %q", r.CEI.Key())
+	if r.Outcome != OutcomeResolved || r.CEI.Kind != "Pod" {
+		t.Errorf("pod aggregate: outcome=%s kind=%q, want resolved/Pod", r.Outcome, r.CEI.Kind)
 	}
 }
 

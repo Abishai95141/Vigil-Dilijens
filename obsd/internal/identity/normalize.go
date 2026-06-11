@@ -79,7 +79,7 @@ const (
 	ReasonNone Reason = ""
 
 	// Deliberate drops (recognized, not modeled).
-	ReasonPauseSandbox Reason = "pause-sandbox-row" // cAdvisor container="POD"
+	ReasonPauseSandbox Reason = "pause-sandbox-row" // cAdvisor sandbox: container="POD" (dockershim) or container="" with a pause image (containerd/CRI-O)
 	ReasonNonPodCgroup Reason = "non-pod-cgroup"    // cAdvisor system.slice etc.
 
 	// Quarantines (expected to join, could not).
@@ -176,13 +176,18 @@ func (n *Normalizer) Normalize(s Series) Result {
 }
 
 // cadvisor implements the container-runtime dialect (doc 14 §3.2 row 1).
-// Identity labels: namespace, pod, container (+ id, image, unused for identity).
-// THE TRAPS, encoded:
+// Identity labels: namespace, pod, container (+ id, image, name for sandbox
+// discrimination). THE TRAPS, encoded:
 //   - No pod UID label → join via (namespace, pod) → UID against the time-aware
 //     control-plane mapping at ingest.
-//   - container="" rows are pod-level cgroup AGGREGATES → map to the pod CEI.
-//   - container="POD" is the pause sandbox → dropped deliberately.
-//     Both must never bind to a container CEI.
+//   - container="" rows with NO concrete container behind them (image="" and
+//     name="") are pod-level cgroup AGGREGATES → map to the pod CEI.
+//   - The pause sandbox is dropped deliberately, in BOTH dialect shapes:
+//     dockershim-era kubelets label it container="POD"; containerd/CRI-O emit it
+//     with container="" but a concrete container name/image (the pause image).
+//     Folding the sandbox into the pod stream would interleave two different
+//     cgroups' numbers in one ring — an identity mis-join, the silent killer.
+//     None of these may ever bind to a container CEI.
 func (n *Normalizer) cadvisor(s Series) Result {
 	// machine_* rows describe the node itself (cAdvisor's machine info).
 	if strings.HasPrefix(s.Metric, "machine_") {
@@ -219,7 +224,14 @@ func (n *Normalizer) cadvisor(s Series) Result {
 	}
 
 	if container == "" {
-		// Pod-level cgroup aggregate → the pod CEI, never a container CEI.
+		// container="" covers TWO different cgroups on containerd/CRI-O: the pod
+		// slice aggregate (no concrete container: image="" and name="") and the
+		// pause sandbox (a real container cgroup — concrete name/image, the pause
+		// image). Only the aggregate maps to the pod CEI; the sandbox is dropped
+		// like its dockershim-era container="POD" shape above.
+		if s.Labels["image"] != "" || s.Labels["name"] != "" {
+			return n.drop(FamilyCAdvisor, ReasonPauseSandbox)
+		}
 		return n.pod(FamilyCAdvisor, ns, pod, uid, s.At)
 	}
 	return n.container(FamilyCAdvisor, ns, pod, uid, container, s.At)

@@ -67,6 +67,11 @@ type Ingestor struct {
 	norm *identity.Normalizer
 	hot  *qss.HotStore
 
+	// tap, when set, receives every stored sample (with its stream definition and
+	// receive stamp) — the warm-tier/replay capture hook (doc 14 §2.3). Set it
+	// BEFORE scraping starts; it is not lock-guarded.
+	tap func(def qss.StreamDef, recv time.Time, s qss.Sample)
+
 	mu   sync.RWMutex
 	meta map[string]StreamMeta // streamID -> descriptor
 }
@@ -76,31 +81,67 @@ func NewIngestor(norm *identity.Normalizer, hot *qss.HotStore) *Ingestor {
 	return &Ingestor{norm: norm, hot: hot, meta: map[string]StreamMeta{}}
 }
 
-// ScrapeCAdvisor scrapes every node's cAdvisor endpoint through the fetcher and
-// ingests the result. Node failures are recorded, not fatal — a partial scrape
-// is a stated partial, never a silent one.
-func (in *Ingestor) ScrapeCAdvisor(ctx context.Context, f Fetcher, nodes []string) IngestSummary {
+// SetTap installs the capture hook. Must be called before the first scrape.
+func (in *Ingestor) SetTap(tap func(def qss.StreamDef, recv time.Time, s qss.Sample)) {
+	in.tap = tap
+}
+
+// NodePayload is one node's fetched exposition body (or its failure), produced by
+// the network phase and consumed by the ingest phase. Splitting the two lets the
+// caller hold a store gate only around the ingest (CPU) phase, so evaluation
+// ticks always observe whole scrape cycles — the property byte-identical replay
+// depends on (doc 05 §3.5).
+type NodePayload struct {
+	Node       string
+	Body       []byte
+	ReceivedAt time.Time
+	Err        error
+}
+
+// FetchCAdvisor fetches every node's cAdvisor payload (network only, no store
+// writes). Nodes are fetched in sorted order; failures are carried, not fatal.
+func FetchCAdvisor(ctx context.Context, f Fetcher, nodes []string) []NodePayload {
+	sorted := append([]string(nil), nodes...)
+	sort.Strings(sorted)
+	out := make([]NodePayload, 0, len(sorted))
+	for _, node := range sorted {
+		body, receivedAt, err := f.NodeMetrics(ctx, node, "metrics/cadvisor")
+		out = append(out, NodePayload{Node: node, Body: body, ReceivedAt: receivedAt, Err: err})
+	}
+	return out
+}
+
+// IngestPayloads ingests previously-fetched payloads into the store (no network).
+// A partial scrape is a stated partial, never a silent one.
+func (in *Ingestor) IngestPayloads(payloads []NodePayload) IngestSummary {
 	sum := IngestSummary{
-		Nodes:            len(nodes),
+		Nodes:            len(payloads),
 		SeriesDropped:    map[string]int{},
 		SeriesQuarantine: map[string]int{},
 	}
-	sorted := append([]string(nil), nodes...)
-	sort.Strings(sorted)
-	for _, node := range sorted {
-		body, receivedAt, err := f.NodeMetrics(ctx, node, "metrics/cadvisor")
-		if err != nil {
-			sum.NodeErrors = append(sum.NodeErrors, fmt.Sprintf("%s: %v", node, err))
+	for _, p := range payloads {
+		if p.Err != nil {
+			sum.NodeErrors = append(sum.NodeErrors, fmt.Sprintf("%s: %v", p.Node, p.Err))
 			continue
 		}
-		in.ingestExposition(body, identity.FamilyCAdvisor, node, receivedAt, &sum)
+		in.ingestExposition(p.Body, identity.FamilyCAdvisor, p.Node, p.ReceivedAt, &sum)
 	}
 	return sum
 }
 
+// ScrapeCAdvisor fetches and ingests in one call (no gate). Callers that need
+// evaluation ticks to see whole cycles use FetchCAdvisor + IngestPayloads with a
+// store gate instead.
+func (in *Ingestor) ScrapeCAdvisor(ctx context.Context, f Fetcher, nodes []string) IngestSummary {
+	return in.IngestPayloads(FetchCAdvisor(ctx, f, nodes))
+}
+
 // ingestExposition parses one exposition payload and routes every scalar sample
-// through the normalizer into the hot store.
+// through the normalizer into the hot store. All stored times are canonicalized
+// to UTC so fingerprints (and their replay digests) are timezone-independent —
+// a bundle captured on one machine must replay byte-identically on another.
 func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node string, receivedAt time.Time, sum *IngestSummary) {
+	receivedAt = receivedAt.UTC()
 	// UTF8Validation accepts every name LegacyValidation does plus UTF-8 names;
 	// kubelet/cAdvisor emit classic charset, so this is permissive at the parse
 	// edge — the identity normalizer is the actual gatekeeper.
@@ -150,7 +191,8 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node s
 				if sampleAt.IsZero() {
 					sampleAt = receivedAt
 				}
-				in.hot.Append(streamID, qss.Sample{At: sampleAt, Value: value})
+				sample := qss.Sample{At: sampleAt, Value: value}
+				in.hot.Append(streamID, sample)
 				in.mu.Lock()
 				if _, seen := in.meta[streamID]; !seen {
 					in.meta[streamID] = StreamMeta{
@@ -159,6 +201,12 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node s
 					}
 				}
 				in.mu.Unlock()
+				if in.tap != nil {
+					in.tap(qss.StreamDef{
+						ID: streamID, CEIKey: res.CEI.Key(), UID: res.CEI.UID, Kind: res.CEI.Kind,
+						Metric: name, Type: typ, Node: node, Cadence: "scrape",
+					}, receivedAt, sample)
+				}
 				sum.SeriesResolved++
 				sum.SamplesStored++
 			case identity.OutcomeDropped:

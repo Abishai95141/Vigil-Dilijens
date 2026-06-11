@@ -110,9 +110,11 @@ clockd-test:
 harness-setup:
     cd harness && uv sync
 
-# Run harness tests + lint.
+# Run harness tests + lint. The analytics extra (pyarrow et al.) is on: the
+# replay-bundle Parquet bridge is live (doc 05 M5) and its regression reads
+# real Parquet, never a stub.
 harness-test:
-    cd harness && uv run ruff check . && uv run pytest -q
+    cd harness && uv run --extra analytics ruff check . && uv run --extra analytics pytest -q
 
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
