@@ -46,21 +46,27 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 	// Rules are already sorted by ID (graph loader invariant).
 	for _, rule := range g.Rules {
 		cov := RuleCoverage{RuleID: rule.ID, Kind: rule.Kind, EntityScope: rule.EntityScope}
+		// Emission metadata (doc 04 §3.1 mechanism 3): collection glue copied
+		// verbatim from the authored signal onto every binding of this rule.
+		var em Emission
+		if s := g.Signals[rule.Signal]; s != nil {
+			em = Emission{Source: s.Source, CollectionMethod: s.CollectionMethod}
+		}
 		switch rule.EntityScope {
 		case "Container":
 			for _, pod := range pods {
-				bindContainers(res, &cov, rule, pod, cfg, now)
+				bindContainers(res, &cov, rule, em, pod, cfg, now)
 			}
 		case "Pod":
 			// No v1 rule uses Pod scope; fan-out shape is the container path minus
 			// the per-container loop. Listed for vocabulary completeness.
 		case "Node":
 			for _, node := range nodes {
-				bindNode(res, &cov, rule, node, cfg, now)
+				bindNode(res, &cov, rule, em, node, cfg, now)
 			}
 		case "PVC":
 			for _, ref := range pvcs {
-				bindPVC(res, &cov, rule, ref, cfg, now)
+				bindPVC(res, &cov, rule, em, ref, cfg, now)
 			}
 		}
 		res.Coverage.PerRule = append(res.Coverage.PerRule, cov)
@@ -72,7 +78,7 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 
 // bindContainers instantiates a container-scoped rule across one pod's declared
 // containers (doc 04 §3.3 axis 2: every identified entity of the right type).
-func bindContainers(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, pod identity.InstanceRecord, cfg EntityConfig, now time.Time) {
+func bindContainers(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, pod identity.InstanceRecord, cfg EntityConfig, now time.Time) {
 	pc, ok := cfg.Pod(pod.Namespace, pod.Name)
 	if !ok {
 		// The pod is in the identity inventory but its config row could not be
@@ -81,8 +87,8 @@ func bindContainers(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, p
 		res.Bindings = append(res.Bindings, Binding{
 			CEIKey: pod.CEI.Key(), RoleKey: pod.RoleCEI.Key(), Entity: "Container",
 			RuleID: rule.ID, Metric: rule.Metric, State: StateUnresolved,
-			Validation: ValidationSuspect,
-			Reason:     "pod config not readable at compile time (inventory/config list skew)",
+			Validation: ValidationSuspect, Emission: em,
+			Reason: "pod config not readable at compile time (inventory/config list skew)",
 		})
 		return
 	}
@@ -90,7 +96,7 @@ func bindContainers(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, p
 		b := Binding{
 			CEIKey: pod.CEI.Key(), RoleKey: pod.RoleCEI.Key(), Entity: "Container",
 			Container: c.Name, RuleID: rule.ID, Metric: rule.Metric,
-			State: StateBound, Validation: ValidationSuspect,
+			State: StateBound, Validation: ValidationSuspect, Emission: em,
 		}
 		cov.Instantiated++
 
@@ -134,10 +140,10 @@ func bindContainers(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, p
 }
 
 // bindNode instantiates a node-scoped rule against one identified node.
-func bindNode(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, node identity.InstanceRecord, cfg EntityConfig, now time.Time) {
+func bindNode(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, node identity.InstanceRecord, cfg EntityConfig, now time.Time) {
 	b := Binding{
 		CEIKey: node.CEI.Key(), Entity: "Node",
-		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect,
+		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
 	}
 	cov.Instantiated++
 	switch rule.Kind {
@@ -164,10 +170,10 @@ func bindNode(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, node id
 }
 
 // bindPVC instantiates a PVC-scoped rule against one claim.
-func bindPVC(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, ref PVCRef, cfg EntityConfig, now time.Time) {
+func bindPVC(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, ref PVCRef, cfg EntityConfig, now time.Time) {
 	b := Binding{
 		CEIKey: "pvc|" + ref.Namespace + "|" + ref.Name, Entity: "PVC",
-		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect,
+		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
 	}
 	cov.Instantiated++
 	pc, ok := cfg.PVC(ref.Namespace, ref.Name)

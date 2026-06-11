@@ -97,6 +97,14 @@ type ResolvedBar struct {
 	ResolvedAt time.Time // resolution stamp (re-binding staleness, doc 04 §3.6)
 }
 
+// Emission is the operational collection glue recorded per binding (doc 04 §3.1
+// mechanism 3): which exporter emits the stream and how it is collected, copied
+// verbatim from the authored signal.
+type Emission struct {
+	Source           string // e.g. "cAdvisor"
+	CollectionMethod string // e.g. "Prometheus scrape on https://node:10250/metrics/cadvisor"
+}
+
 // Binding is doc 04 §3.7's "Binding record": one (entity instance, variable) pair.
 type Binding struct {
 	CEIKey     string // instance-layer CEI key (the only join key, doc 03)
@@ -109,6 +117,7 @@ type Binding struct {
 	Validation Validation
 	Reason     string       // honest annotation: why out-of-scope/unresolved/unbounded
 	Bar        *ResolvedBar // nil <=> no crossable limit (unbounded -> Tier-B ineligible)
+	Emission   Emission     // collection glue from the authored signal (mechanism 3)
 }
 
 // RoleBinding is the role-layer instantiation (doc 04 §3.3 axis 3): the durable
