@@ -139,6 +139,28 @@ down:
 rbac:
     kubectl apply -f deploy/rbac/clusterrole.yaml
 
+# Deploy the Phase-0 Online Boutique workload into the `online-boutique` namespace,
+# apply the doc 14 §3.3 customizations (one service unbounded -> resolvability-hole;
+# one tuned near its working set), and wait for all Deployments to become Available.
+boutique:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ns=online-boutique
+    kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl apply -n "${ns}" -f deploy/workloads/online-boutique.yaml
+    # doc 14 §3.3: strip limits from one service (paymentservice) so the unbounded ->
+    # listed/Tier-B-ineligible resolvability-hole policy is exercised from day one.
+    kubectl patch deployment paymentservice -n "${ns}" --type=json \
+      -p '[{"op":"remove","path":"/spec/template/spec/containers/0/resources/limits"}]'
+    # doc 14 §3.3: tune one service (recommendationservice) near its working set —
+    # 450Mi -> 300Mi memory limit, an honest near-threshold bar (kept above the ~220Mi
+    # request so it still schedules and stays Ready on kind).
+    kubectl patch deployment recommendationservice -n "${ns}" --type=json \
+      -p '[{"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"300Mi"}]'
+    echo "waiting for all Deployments to become Available (image pulls can take a few minutes)..."
+    kubectl wait --for=condition=Available deployment --all -n "${ns}" --timeout=420s
+    kubectl get pods -n "${ns}" -o wide
+
 # --- Aggregates -------------------------------------------------------------
 
 # The full Go gate, mirroring CI: format check, vet, generated-code freshness, tests.
