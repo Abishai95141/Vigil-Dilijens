@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
@@ -52,6 +53,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		kubeconfig  = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
 		inCluster   = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
 		healthAddr  = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
+		ontology    = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
+		overlays    = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -86,14 +89,34 @@ func run(args []string, stdout, stderr *os.File) error {
 		return nil
 	}
 
+	// Load the ontology release (with authored overlays) for the binding compiler.
+	// Binding is NON-GATING (doc 01): identity runs identically whether the
+	// ontology is present, defective, or absent — absence is stated, never fatal.
+	var ontologyGraph *graph.Graph
+	if *ontology != "" {
+		g, err := graph.LoadWithOverlays(*ontology, *overlays)
+		if err != nil {
+			logger.Warn("binding disabled: ontology release not loadable (identity is unaffected)", "path", *ontology, "err", err)
+		} else {
+			ontologyGraph = g
+			logger.Info("ontology release loaded",
+				"version", g.Version[:sha256PreviewLen], "nodes", g.NodeCount(), "edges", len(g.Edges),
+				"threshold_rules", len(g.Rules), "overlays", len(g.Overlays))
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph)
 }
+
+// sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
+// the Result and the coverage report.
+const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -139,7 +162,8 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		return fmt.Errorf("bind health server on %s: %w", healthAddr, err)
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher)
-	go inventoryLoop(ctx, out, logger, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration())
+	go inventoryLoop(ctx, out, logger, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration(),
+		&binder{graph: ontologyGraph, client: client, logger: logger})
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -183,7 +207,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID string, every time.Duration) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID string, every time.Duration, bnd *binder) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -220,8 +244,14 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, stor
 			logger.Error("MIS-JOINS detected (the silent killer) — Phase-0a gate fails", "count", rep.Misjoins, "details", rep.Details)
 		}
 
-		// The human-facing artifact: the named, correctly-joined inventory (stdout).
-		renderInventory(out, store, edges, clusterID, now, rep, g)
+		// The human-facing artifacts (stdout): the named, correctly-joined
+		// inventory, then the bound customer graph's coverage report (doc 04) —
+		// presented adjacently, each from its own source, never fused.
+		active := store.ActiveInstances()
+		renderInventory(out, active, edges, clusterID, now, rep, g)
+		if res := bnd.compile(ctx, active, now); res != nil {
+			renderBinding(out, res, boutiqueNamespace)
+		}
 	}
 
 	// Render promptly once the informer caches have synced rather than waiting a full

@@ -35,8 +35,7 @@ type podRow struct {
 // MEASURED (a fact read from the store, or a deterministic consequence of facts). It
 // prints honest partial coverage — bare pods, ReplicaSet-anchored (degraded) roles,
 // suspect edges, unresolved roles, mis-joins — rather than hiding any of them.
-func renderInventory(w io.Writer, store *identity.Store, edges *identity.EdgeStore, clusterID string, now time.Time, rep identity.ConsistencyReport, gate identity.GateResult) {
-	active := store.ActiveInstances()
+func renderInventory(w io.Writer, active []identity.InstanceRecord, edges *identity.EdgeStore, clusterID string, now time.Time, rep identity.ConsistencyReport, gate identity.GateResult) {
 	window := identity.TimeWindow{Start: now, End: now}
 
 	// Partition active instances into role-bearing pods (grouped namespace->role) and
