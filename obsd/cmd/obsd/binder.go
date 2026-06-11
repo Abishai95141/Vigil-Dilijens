@@ -45,9 +45,13 @@ type binder struct {
 }
 
 // detectFindings runs the entity-local matcher (doc 07 M1) over the live
-// fingerprints — the first MEASURED phenomenon matches. Non-gating and stateless;
-// the matcher is built once from the (static) graph.
-func (b *binder) detectFindings(fps []observe.Fingerprint) []detect.Finding {
+// fingerprints of SELECTED entities (the Tier-A set, doc 06 §3.3 — selection
+// provides the watch list to detection). selected is the deterministic
+// selection.TierASet; nil means selection is unavailable, in which case
+// detection runs unfiltered (selection never gates detection into silence —
+// its absence widens attention, never narrows it). Stateless; the matcher is
+// built once from the (static) graph.
+func (b *binder) detectFindings(fps []observe.Fingerprint, selected map[string][]string) []detect.Finding {
 	if b == nil || b.graph == nil {
 		return nil
 	}
@@ -56,6 +60,9 @@ func (b *binder) detectFindings(fps []observe.Fingerprint) []detect.Finding {
 	}
 	var out []detect.Finding
 	for _, fp := range fps {
+		if selected != nil && len(selected[fp.CEIKey]) == 0 {
+			continue
+		}
 		out = append(out, b.matcher.MatchFingerprint(fp)...)
 	}
 	return out

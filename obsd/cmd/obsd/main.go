@@ -34,6 +34,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
 )
 
@@ -344,12 +345,18 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		// both the rings and the capture log.
 		if bd := bnd.compile(ctx, active, now); bd != nil {
 			renderBinding(out, bd, boutiqueNamespace)
+			// Monitoring selection (doc 06 M1): gates 1–2 + reason codes. The
+			// deterministic Tier-A core feeds detection; the full records (incl.
+			// the none-list) are the audit surface.
+			selected := selection.TierASet(bd.Result, bnd.graph)
+			renderSelection(out, selection.Select(active, bd.Result, bnd.graph, now, "evaluation-tick"))
 			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
 			// now" — re-materialized each tick against fresh samples.
 			fps = bnd.fingerprints(now)
 			renderFingerprints(out, fps, boutiqueNamespace)
-			// Entity-local phenomenon matches (doc 07 M1) over those fingerprints.
-			findings = bnd.detectFindings(fps)
+			// Entity-local phenomenon matches (doc 07 M1) over the SELECTED
+			// fingerprints (doc 06 provides the Tier-A set to detection).
+			findings = bnd.detectFindings(fps, selected)
 			renderFindings(out, findings)
 			if capture != nil {
 				epoch, err := capture.SetBars(now, bd.Result.Bindings)

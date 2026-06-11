@@ -13,6 +13,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
 )
 
 // Options configures one replay run.
@@ -75,7 +76,7 @@ func Run(opts Options) (*Report, error) {
 	matcher := detect.NewMatcher(opts.Graph)
 	reader := newBundleReader()
 	rep := &Report{Manifest: m}
-	bars := map[int]*binding.Result{} // epoch -> resolved-bar set (lazy, cached)
+	bars := map[int]*barsEpoch{} // epoch -> resolved bars + Tier-A set (lazy, cached)
 
 	segs, err := qss.ListSegments(filepath.Join(opts.BundleDir, segmentsDir))
 	if err != nil {
@@ -133,16 +134,23 @@ func Run(opts Options) (*Report, error) {
 	return rep, nil
 }
 
+// barsEpoch is one cached resolved-bar set plus the Tier-A selection derived
+// from it (selection is a pure function of bars + graph, doc 06).
+type barsEpoch struct {
+	res      *binding.Result
+	selected map[string][]string
+}
+
 // evalTick re-runs one recorded evaluation tick: materialize fingerprints from
-// the reconstructed rings against the recorded bars epoch, match phenomena, and
-// compare digests.
-func evalTick(rec TickRecord, bars map[int]*binding.Result, opts Options,
+// the reconstructed rings against the recorded bars epoch, match phenomena over
+// the selected (Tier-A) entities, and compare digests.
+func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 	rules map[string]*graph.ThresholdRule, matcher *detect.Matcher, reader *bundleReader, m Manifest) (TickOutcome, error) {
 
 	var fps []observe.Fingerprint
 	var findings []detect.Finding
 	if rec.BarsEpoch > 0 {
-		res, ok := bars[rec.BarsEpoch]
+		ep, ok := bars[rec.BarsEpoch]
 		if !ok {
 			var bf BarsFile
 			raw, err := os.ReadFile(filepath.Join(opts.BundleDir, barsName(rec.BarsEpoch)))
@@ -152,11 +160,21 @@ func evalTick(rec TickRecord, bars map[int]*binding.Result, opts Options,
 			if err := json.Unmarshal(raw, &bf); err != nil {
 				return TickOutcome{}, fmt.Errorf("replay: bars epoch %d: %w", rec.BarsEpoch, err)
 			}
-			res = &binding.Result{Bindings: bf.Bindings}
-			bars[rec.BarsEpoch] = res
+			res := &binding.Result{Bindings: bf.Bindings}
+			// The same selection live detection consumes (doc 06): the Tier-A set
+			// is a pure function of (bindings, graph), both pinned in the bundle —
+			// the funnel replays exactly. (For any phenomenon the matcher can fire,
+			// the entity is by construction a participant, so the filter can only
+			// drop fingerprints that would have produced no findings —
+			// pre-selection bundles replay identically.)
+			ep = &barsEpoch{res: res, selected: selection.TierASet(res, opts.Graph)}
+			bars[rec.BarsEpoch] = ep
 		}
-		fps = observe.Materialize(res, rules, reader, m.FPParams, rec.EvalNow)
+		fps = observe.Materialize(ep.res, rules, reader, m.FPParams, rec.EvalNow)
 		for _, fp := range fps {
+			if len(ep.selected[fp.CEIKey]) == 0 {
+				continue
+			}
 			findings = append(findings, matcher.MatchFingerprint(fp)...)
 		}
 	}
