@@ -63,9 +63,12 @@ type VariableThreshold struct {
 	// Slope is the signed per-second slope of the variable over the rate window
 	// (gauge variables only; 0 otherwise) — the "is this rising/falling" evidence
 	// some phenomenon members need (e.g. memory-leak working-set slope > 0).
-	Slope        float64
-	SlopeSamples int
-	Deriv        DerivationRef
+	// SlopeSamples is the count the slope was measured over (post gap-trim);
+	// SlopeInconclusive means a gap left too few samples to trust the slope.
+	Slope             float64
+	SlopeSamples      int
+	SlopeInconclusive bool
+	Deriv             DerivationRef
 }
 
 // VariableRate is one rate-guarded variable's fingerprint component.
@@ -242,6 +245,7 @@ func evalThresholdVar(b *binding.Binding, rule *graph.ThresholdRule, streamID, u
 		sl := EvalGaugeSlope(reader.LastN(streamID, ringWindowN(p)), evalNow, p.RateWindow, p.ScrapeInterval)
 		vt.Slope = sl.PerSecond
 		vt.SlopeSamples = sl.Samples
+		vt.SlopeInconclusive = sl.Inconclusive
 		vt.Deriv = DerivationRef{StreamID: streamID, SampleAt: latest.At, Samples: sl.Samples, How: "gauge-level"}
 		vt.Stale = stale(latest.At, evalNow, p.Watermark)
 	}

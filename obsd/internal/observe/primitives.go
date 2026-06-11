@@ -201,8 +201,12 @@ type SlopeResult struct {
 	Delta     float64 // signed (last − first) over the valid run
 	Window    time.Duration
 	Elapsed   time.Duration
-	Samples   int
+	Samples   int // samples in the RUN the slope was measured over (post gap-trim)
 	GapBroken bool
+	// Inconclusive: a gap left fewer than 2 usable samples after it, so the slope is
+	// not a confident measurement (mirrors the rate path). Must never read as a clean
+	// "not rising".
+	Inconclusive bool
 }
 
 // EvalGaugeSlope computes the signed slope of a gauge over the window ending at now.
@@ -231,7 +235,10 @@ func EvalGaugeSlope(samples []qss.Sample, now time.Time, window, scrapeInterval 
 		}
 	}
 	run := win[firstIdx:]
+	res.Samples = len(run) // the count the slope was actually measured over
 	if len(run) < 2 {
+		// A gap left too few usable samples: inconclusive, never a clean zero slope.
+		res.Inconclusive = res.GapBroken
 		return res
 	}
 	res.Delta = run[len(run)-1].Value - run[0].Value

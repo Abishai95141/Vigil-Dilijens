@@ -282,6 +282,13 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 			if err := g.validateCheck(p, &c); err != nil {
 				return fmt.Errorf("phenomenon %s check %d: %w", phen, i, err)
 			}
+			// One check per (phenomenon, signal): a second would be silently collapsed
+			// last-writer-wins at match time (order-dependent, breaks replay). Fail loudly.
+			for _, prior := range g.Checks[phen] {
+				if prior.Signal == c.Signal {
+					return fmt.Errorf("phenomenon %s: duplicate check for signal %q", phen, c.Signal)
+				}
+			}
 			g.Checks[phen] = append(g.Checks[phen], &c)
 			nChecks++
 		}
@@ -309,6 +316,9 @@ func (g *Graph) validateCheck(p *Phenomenon, c *MemberCheck) error {
 	}
 	if !knownMinStates[c.MinState] {
 		return fmt.Errorf("unknown min_state %q (at-threshold|above|well-above)", c.MinState)
+	}
+	if c.MinState != "" && c.Facet != "slope" {
+		return fmt.Errorf("min_state %q is only meaningful on a slope facet; facet %q would silently ignore it", c.MinState, c.Facet)
 	}
 	if strings.TrimSpace(c.Metric) == "" {
 		return fmt.Errorf("missing metric")

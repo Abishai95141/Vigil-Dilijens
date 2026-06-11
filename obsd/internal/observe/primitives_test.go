@@ -231,3 +231,20 @@ func TestEvalGaugeSlope(t *testing.T) {
 		t.Errorf("single sample slope = %v, want 0", got.PerSecond)
 	}
 }
+
+// Regression (adversarial 07-M1 finding 8/10): EvalGaugeSlope must report the
+// POST-gap-trim run count and mark inconclusive when a gap leaves a single sample.
+func TestEvalGaugeSlopeGapInconclusive(t *testing.T) {
+	// 0:100, 15:110, [gap 90s], 105:500 → post-gap run is a single sample.
+	s := samples(rateBase, 0, 100, 15, 110, 105, 500)
+	r := EvalGaugeSlope(s, at(rateBase, 105), 5*time.Minute, 15*time.Second)
+	if !r.GapBroken || !r.Inconclusive {
+		t.Errorf("gap-isolated single sample must be inconclusive: %+v", r)
+	}
+	if r.Samples != 1 {
+		t.Errorf("Samples = %d, want 1 (the post-gap run, not the full window)", r.Samples)
+	}
+	if r.PerSecond != 0 {
+		t.Errorf("inconclusive slope must not report a value: %v", r.PerSecond)
+	}
+}

@@ -2,6 +2,7 @@ package detect
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,4 +160,46 @@ func TestOnlyEntityLocalPhenomena(t *testing.T) {
 			t.Error("first-order OOM must not be evaluated by the entity-local matcher")
 		}
 	}
+}
+
+// Regression (07-M1 finding 1/8/10): a gap-inconclusive slope does NOT fire.
+func TestSlopeInconclusiveNoFire(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	fp := memLeakFingerprint(observe.StateAtThreshold, 5000, 2, false)
+	fp.Thresholds[0].SlopeInconclusive = true
+	if hasLeak(m.MatchFingerprint(fp)) {
+		t.Error("a gap-inconclusive slope must not fire MEMORY_LEAK")
+	}
+}
+
+// Regression (07-M1 finding 7): a default-flagged bar's provenance reaches the
+// finding evidence (never surfaces as plain config-sourced).
+func TestFlaggedBarProvenanceCarried(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	fp := memLeakFingerprint(observe.StateAtThreshold, 5000, 6, false)
+	fp.Thresholds[0].Flagged = true
+	for _, f := range m.MatchFingerprint(fp) {
+		if f.Phenomenon == "PHEN_MEMORY_LEAK" {
+			if len(f.Members) != 1 || !f.Members[0].BarFlagged {
+				t.Errorf("flagged-bar provenance dropped: %+v", f.Members)
+			}
+			return
+		}
+	}
+	t.Fatal("MEMORY_LEAK did not fire")
+}
+
+// Regression (07-M1 finding 3): the unobservable required member surfaces its
+// AUTHORED note, not just a bare signal id.
+func TestUnobservableMemberNoteSurfaced(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	for _, f := range m.MatchFingerprint(memLeakFingerprint(observe.StateAtThreshold, 5000, 6, false)) {
+		if f.Phenomenon == "PHEN_MEMORY_LEAK" {
+			if len(f.Unobservable) != 1 || !strings.Contains(f.Unobservable[0], "—") {
+				t.Errorf("unobservable member must carry its authored note: %v", f.Unobservable)
+			}
+			return
+		}
+	}
+	t.Fatal("MEMORY_LEAK did not fire")
 }

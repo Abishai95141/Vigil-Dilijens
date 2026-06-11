@@ -31,6 +31,7 @@ type MemberEvidence struct {
 	Met        bool
 	State      string // the fingerprint state that satisfied/failed the check
 	SampleAt   time.Time
+	BarFlagged bool   // the bar this state was computed against is a flagged ontology default
 	Note       string // AUTHORED member note (the only "why", attributed)
 }
 
@@ -118,9 +119,19 @@ func (m *Matcher) evalPhenomenon(p *graph.Phenomenon, fp observe.Fingerprint) (F
 	}
 
 	// Members come from the resolved participates_in edges (signal -> phenomenon),
-	// already on the graph. Sort by signal id for determinism.
+	// already on the graph. Stable-sort by a TOTAL key (signal, temporal, role) so
+	// ties never reorder non-deterministically (doc 07 §3.7).
 	members := append([]graph.Member(nil), p.Members...)
-	sort.Slice(members, func(i, j int) bool { return members[i].SignalID < members[j].SignalID })
+	sort.SliceStable(members, func(i, j int) bool {
+		a, b := members[i], members[j]
+		if a.SignalID != b.SignalID {
+			return a.SignalID < b.SignalID
+		}
+		if a.TemporalOrder != b.TemporalOrder {
+			return a.TemporalOrder < b.TemporalOrder
+		}
+		return a.Role < b.Role
+	})
 
 	for _, mem := range members {
 		required := mem.Role == "required"
@@ -135,6 +146,7 @@ func (m *Matcher) evalPhenomenon(p *graph.Phenomenon, fp observe.Fingerprint) (F
 			ev.Met = met && fresh
 			ev.State = state
 			ev.SampleAt = at
+			ev.BarFlagged = barFlagged(check, fp)
 			if check.Note != "" {
 				ev.Note = mem.Why + " [" + check.Note + "]"
 			}
@@ -151,11 +163,16 @@ func (m *Matcher) evalPhenomenon(p *graph.Phenomenon, fp observe.Fingerprint) (F
 				// fails — this phenomenon is not happening here.
 				return Finding{}, false
 			default:
-				// No check, or its variable absent/stale: unobservable here.
+				// No check, or its variable absent/stale: unobservable here. Carry the
+				// AUTHORED note (the only "why") so the curator's explanation of the
+				// MISSING member is surfaced, not dropped (doc 07 §4).
 				f.RequiredUnobserved++
 				label := mem.SignalID
 				if ev.Metric != "" {
 					label += " (" + ev.Metric + ", stale/absent)"
+				}
+				if ev.Note != "" {
+					label += " — " + ev.Note
 				}
 				f.Unobservable = append(f.Unobservable, label)
 			}
@@ -194,7 +211,7 @@ func satisfies(c *graph.MemberCheck, fp observe.Fingerprint) (met bool, state st
 	switch c.Facet {
 	case "slope":
 		vt, ok := findThreshold(fp, c.Metric)
-		if !ok || vt.Stale || vt.SlopeSamples < 2 {
+		if !ok || vt.Stale || vt.SlopeInconclusive || vt.SlopeSamples < 2 {
 			return false, "no-slope", false, time.Time{}
 		}
 		state = fmt.Sprintf("%s, slope %+.3g/s", vt.State, vt.Slope)
@@ -217,10 +234,10 @@ func satisfies(c *graph.MemberCheck, fp observe.Fingerprint) (met bool, state st
 		}
 		state = vt.State.String()
 		switch c.Expect {
-		case "crossed":
+		case "crossed", "at-or-above":
+			// Both require the bar actually CROSSED. StateAtThreshold is the healthy
+			// approach band (strictly below the bar) and must not satisfy at-or-above.
 			return vt.State.Crossed(), state, true, vt.Deriv.SampleAt
-		case "at-or-above":
-			return vt.State == observe.StateAtThreshold || vt.State.Crossed(), state, true, vt.Deriv.SampleAt
 		}
 		return false, state, true, vt.Deriv.SampleAt
 	case "rate-guard":
@@ -246,20 +263,45 @@ func meetsMinState(s observe.ThresholdState, min string) bool {
 	return s >= rank[min]
 }
 
+// findThreshold returns the entity's threshold variable for a metric only if it is
+// UNAMBIGUOUS. Two variables on one entity sharing a metric is an ambiguity (mirrors
+// binding QA): rather than silently take the first (fp.Thresholds is sorted by
+// RuleID, not metric), treat it as no usable evidence so the member is unobserved,
+// never matched against an arbitrary bar.
 func findThreshold(fp observe.Fingerprint, metric string) (observe.VariableThreshold, bool) {
+	var found observe.VariableThreshold
+	n := 0
 	for _, t := range fp.Thresholds {
 		if t.Metric == metric {
-			return t, true
+			found, n = t, n+1
 		}
 	}
-	return observe.VariableThreshold{}, false
+	return found, n == 1
 }
 
 func findRate(fp observe.Fingerprint, metric string) (observe.VariableRate, bool) {
+	var found observe.VariableRate
+	n := 0
 	for _, r := range fp.Rates {
 		if r.Metric == metric {
-			return r, true
+			found, n = r, n+1
 		}
 	}
-	return observe.VariableRate{}, false
+	return found, n == 1
+}
+
+// barFlagged reports whether the fingerprint variable a check consults was computed
+// against a flagged ontology-default bar (lower trust, doc 04 §3.4) — surfaced on the
+// finding so a default bar never masquerades as config-sourced.
+func barFlagged(c *graph.MemberCheck, fp observe.Fingerprint) bool {
+	if c.Facet == "rate-guard" {
+		if vr, ok := findRate(fp, c.Metric); ok {
+			return vr.Flagged
+		}
+		return false
+	}
+	if vt, ok := findThreshold(fp, c.Metric); ok {
+		return vt.Flagged
+	}
+	return false
 }

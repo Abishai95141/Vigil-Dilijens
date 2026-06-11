@@ -33,8 +33,12 @@ func renderFindings(w io.Writer, findings []detect.Finding) {
 		fmt.Fprintf(w, "    required: %d met of %d (%d unobservable here); supporting: %d/%d\n",
 			f.RequiredMet, f.RequiredTotal, f.RequiredUnobserved, f.SupportingMet, f.SupportingObservble)
 		for _, mem := range f.Members {
-			fmt.Fprintf(w, "      • %s [%s] %s=%s — %s\n",
-				mem.Role, mem.Temporal, shortMetric(mem.Metric), mem.State, authoredNote(mem.Note))
+			barProv := "config"
+			if mem.BarFlagged {
+				barProv = "default-flagged"
+			}
+			fmt.Fprintf(w, "      • %s [%s] %s=%s (bar:%s) — %s\n",
+				mem.Role, mem.Temporal, shortMetric(mem.Metric), mem.State, barProv, authoredNote(mem.Note))
 		}
 		for _, u := range f.Unobservable {
 			fmt.Fprintf(w, "      ! unobservable required member: %s\n", u)

@@ -243,3 +243,41 @@ func TestOverlayPathOrderDeterministic(t *testing.T) {
 		t.Errorf("paths = %v, want %v", paths, want)
 	}
 }
+
+// Regression (07-M1 finding 4 & 9): defective detection-condition overlays are
+// rejected — a duplicate check per signal, and min_state on a non-slope facet.
+func TestDetectionConditionDefectsRejected(t *testing.T) {
+	raw, err := os.ReadFile(kgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, body, want string }{
+		{"duplicate signal check", `
+overlay: t
+author: a
+checks:
+  PHEN_MEMORY_LEAK:
+    - {signal: SIG_container_memory_family_14_metrics_529498d3, metric: m, facet: slope, expect: rising}
+    - {signal: SIG_container_memory_family_14_metrics_529498d3, metric: m, facet: slope, expect: falling}
+`, "duplicate check"},
+		{"min_state on non-slope", `
+overlay: t
+author: a
+checks:
+  PHEN_MEMORY_LEAK:
+    - {signal: SIG_container_memory_family_14_metrics_529498d3, metric: m, facet: level, expect: crossed, min_state: above}
+`, "only meaningful on a slope"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g, err := Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = g.applyOverlay("test.yaml", []byte(c.body))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("want error containing %q, got %v", c.want, err)
+			}
+		})
+	}
+}
