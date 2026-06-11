@@ -14,6 +14,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 )
 
 // binder runs the discovery-time binding compilation (doc 04). Binding runs on
@@ -23,9 +24,10 @@ import (
 // identity path (doc 01 non-gating: detection-side layers run identically whether
 // binding is present or absent).
 type binder struct {
-	graph  *graph.Graph // nil = binding disabled (stated at startup)
-	client kubernetes.Interface
-	logger *slog.Logger
+	graph    *graph.Graph // nil = binding disabled (stated at startup)
+	client   kubernetes.Interface
+	logger   *slog.Logger
+	ingestor *observe.Ingestor // stream evidence for semantic QA (doc 04 M3)
 
 	last        *binding.Result
 	lastFinger  string

@@ -28,7 +28,9 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
 )
 
@@ -161,9 +163,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	if err != nil {
 		return fmt.Errorf("bind health server on %s: %w", healthAddr, err)
 	}
+	// Observation ingest (doc 05 M1, doc 14 A1): we own the scraper — cAdvisor per
+	// node via the API-server proxy, every series through the identity normalizer,
+	// CEI-stamped samples into the hot store. Non-gating like everything else:
+	// identity runs identically if scraping fails (failures are stated, counted).
+	hot := qss.NewHotStore()
+	ingestor := observe.NewIngestor(identity.NewNormalizer(clusterID, store), hot)
+	go scrapeLoop(ctx, logger, ingestor, kube.NewProxyFetcher(client), watcher, p.Scrape.Interval.Duration())
+
 	go serveHealth(ctx, logger, ln, registry, watcher)
 	go inventoryLoop(ctx, out, logger, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration(),
-		&binder{graph: ontologyGraph, client: client, logger: logger})
+		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor})
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -268,6 +278,38 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, stor
 			return
 		case <-ticker.C:
 			render()
+		}
+	}
+}
+
+// scrapeLoop runs the observation ingest cycle (doc 05 M1): scrape every node's
+// cAdvisor endpoint each scrape interval, log the honest summary (resolved /
+// dropped / quarantined / node errors). The first cycle fires as soon as the
+// informers sync so identity joins are warm.
+func scrapeLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration) {
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	cycle := func() {
+		nodes := watcher.ListNodes()
+		names := make([]string, 0, len(nodes))
+		for _, n := range nodes {
+			names = append(names, n.Name)
+		}
+		sum := in.ScrapeCAdvisor(ctx, f, names)
+		logger.Info("observation ingest (cAdvisor)", "summary", sum.String(), "streams", in.Hot().Streams())
+	}
+	if waitForSync(ctx, watcher, every) {
+		cycle()
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cycle()
 		}
 	}
 }
