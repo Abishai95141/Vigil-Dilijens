@@ -49916,7 +49916,7 @@
     {
       "src": "SIG_kubelet_volume_stats_capacity_bytes_30f7babe",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "PVC capacity. Foundation for fill-ratio calc.",
@@ -49932,7 +49932,7 @@
     {
       "src": "SIG_kubelet_volume_stats_available_bytes_161d2ac1",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Bytes available to non-root.",
@@ -49948,7 +49948,7 @@
     {
       "src": "SIG_kubelet_volume_stats_used_bytes_38fa9389",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Bytes consumed in PVC.",
@@ -49964,7 +49964,7 @@
     {
       "src": "SIG_kubelet_volume_stats_health_status_abnormal_97b44f5a",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "CSI VolumeHealth \u2014 driver-reported health.",
@@ -49973,7 +49973,7 @@
     {
       "src": "SIG_container_fs_io_time_seconds_total_0640e9c3",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Time fs was busy with I/O \u2014 utilization.",
@@ -49989,7 +49989,7 @@
     {
       "src": "SIG_container_fs_io_time_weighted_seconds_total_3005ba30",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Weighted time = utilization \u00d7 queue depth. Direct latency proxy.",
@@ -50005,7 +50005,7 @@
     {
       "src": "SIG_node_filesystem_readonly_bbb2de0e",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "1 if FS went RO \u2014 usually disk failure.",
@@ -50021,7 +50021,7 @@
     {
       "src": "SIG_node_disk_io_time_seconds_total_b1e8d333",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Disk utilization (busy time).",
@@ -50037,7 +50037,7 @@
     {
       "src": "SIG_node_disk_io_time_weighted_seconds_total_51414615",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "KEY latency proxy \u2014 high = high latency \u00d7 queue depth.",
@@ -50053,7 +50053,7 @@
     {
       "src": "SIG_node_disk_io_now_4629b8f1",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "I/Os currently in flight.",
@@ -50069,7 +50069,7 @@
     {
       "src": "SIG_kube_persistentvolume_capacity_bytes_fcdbb914",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "PV provisioned capacity.",
@@ -50085,7 +50085,7 @@
     {
       "src": "SIG_kube_persistentvolume_status_phase_62ee288f",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "PV lifecycle phase.",
@@ -50094,7 +50094,7 @@
     {
       "src": "SIG_kube_persistentvolumeclaim_status_phase_e2c54d37",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "PVC bound or pending.",
@@ -50103,7 +50103,7 @@
     {
       "src": "SIG_kube_persistentvolumeclaim_resource_requests_storage_bytes_bd4d0e3c",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "PVC requested size \u2014 for cost / utilization.",
@@ -50119,7 +50119,7 @@
     {
       "src": "SIG_volume_manager_total_volumes_b0f024d6",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Volumes tracked by kubelet manager.",
@@ -50135,7 +50135,7 @@
     {
       "src": "SIG_storage_operation_duration_seconds_1d8a6541",
       "src_type": "Signal",
-      "dst": "Storage / PVC Analysis Agent",
+      "dst": "Storage Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Backend storage operation latency by plugin.",
@@ -50439,7 +50439,7 @@
     {
       "src": "SIG_api_server_audit_logs_e9836090",
       "src_type": "Signal",
-      "dst": "Log / IO Analysis Agent",
+      "dst": "Log/IO Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Per-request audit trail.",
@@ -50455,7 +50455,7 @@
     {
       "src": "SIG_apiserver_audit_6_metrics_5c8caf8a",
       "src_type": "Signal",
-      "dst": "Log / IO Analysis Agent",
+      "dst": "Log/IO Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Volume of audit events \u2014 proxy for cluster activity.",
@@ -50471,7 +50471,7 @@
     {
       "src": "SIG_apiserver_audit_6_metrics_5c8caf8a",
       "src_type": "Signal",
-      "dst": "Log / IO Analysis Agent",
+      "dst": "Log/IO Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Audit-rejected requests.",
@@ -50487,7 +50487,7 @@
     {
       "src": "SIG_systemd_journal_journald_2cc9390a",
       "src_type": "Signal",
-      "dst": "Log / IO Analysis Agent",
+      "dst": "Log/IO Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "All node services. Critical for kubelet/containerd/network.",
@@ -50503,7 +50503,7 @@
     {
       "src": "SIG_probe_events_unhealthy_probewarning_939e3038",
       "src_type": "Signal",
-      "dst": "Log / IO Analysis Agent",
+      "dst": "Log/IO Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Probe failures \u2014 root of many restart loops.",
@@ -50519,7 +50519,7 @@
     {
       "src": "SIG_node_disk_io_time_weighted_seconds_total_51414615",
       "src_type": "Signal",
-      "dst": "Log / IO Analysis Agent",
+      "dst": "Log/IO Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "I/O latency \u00d7 queue depth. Even when usage seems fine, weighted time tells the truth.",
@@ -50535,7 +50535,7 @@
     {
       "src": "SIG_node_filesystem_readonly_bbb2de0e",
       "src_type": "Signal",
-      "dst": "Log / IO Analysis Agent",
+      "dst": "Log/IO Analysis Agent",
       "dst_type": "Agent",
       "type": "owned_by_agent",
       "why": "Filesystem flipped read-only \u2014 disk failure or planned RO.",
