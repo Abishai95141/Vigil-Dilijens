@@ -71,7 +71,10 @@ func renderFingerprints(w io.Writer, fps []observe.Fingerprint, focusNamespace s
 		}
 		for _, r := range fp.Rates {
 			state := "ok"
-			if r.Breached {
+			switch {
+			case r.Inconclusive:
+				state = "inconclusive"
+			case r.Breached:
 				state = "BREACHED"
 			}
 			flags := provenance(r.BarSource, r.Flagged, r.Stale, r.Deriv.How)

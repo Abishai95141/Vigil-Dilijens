@@ -175,3 +175,38 @@ func TestEvalCooccurrence(t *testing.T) {
 		t.Errorf("empty → %+v, want unknown", got)
 	}
 }
+
+// Regression (adversarial finding 1): EvalRate must tolerate ARRIVAL order that is
+// not timestamp order (the hot ring does not reorder; cAdvisor timestamps regress).
+// A timestamp-regressed sample appended last must not be mis-read as a reset, and
+// must not produce a negative Elapsed.
+func TestEvalRateToleratesUnsortedArrival(t *testing.T) {
+	// Logical chronological series 0:100,15:115,30:130; but arrival order puts the
+	// 15s sample LAST (a regressed re-scrape). Sorted, it is a clean +30 over 30s.
+	unsorted := []qss.Sample{
+		{At: at(rateBase, 0), Value: 100},
+		{At: at(rateBase, 30), Value: 130},
+		{At: at(rateBase, 15), Value: 115}, // arrives last, older timestamp
+	}
+	r := EvalRate(unsorted, at(rateBase, 30), 5*time.Minute, 15*time.Second)
+	if r.Resets != 0 {
+		t.Errorf("regressed-arrival sample must not be mis-counted as a reset: %+v", r)
+	}
+	if r.WindowDelta != 30 || r.Elapsed != 30*time.Second {
+		t.Errorf("rate over re-sorted window = %+v, want delta 30 / elapsed 30s", r)
+	}
+}
+
+// Regression (adversarial finding 3): a non-finite value lands on Unknown, never a
+// fabricated rung (ordered comparisons against NaN are all false → would be Below).
+func TestEvalThresholdNonFinite(t *testing.T) {
+	import_math_inf := 1.0
+	for _, v := range []float64{nan(), inf(import_math_inf), inf(-import_math_inf)} {
+		if got := EvalThreshold(v, 100, 110, 0.05, "above"); got != StateUnknown {
+			t.Errorf("non-finite %v → %s, want unknown", v, got)
+		}
+	}
+}
+
+func nan() float64          { return mathNaN() }
+func inf(s float64) float64 { return mathInf(s) }

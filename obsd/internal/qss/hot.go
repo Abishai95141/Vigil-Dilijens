@@ -79,7 +79,12 @@ func (h *HotStore) Append(streamID string, s Sample) {
 	r.append(s)
 }
 
-// Latest returns the most recent sample on a stream.
+// Latest returns the TIMESTAMP-newest sample on a stream — not merely the last
+// appended one. The ring is arrival-ordered and cAdvisor timestamps can regress
+// across scrapes (doc 14 A12), so the arrival tail is not always the freshest by
+// event time. Scanning ≤hotCapacity records keeps the read O(n) and deterministic,
+// and ensures a fingerprint's cited sample and staleness match the sample its rate
+// was computed from. The store still stores-and-retrieves; it does not reorder.
 func (h *HotStore) Latest(streamID string) (Sample, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -87,7 +92,14 @@ func (h *HotStore) Latest(streamID string) (Sample, bool) {
 	if !ok || r.n == 0 {
 		return Sample{}, false
 	}
-	return r.buf[(r.start+r.n-1)%hotCapacity], true
+	newest := r.buf[r.start]
+	for i := 1; i < r.n; i++ {
+		s := r.buf[(r.start+i)%hotCapacity]
+		if s.At.After(newest.At) {
+			newest = s
+		}
+	}
+	return newest, true
 }
 
 // LastN returns up to n most recent samples, oldest first.

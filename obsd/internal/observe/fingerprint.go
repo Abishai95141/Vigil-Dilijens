@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -74,8 +75,13 @@ type VariableRate struct {
 	Flagged     bool
 	Resets      int
 	GapBroken   bool
-	Stale       bool
-	Deriv       DerivationRef
+	// Inconclusive: a scrape gap left fewer than 2 usable samples after it, so the
+	// window delta is NOT a confident measurement — the guard cannot say breached or
+	// not. Must never be read as a clean "not breached" (the silent-failure-during-
+	// the-incident case). Surfaced as degraded, kept out of Crossed()'s healthy bucket.
+	Inconclusive bool
+	Stale        bool
+	Deriv        DerivationRef
 }
 
 // Fingerprint is one entity's compacted live state (doc 05 §3.6).
@@ -99,7 +105,7 @@ func (f Fingerprint) Crossed() bool {
 		}
 	}
 	for _, r := range f.Rates {
-		if !r.Stale && r.Breached {
+		if !r.Stale && !r.Inconclusive && r.Breached {
 			return true
 		}
 	}
@@ -189,12 +195,22 @@ func evalThresholdVar(b *binding.Binding, rule *graph.ThresholdRule, streamID, u
 			return VariableThreshold{}, false
 		}
 		num, numAt, nok := windowValue(streamID, expoType, reader, p, evalNow)
-		den, _, dok := windowValue(divs[0], expoType, reader, p, evalNow)
-		if !nok || !dok || den == 0 {
+		den, denAt, dok := windowValue(divs[0], expoType, reader, p, evalNow)
+		// A non-finite or zero denominator (or non-finite numerator) must not produce
+		// a fabricated ratio; drop the component rather than feed Inf/NaN to the ladder.
+		if !nok || !dok || den == 0 || math.IsNaN(num) || math.IsInf(num, 0) || math.IsNaN(den) || math.IsInf(den, 0) {
 			return VariableThreshold{}, false
 		}
 		vt.Value = num / den
 		vt.Deriv = DerivationRef{StreamID: streamID, DivisorID: divs[0], SampleAt: numAt, How: "counter-ratio"}
+		// The ratio is only as fresh as its LEAST-fresh input — staleness was being
+		// silently dropped on this path (a stale ratio over its bar would surface as a
+		// live crossing). Anchor staleness on the older of the two streams.
+		anchor := numAt
+		if denAt.Before(anchor) {
+			anchor = denAt
+		}
+		vt.Stale = stale(anchor, evalNow, p.Watermark)
 	case expoType == "counter":
 		// A cumulative counter compared to a level bar (e.g. cpu_seconds vs a
 		// millicore limit): convert to a rate. cores = Δsec/Δt; ×1000 → millicores.
@@ -233,12 +249,17 @@ func evalRateGuard(b *binding.Binding, streamID string, reader StreamReader, p F
 	if !ok {
 		return VariableRate{}, false
 	}
+	// A gap that leaves <2 usable samples after it (Elapsed<=0 with GapBroken) means
+	// the window delta was computed over nothing — inconclusive, not "0 restarts".
+	// This is exactly the incident case (a node briefly unreachable as it thrashes),
+	// so it must never read as a confident not-breached.
+	inconclusive := rr.GapBroken && rr.Elapsed <= 0
 	vr := VariableRate{
 		RuleID: b.RuleID, Metric: b.Metric,
 		WindowDelta: rr.WindowDelta, PerSecond: rr.PerSecond,
-		Bar: b.Bar.Value, Breached: rr.WindowDelta >= b.Bar.Value,
+		Bar: b.Bar.Value, Breached: rr.WindowDelta >= b.Bar.Value && !inconclusive,
 		BarSource: string(b.Bar.Source), Flagged: b.Bar.Flagged,
-		Resets: rr.Resets, GapBroken: rr.GapBroken,
+		Resets: rr.Resets, GapBroken: rr.GapBroken, Inconclusive: inconclusive,
 		Stale: stale(latest.At, evalNow, p.Watermark),
 		Deriv: DerivationRef{StreamID: streamID, SampleAt: latest.At, Samples: rr.Samples, How: "rate-guard"},
 	}

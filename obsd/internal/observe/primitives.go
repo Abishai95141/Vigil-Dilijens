@@ -1,6 +1,8 @@
 package observe
 
 import (
+	"math"
+	"sort"
 	"time"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
@@ -81,6 +83,12 @@ func WellAboveLine(barValue, factor, wellAboveFactor float64, direction string) 
 // band×bar of the bar on the HEALTHY side is "at-threshold". direction is the bar's
 // violation direction ("above" | "below"). wellAbove is the precomputed A6 line.
 func EvalThreshold(value, barValue, wellAbove, band float64, direction string) ThresholdState {
+	// A non-finite value (a divide-by-tiny, a 0/0) must NOT land on a fabricated
+	// rung: ordered comparisons against NaN are all false, which would silently
+	// return Below. Surface it as Unknown instead.
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return StateUnknown
+	}
 	if direction == "below" {
 		// Violation is value < bar. Healthy is value > bar.
 		switch {
@@ -144,6 +152,13 @@ func EvalRate(samples []qss.Sample, now time.Time, window, scrapeInterval time.D
 	if len(win) < 2 {
 		return res
 	}
+	// The hot ring stores samples in ARRIVAL order and is documented not to reorder
+	// (doc 05 §3.1). cAdvisor stamps samples with its own collection time, which can
+	// regress across scrapes (doc 14 A12), so arrival order != timestamp order. This
+	// function's reset/gap logic assumes chronological order, so enforce it here
+	// deterministically rather than trusting the caller — a stable sort by timestamp
+	// keeps replay byte-identical regardless of scrape interleaving.
+	sort.SliceStable(win, func(i, j int) bool { return win[i].At.Before(win[j].At) })
 
 	// Trim to the contiguous run ending at the latest sample (gaps break the window).
 	gapThreshold := 2 * scrapeInterval

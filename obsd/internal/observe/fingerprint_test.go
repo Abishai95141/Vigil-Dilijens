@@ -256,3 +256,67 @@ func TestMaterializeDeterministicAndSorted(t *testing.T) {
 		t.Error("Materialize not deterministic")
 	}
 }
+
+// Regression (adversarial finding 2): a stale ratio variable must be flagged stale
+// (was silently dropped), so a stale ratio over its bar does NOT surface as a live
+// crossing.
+func TestMaterializeRatioStaleness(t *testing.T) {
+	b := containerBinding("uid-a", "server", "THR_CONTAINER_CPU_THROTTLE_RATIO",
+		"container_cpu_cfs_throttled_periods_total", "ratio", "above", 0.25, 0, graph.RuleAbsolute)
+	res := &binding.Result{Bindings: []binding.Binding{b}}
+	rule := &graph.ThresholdRule{ID: b.RuleID, Metric: b.Metric, DivisorMetric: "container_cpu_cfs_periods_total"}
+	rules := map[string]*graph.ThresholdRule{b.RuleID: rule}
+	old := evalNow.Add(-2 * time.Minute) // past the 30s watermark
+	base := old.Add(-15 * time.Second)   // within the gap threshold (no gap)
+	r := fakeReader{
+		streams: map[string][]string{
+			"uid-a/server|container_cpu_cfs_throttled_periods_total": {"t1"},
+			"uid-a/server|container_cpu_cfs_periods_total":           {"p1"},
+		},
+		typ: map[string]string{"t1": "counter", "p1": "counter"},
+		hist: map[string][]qss.Sample{
+			// ratio 0.40 (over the 0.25 bar) but every sample is 2 minutes old.
+			"t1": {{At: base, Value: 1000}, {At: old, Value: 1040}},
+			"p1": {{At: base, Value: 5000}, {At: old, Value: 5100}},
+		},
+	}
+	fps := Materialize(res, rules, r, fpParams(), evalNow)
+	vt := fps[0].Thresholds[0]
+	if !vt.Stale {
+		t.Fatalf("stale ratio must be flagged stale, got %+v", vt)
+	}
+	if fps[0].Crossed() {
+		t.Error("a stale (over-bar) ratio must NOT count as a live crossing")
+	}
+}
+
+// Regression (adversarial finding 4, BLOCKING): a scrape gap isolating the newest
+// sample makes the window delta inconclusive — it must NOT read as a confident
+// not-breached, and must not bucket the entity as healthy.
+func TestMaterializeRateGuardGapInconclusive(t *testing.T) {
+	b := containerBinding("uid-a", "server", "THR_CONTAINER_RESTARTS_RATE",
+		"kube_pod_container_status_restarts_total", "count", "above", 3, 0, graph.RuleRateOfChange)
+	b.Bar.Source = binding.SourceDefault
+	b.Bar.Flagged = true
+	res := &binding.Result{Bindings: []binding.Binding{b}}
+	// Real restarts 0→5 long ago, then a >2-interval gap, then ONE fresh isolated
+	// sample at eval time. The pre-gap breach is discarded; the post-gap run has 1
+	// sample → inconclusive, NOT "0 restarts, ok".
+	base := evalNow.Add(-4 * time.Minute)
+	r := fakeReader{
+		streams: map[string][]string{"uid-a/server|kube_pod_container_status_restarts_total": {"k1"}},
+		typ:     map[string]string{"k1": "counter"},
+		hist: map[string][]qss.Sample{"k1": {
+			{At: base, Value: 0}, {At: base.Add(15 * time.Second), Value: 5},
+			{At: evalNow, Value: 5}, // isolated by a ~3.5m gap
+		}},
+	}
+	fps := Materialize(res, nil, r, fpParams(), evalNow)
+	vr := fps[0].Rates[0]
+	if !vr.Inconclusive || vr.Breached {
+		t.Errorf("gap-isolated guard must be inconclusive, not a confident verdict: %+v", vr)
+	}
+	if fps[0].Crossed() {
+		t.Error("an inconclusive rate guard must NOT bucket the entity as crossed/healthy")
+	}
+}
