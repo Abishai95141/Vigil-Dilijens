@@ -335,6 +335,13 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		var fps []observe.Fingerprint
 		var findings []detect.Finding
 		barsEpoch := 0
+		barsOK := true
+		// NOTE: compile holds the gate's read side through its discovery-time kube
+		// List calls (it must: binding QA reads live stream evidence under the same
+		// gate). A scrape cycle's ingest can therefore wait on a re-bind tick for
+		// the duration of those calls — a stated latency trade-off, not a
+		// correctness issue: the delayed cycle lands whole, after this tick, in
+		// both the rings and the capture log.
 		if bd := bnd.compile(ctx, active, now); bd != nil {
 			renderBinding(out, bd, boutiqueNamespace)
 			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
@@ -347,16 +354,38 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			if capture != nil {
 				epoch, err := capture.SetBars(now, bd.Result.Bindings)
 				if err != nil {
-					logger.Error("replay capture: bars write failed", "err", err)
+					// Without a durable bars file this tick's frame would reference an
+					// epoch that does not describe the bars actually used — replay
+					// would report a false determinism violation. Drop the tick from
+					// the capture instead (stated), never record a lie.
+					logger.Error("replay capture: bars write failed; this tick will not be captured", "err", err)
+					barsOK = false
 				}
 				barsEpoch = epoch
 			}
 		}
 		// The tick digest: the canonical hash of this tick's complete deterministic
 		// output (doc 05 §3.5) — the value replay must reproduce byte-identically.
-		digest, _ := replay.Digest(now, fps, findings)
+		digest, _, derr := replay.Digest(now, fps, findings)
+		if derr != nil {
+			// Unreachable while the ingest gate drops non-finite values; if it ever
+			// fires, the tick is honestly uncapturable — stated, not invented.
+			logger.Error("tick digest unavailable (non-canonical value in output)", "err", derr)
+			fmt.Fprintf(out, " tick digest UNAVAILABLE: %v\n\n", derr)
+			return
+		}
 		fmt.Fprintf(out, " tick digest sha256:%s…  (full digest in the replay bundle)\n\n", digest[:16])
 		if capture != nil {
+			if werr := capture.Warm().Err(); werr != nil {
+				// The warm tier latched a write failure: the bundle is incomplete
+				// from that point on. Say so on the same surface that advertises
+				// the bundle, not only in the logs.
+				fmt.Fprintf(out, " CAPTURE FAILED — replay bundle incomplete: %v\n\n", werr)
+				return
+			}
+			if !barsOK {
+				return
+			}
 			if err := capture.Tick(replay.TickRecord{
 				EvalNow: now, BarsEpoch: barsEpoch, Digest: digest,
 				Fingerprints: len(fps), Findings: len(findings),

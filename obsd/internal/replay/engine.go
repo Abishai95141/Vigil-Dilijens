@@ -160,7 +160,10 @@ func evalTick(rec TickRecord, bars map[int]*binding.Result, opts Options,
 			findings = append(findings, matcher.MatchFingerprint(fp)...)
 		}
 	}
-	digest, canonical := Digest(rec.EvalNow, fps, findings)
+	digest, canonical, err := Digest(rec.EvalNow, fps, findings)
+	if err != nil {
+		return TickOutcome{}, err
+	}
 	out := TickOutcome{
 		EvalNow: rec.EvalNow, BarsEpoch: rec.BarsEpoch,
 		RecordedDigest: rec.Digest, ReplayedDigest: digest,

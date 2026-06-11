@@ -94,6 +94,7 @@ type WarmStore struct {
 	idx      map[string]uint32 // streamID -> index in the CURRENT segment
 	nextIdx  uint32
 	dirty    bool
+	closed   bool  // set by Close; later appends are refused, never silently re-opened
 	err      error // latched first write error; appends after it are refused loudly
 
 	stop chan struct{}
@@ -252,6 +253,12 @@ func (w *WarmStore) ensureSegment(recv time.Time) error {
 	if w.err != nil {
 		return w.err
 	}
+	if w.closed {
+		// A straggler append after Close (e.g. an in-flight scrape cycle finishing
+		// during shutdown) must not silently re-open a fresh segment — the bundle
+		// is sealed; the refusal is surfaced by the tap's error log.
+		return errors.New("warm: store closed")
+	}
 	if w.f != nil && recv.Sub(w.segStart) < w.cfg.SegmentDuration {
 		return nil
 	}
@@ -341,12 +348,14 @@ func (w *WarmStore) Sync() error {
 	return nil
 }
 
-// Close seals the active segment and stops the background syncer.
+// Close seals the active segment and stops the background syncer. Appends after
+// Close are refused (never a silent re-open).
 func (w *WarmStore) Close() error {
 	close(w.stop)
 	<-w.done
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.closed = true
 	return w.sealLocked()
 }
 

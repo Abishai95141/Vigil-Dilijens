@@ -127,13 +127,28 @@ func (c *Capture) Close() error { return c.warm.Close() }
 
 func barsName(epoch int) string { return fmt.Sprintf("bars-%d.json", epoch) }
 
+// writeJSON writes atomically (tmp + rename) and fsyncs before the rename, so a
+// bars/manifest file a durable tick frame references cannot be lost to a crash
+// while the frame survives (the segment log fsyncs on its own batch).
 func writeJSON(path string, v any) error {
 	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("replay: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("replay: %w", err)
+	}
+	if _, err := f.Write(append(raw, '\n')); err != nil {
+		f.Close()
+		return fmt.Errorf("replay: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("replay: %w", err)
+	}
+	if err := f.Close(); err != nil {
 		return fmt.Errorf("replay: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +36,10 @@ import (
 type Fetcher interface {
 	NodeMetrics(ctx context.Context, nodeName, path string) (body []byte, receivedAt time.Time, err error)
 }
+
+// reasonNonFiniteValue counts samples whose value is NaN/±Inf — refused at the
+// ingest gate (no arithmetic, no canonical encoding is possible over them).
+const reasonNonFiniteValue = "non-finite-value"
 
 // StreamMeta is the descriptor of one live stream (doc 05 §3.6): identity, the
 // concrete metric, exposition type, and scrape provenance. CadenceClass is
@@ -166,6 +171,16 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node s
 		for _, m := range mf.GetMetric() {
 			value, ok := scalarValue(mf, m)
 			if !ok {
+				continue
+			}
+			// The exposition format permits NaN/±Inf, but they carry no usable
+			// telemetry for threshold/rate arithmetic — and a non-finite value
+			// stored in a ring would poison every window computation over it and
+			// cannot be canonically JSON-encoded (the replay digest). Refused at
+			// the gate, counted, never stored (doc 05 §3.1: streams hold numbers
+			// the primitives can do arithmetic on).
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				sum.SeriesDropped[reasonNonFiniteValue]++
 				continue
 			}
 			labels := make(map[string]string, len(m.GetLabel()))

@@ -275,3 +275,25 @@ func TestWarmNonFiniteValues(t *testing.T) {
 		t.Errorf("non-finite round-trip wrong: %v", vals)
 	}
 }
+
+// Appends after Close are refused — never a silent re-open of a sealed bundle
+// (an in-flight scrape cycle finishing during shutdown must not fork a new
+// active segment).
+func TestWarmAppendAfterCloseRefused(t *testing.T) {
+	dir := t.TempDir()
+	w := mustOpen(t, dir, testCfg())
+	r1 := warmBase.Add(time.Minute)
+	if err := w.Append(def("s1"), r1, Sample{At: r1, Value: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Append(def("s1"), r1.Add(time.Second), Sample{At: r1, Value: 2}); err == nil {
+		t.Fatal("append after Close must be refused")
+	}
+	segs, _ := ListSegments(dir)
+	if len(segs) != 1 || !segs[0].Sealed {
+		t.Errorf("no new segment may appear after Close: %+v", segs)
+	}
+}

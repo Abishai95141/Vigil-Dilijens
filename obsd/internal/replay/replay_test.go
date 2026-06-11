@@ -123,7 +123,10 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 		for _, fp := range fps {
 			findings = append(findings, matcher.MatchFingerprint(fp)...)
 		}
-		digest, _ := Digest(evalNow, fps, findings)
+		digest, _, derr := Digest(evalNow, fps, findings)
+		if derr != nil {
+			t.Fatalf("digest: %v", derr)
+		}
 		rec := TickRecord{EvalNow: evalNow, BarsEpoch: epoch, Digest: digest,
 			Fingerprints: len(fps), Findings: len(findings)}
 		if err := cap.Tick(rec); err != nil {
@@ -280,13 +283,24 @@ func TestFixtureBundleReplays(t *testing.T) {
 // vs its replay), and the digest is sensitive to every component.
 func TestDigestCanonicalization(t *testing.T) {
 	at := base
-	dNil, _ := Digest(at, nil, nil)
-	dEmpty, _ := Digest(at, []observe.Fingerprint{}, []detect.Finding{})
+	dNil, _, _ := Digest(at, nil, nil)
+	dEmpty, _, _ := Digest(at, []observe.Fingerprint{}, []detect.Finding{})
 	if dNil != dEmpty {
 		t.Error("nil and empty must digest identically")
 	}
-	dOther, _ := Digest(at.Add(time.Nanosecond), nil, nil)
+	dOther, _, _ := Digest(at.Add(time.Nanosecond), nil, nil)
 	if dOther == dNil {
 		t.Error("digest must be sensitive to the evaluation instant")
+	}
+}
+
+// A non-finite value reaching the digest path surfaces as an ERROR — never a
+// panic in the live render goroutine, never a silently wrong digest. (Defence
+// in depth: the ingest gate drops non-finite samples before they reach a ring.)
+func TestDigestNonFiniteIsErrorNotPanic(t *testing.T) {
+	var z float64
+	fp := observe.Fingerprint{CEIKey: "x", Thresholds: []observe.VariableThreshold{{Value: z / z}}}
+	if _, _, err := Digest(base, []observe.Fingerprint{fp}, nil); err == nil {
+		t.Fatal("a NaN in a fingerprint must surface as a digest error")
 	}
 }
