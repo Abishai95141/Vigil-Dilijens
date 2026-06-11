@@ -42,6 +42,42 @@ func newTestStore(clk *fakeClock) *Store {
 	return NewStore(clk.Now, 15*time.Minute, 24*time.Hour, 1000)
 }
 
+// ActiveInstances must return exactly the alive instances, carry each one's role
+// (the join key the inventory groups by), and be a snapshot that a later termination
+// cannot retroactively mutate.
+func TestActiveInstancesSnapshotAndRoles(t *testing.T) {
+	clk := newFakeClock(lcBase)
+	st := newTestStore(clk)
+	st.Observe(podCoords("shop", "web-a", "uid-a"), roleFor("shop", "Deployment", "web"), lcBase, StateActive)
+	st.Observe(podCoords("shop", "web-b", "uid-b"), roleFor("shop", "Deployment", "web"), lcBase, StateActive)
+	st.Observe(podCoords("shop", "cart-a", "uid-c"), roleFor("shop", "Deployment", "cart"), lcBase, StateActive)
+
+	active := st.ActiveInstances()
+	if len(active) != 3 {
+		t.Fatalf("ActiveInstances len = %d, want 3", len(active))
+	}
+	byRole := map[string]int{}
+	for _, r := range active {
+		if !r.alive() {
+			t.Errorf("ActiveInstances returned a dead record: %+v", r)
+		}
+		byRole[r.RoleCEI.RoleKey]++
+	}
+	if byRole["Deployment/web"] != 2 || byRole["Deployment/cart"] != 1 {
+		t.Errorf("role grouping = %v, want web:2 cart:1", byRole)
+	}
+
+	// Terminating an instance must not mutate a previously-taken snapshot, and a fresh
+	// snapshot must drop the dead one.
+	st.TerminateInstance(podCoords("shop", "cart-a", "uid-c"), lcBase.Add(time.Minute))
+	if len(active) != 3 {
+		t.Errorf("prior snapshot mutated after termination: len = %d, want 3", len(active))
+	}
+	if got := len(st.ActiveInstances()); got != 2 {
+		t.Errorf("post-termination ActiveInstances len = %d, want 2", got)
+	}
+}
+
 func TestObserveAndLookupAlive(t *testing.T) {
 	clk := newFakeClock(lcBase)
 	st := newTestStore(clk)

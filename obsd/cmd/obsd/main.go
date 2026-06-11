@@ -88,12 +88,12 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout)
 }
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -139,7 +139,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		return fmt.Errorf("bind health server on %s: %w", healthAddr, err)
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher)
-	go inventoryLoop(ctx, logger, store, edges, watcher, p.Observation.EvaluationTick.Duration())
+	go inventoryLoop(ctx, out, logger, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration())
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -178,12 +178,58 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 	}
 }
 
-// inventoryLoop periodically logs the identity inventory: the live, correctly-
-// joined entity counts and the layer's health metrics (doc 03 §6).
-func inventoryLoop(ctx context.Context, logger *slog.Logger, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, every time.Duration) {
+// inventoryLoop periodically surfaces the identity inventory: the operational health
+// summary + Phase-0a gate verdict to the logger (stderr), and the live, correctly-
+// joined per-service entity inventory table to out (stdout) — "prerequisite zero,
+// observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
+// informers sync, then on every evaluation tick.
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID string, every time.Duration) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
+	render := func() {
+		now := time.Now()
+		m := store.Metrics()
+		e := edges.Metrics()
+		logger.Info("identity inventory",
+			"active", m.Active,
+			"full_tombstones", m.FullTombstones,
+			"stub_tombstones", m.StubTombstones,
+			"discovered_total", m.Discovered,
+			"terminated_total", m.Terminated,
+			"successions", m.Successions,
+			"degraded_joins", m.DegradedJoins,
+			"evicted_before_horizon", m.EvictedBeforeHorizon,
+			"edges_live", e.Live,
+			"edges_suspect", e.Suspect,
+			"edges_retracted", e.Retracted,
+		)
+
+		// The Phase-0a exit gate, live: join accuracy with zero mis-joins.
+		rep := watcher.AuditConsistencyNow()
+		g := identity.EvaluateGate(rep, phase0aCoverageTarget)
+		logger.Info("join audit (phase-0a gate)",
+			"join_accuracy", g.JoinAccuracy,
+			"coverage", g.Coverage,
+			"misjoins", rep.Misjoins,
+			"missing", rep.Missing,
+			"checked", rep.CheckedPods+rep.CheckedNodes,
+			"gate_passed", g.Passed,
+		)
+		if rep.Misjoins > 0 {
+			logger.Error("MIS-JOINS detected (the silent killer) — Phase-0a gate fails", "count", rep.Misjoins, "details", rep.Details)
+		}
+
+		// The human-facing artifact: the named, correctly-joined inventory (stdout).
+		renderInventory(out, store, edges, clusterID, now, rep, g)
+	}
+
+	// Render promptly once the informer caches have synced rather than waiting a full
+	// tick, so the demo shows a populated inventory within a second or two.
+	if waitForSync(ctx, watcher, every) {
+		render()
+	}
+
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
@@ -191,36 +237,29 @@ func inventoryLoop(ctx context.Context, logger *slog.Logger, store *identity.Sto
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			m := store.Metrics()
-			e := edges.Metrics()
-			logger.Info("identity inventory",
-				"active", m.Active,
-				"full_tombstones", m.FullTombstones,
-				"stub_tombstones", m.StubTombstones,
-				"discovered_total", m.Discovered,
-				"terminated_total", m.Terminated,
-				"successions", m.Successions,
-				"degraded_joins", m.DegradedJoins,
-				"evicted_before_horizon", m.EvictedBeforeHorizon,
-				"edges_live", e.Live,
-				"edges_suspect", e.Suspect,
-				"edges_retracted", e.Retracted,
-			)
+			render()
+		}
+	}
+}
 
-			// The Phase-0a exit gate, live: join accuracy with zero mis-joins.
-			rep := watcher.AuditConsistencyNow()
-			g := identity.EvaluateGate(rep, phase0aCoverageTarget)
-			logger.Info("join audit (phase-0a gate)",
-				"join_accuracy", g.JoinAccuracy,
-				"coverage", g.Coverage,
-				"misjoins", rep.Misjoins,
-				"missing", rep.Missing,
-				"checked", rep.CheckedPods+rep.CheckedNodes,
-				"gate_passed", g.Passed,
-			)
-			if rep.Misjoins > 0 {
-				logger.Error("MIS-JOINS detected (the silent killer) — Phase-0a gate fails", "count", rep.Misjoins, "details", rep.Details)
-			}
+// waitForSync blocks until the watcher's informers have synced, ctx is cancelled, or
+// the bound elapses; it reports whether the caches are synced. Polling lives in the
+// display loop (cmd), never in identity logic, so the no-time.Now-in-logic rule holds.
+func waitForSync(ctx context.Context, watcher *identity.Watcher, bound time.Duration) bool {
+	poll := time.NewTicker(200 * time.Millisecond)
+	defer poll.Stop()
+	deadline := time.NewTimer(bound)
+	defer deadline.Stop()
+	for {
+		if watcher.HasSynced() {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return watcher.HasSynced()
+		case <-poll.C:
 		}
 	}
 }

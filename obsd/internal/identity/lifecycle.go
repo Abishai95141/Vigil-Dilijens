@@ -384,6 +384,23 @@ func (s *Store) Get(ceiKey string) (InstanceRecord, bool) {
 	return *r, true
 }
 
+// ActiveInstances returns snapshot copies of every alive instance record (DiedAt
+// zero), for surfacing the live, correctly-joined entity inventory (doc 03 §6 —
+// "prerequisite zero, observable"). Like Get, it returns value copies so callers
+// read them without holding the store lock while the store keeps mutating its own
+// pointers. Order is unspecified; the caller sorts for display.
+func (s *Store) ActiveInstances() []InstanceRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]InstanceRecord, 0, len(s.byCEI)-s.dead.Len())
+	for _, r := range s.byCEI {
+		if r.alive() {
+			out = append(out, *r)
+		}
+	}
+	return out
+}
+
 // Metrics returns a snapshot of the store's published health signals.
 func (s *Store) Metrics() Metrics {
 	s.mu.RLock()
