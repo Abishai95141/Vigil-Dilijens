@@ -210,8 +210,8 @@ func (w *Watcher) upsertPod(obj any) {
 		Cluster: w.cluster, Namespace: pod.Namespace, Kind: "Pod",
 		Name: pod.Name, UID: string(pod.UID),
 	}
-	chain := ResolveChain(pod.Namespace, pod.Name, ownerRefs(pod.OwnerReferences), w)
-	role, err := MintRole(DeriveRole(w.cluster, pod.Namespace, pod.Name, chain), pod.CreationTimestamp.Time)
+	roleCoords := ResolvePodRole(w.cluster, pod.Namespace, pod.Name, pod.Spec.NodeName, pod.Annotations, ownerRefs(pod.OwnerReferences), w)
+	role, err := MintRole(roleCoords, pod.CreationTimestamp.Time)
 	if err != nil {
 		w.logger.Warn("identity: pod role minting failed", "pod", pod.Namespace+"/"+pod.Name, "err", err)
 		return

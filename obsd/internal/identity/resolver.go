@@ -1,11 +1,20 @@
 package identity
 
+import "strings"
+
 // Role resolution (doc 03 §3.1): a pod's role anchors on the TOPMOST controller in
 // its ownership chain, so the role survives Deployment rollouts and reschedules.
 // A pod's own OwnerReferences only name its immediate controller (a ReplicaSet for
 // a Deployment, a Job for a CronJob); resolving the rest of the chain needs a
 // lookup one level up, abstracted behind ControllerResolver so it is unit-testable
 // without informers.
+//
+// Static (mirror) pods are the one exception to "anchor on the topmost controller":
+// the kubelet owns a static pod's API-server mirror with an ownerReference to the
+// Node it runs on (controller=true), so the generic rule would group every static
+// pod on a control-plane node (etcd, kube-apiserver, kube-controller-manager,
+// kube-scheduler) under a single Node/<node> role. They are distinct logical
+// functions, so they resolve to distinct StaticPod/<component> roles instead.
 
 // ControllerResolver resolves the controlling owner of an intermediate controller
 // object one level up the chain (e.g. ReplicaSet -> Deployment, Job -> CronJob).
@@ -20,6 +29,59 @@ type ControllerResolver interface {
 // maxChainDepth bounds the walk, guarding against pathological or cyclic owner
 // graphs (CRD operators can nest controllers).
 const maxChainDepth = 6
+
+// MirrorPodAnnotation is the annotation the kubelet stamps on the API-server mirror
+// of a static pod (the value is the mirror hash). Its presence identifies a static
+// (mirror) pod.
+const MirrorPodAnnotation = "kubernetes.io/config.mirror"
+
+// ResolvePodRole resolves a pod's role coordinates (doc 03 §3.1) — the single role
+// entry point used by the informer wiring. Static (mirror) pods resolve to a distinct
+// StaticPod/<component> role; every other pod anchors on the topmost controller in its
+// ownership chain (a bare, ownerless pod falls back to Pod/<name>, doc 14 A10). For a
+// non-mirror pod this is exactly ResolveChain followed by DeriveRole.
+func ResolvePodRole(cluster, namespace, podName, nodeName string, annotations map[string]string, podOwners []OwnerRef, r ControllerResolver) RoleCoords {
+	if IsMirrorPod(annotations, podOwners) {
+		return StaticPodRole(cluster, namespace, podName, nodeName)
+	}
+	chain := ResolveChain(namespace, podName, podOwners, r)
+	return DeriveRole(cluster, namespace, podName, chain)
+}
+
+// IsMirrorPod reports whether a pod is a static pod's API-server mirror, from its
+// annotations and owner references. Either signal is sufficient: the kubelet stamps
+// the mirror annotation AND owns the mirror with a controller ownerReference to the
+// Node it runs on.
+func IsMirrorPod(annotations map[string]string, owners []OwnerRef) bool {
+	if _, ok := annotations[MirrorPodAnnotation]; ok {
+		return true
+	}
+	for _, o := range owners {
+		if o.Controller && o.Kind == "Node" {
+			return true
+		}
+	}
+	return false
+}
+
+// StaticPodRole returns the role coordinates for a static (mirror) pod: a distinct
+// StaticPod/<component> role rather than the Node owner. The component is the pod name
+// with its "-<nodeName>" mirror suffix removed — the kubelet names a mirror pod
+// "<manifest-name>-<nodeName>" — so across an HA control plane "kube-apiserver" is one
+// role with one instance per node (like a DaemonSet), not N node-specific roles. A
+// static pod is not bare (it has an owner), so Bare stays false.
+func StaticPodRole(cluster, namespace, podName, nodeName string) RoleCoords {
+	component := podName
+	if nodeName != "" {
+		component = strings.TrimSuffix(podName, "-"+nodeName)
+	}
+	return RoleCoords{
+		Cluster:   cluster,
+		Namespace: namespace,
+		Kind:      "StaticPod",
+		RoleKey:   "StaticPod/" + component,
+	}
+}
 
 // ResolveChain builds the ownership chain (immediate -> top) for a pod from its
 // own OwnerReferences plus upward resolution. Returns nil for a bare (ownerless)
