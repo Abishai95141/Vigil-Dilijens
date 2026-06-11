@@ -157,6 +157,11 @@ boutique:
     # request so it still schedules and stays Ready on kind).
     kubectl patch deployment recommendationservice -n "${ns}" --type=json \
       -p '[{"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"300Mi"}]'
+    # cartservice: upstream's 128Mi limit OOMKills the .NET runtime under loadgenerator
+    # traffic (observed live: exit 137, CrashLoopBackOff). 256Mi keeps it green; this is
+    # a declared-limit change, not a removed bar, so it stays Tier-B-eligible.
+    kubectl patch deployment cartservice -n "${ns}" --type=json \
+      -p '[{"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"256Mi"}]'
     echo "waiting for all Deployments to become Available (image pulls can take a few minutes)..."
     kubectl wait --for=condition=Available deployment --all -n "${ns}" --timeout=420s
     kubectl get pods -n "${ns}" -o wide
