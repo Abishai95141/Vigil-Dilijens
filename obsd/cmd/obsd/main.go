@@ -173,7 +173,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 
 	go serveHealth(ctx, logger, ln, registry, watcher)
 	go inventoryLoop(ctx, out, logger, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration(),
-		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor})
+		&binder{
+			graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor,
+			fpParams: observe.FPParams{
+				ScrapeInterval:     p.Scrape.Interval.Duration(),
+				RateWindow:         p.Observation.RateWindow.Duration(),
+				Watermark:          p.Observation.Watermark.Duration(),
+				Band:               p.Observation.AtThresholdBand,
+				WellAboveFactor:    p.Observation.WellAboveFactor,
+				CooccurrenceWindow: p.Observation.DefaultCooccurrenceWindow.Duration(),
+			},
+		})
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -261,6 +271,9 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, stor
 		renderInventory(out, active, edges, clusterID, now, rep, g)
 		if bd := bnd.compile(ctx, active, now); bd != nil {
 			renderBinding(out, bd, boutiqueNamespace)
+			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
+			// now" — re-materialized each tick against fresh samples.
+			renderFingerprints(out, bnd.fingerprints(now), boutiqueNamespace)
 		}
 	}
 

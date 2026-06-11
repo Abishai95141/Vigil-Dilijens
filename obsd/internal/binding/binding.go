@@ -1,6 +1,7 @@
 package binding
 
 import (
+	"strings"
 	"time"
 )
 
@@ -118,6 +119,22 @@ type Binding struct {
 	Reason     string       // honest annotation: why out-of-scope/unresolved/unbounded
 	Bar        *ResolvedBar // nil <=> no crossable limit (unbounded -> Tier-B ineligible)
 	Emission   Emission     // collection glue from the authored signal (mechanism 3)
+}
+
+// StreamUID returns the CEI UID a binding's observation stream carries — the
+// (CEI UID, metric) join key into the hot store. Container streams are keyed by
+// podUID/container (the cAdvisor scope); pod/node by the bare UID. Returns "" for
+// entities with no scraped channel yet (PVC pseudo-keys).
+func (b *Binding) StreamUID() string {
+	parts := strings.Split(b.CEIKey, "|")
+	if len(parts) < 6 || parts[0] != "i" {
+		return ""
+	}
+	uid := parts[5]
+	if b.Entity == "Container" {
+		return uid + "/" + b.Container
+	}
+	return uid
 }
 
 // RoleBinding is the role-layer instantiation (doc 04 §3.3 axis 3): the durable

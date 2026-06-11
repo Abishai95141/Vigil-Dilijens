@@ -31,13 +31,29 @@ type binder struct {
 	graph    *graph.Graph // nil = binding disabled (stated at startup)
 	client   kubernetes.Interface
 	logger   *slog.Logger
-	ingestor *observe.Ingestor // stream evidence for semantic QA (doc 04 M3)
+	ingestor *observe.Ingestor // stream evidence for semantic QA (doc 04 M3) + fingerprints (05)
+	fpParams observe.FPParams  // primitive/fingerprint constants from the params file
 
 	last        *binding.Result
 	lastAvail   *binding.AvailabilityReport
 	lastObs     *binding.ObservabilityReport
 	lastFinger  string
 	ticksUnseen int
+}
+
+// fingerprints materializes per-entity fingerprints (doc 05 M3) from the latest
+// bound graph and the LIVE hot-store samples. Re-run EVERY evaluation tick (the
+// bound graph is discovery-time and cached; the fingerprints are per-tick), so a
+// crossing appears within a tick of the sample that caused it.
+func (b *binder) fingerprints(now time.Time) []observe.Fingerprint {
+	if b == nil || b.graph == nil || b.last == nil || b.ingestor == nil {
+		return nil
+	}
+	rules := make(map[string]*graph.ThresholdRule, len(b.graph.Rules))
+	for _, r := range b.graph.Rules {
+		rules[r.ID] = r
+	}
+	return observe.Materialize(b.last, rules, b.ingestor, b.fpParams, now)
 }
 
 // bound is the composite the renderer consumes.

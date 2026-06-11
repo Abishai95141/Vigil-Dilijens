@@ -242,6 +242,27 @@ func (in *Ingestor) MetricNames() []string {
 // Hot exposes the underlying store (read-side: primitives, QA).
 func (in *Ingestor) Hot() *qss.HotStore { return in.hot }
 
+// --- StreamReader (the fingerprint materializer's read-side view) -----------
+
+var _ StreamReader = (*Ingestor)(nil)
+
+// StreamsFor aliases StreamsByUIDMetric to satisfy StreamReader.
+func (in *Ingestor) StreamsFor(uid, metric string) []string {
+	return in.StreamsByUIDMetric(uid, metric)
+}
+
+// Latest returns a stream's most recent sample.
+func (in *Ingestor) Latest(streamID string) (qss.Sample, bool) { return in.hot.Latest(streamID) }
+
+// LastN returns up to n most recent samples, oldest first.
+func (in *Ingestor) LastN(streamID string, n int) []qss.Sample { return in.hot.LastN(streamID, n) }
+
+// StreamType returns a stream's exposition type (gauge | counter | untyped).
+func (in *Ingestor) StreamType(streamID string) (string, bool) {
+	m, ok := in.Meta(streamID)
+	return m.Type, ok
+}
+
 // String renders the summary compactly for logs.
 func (s IngestSummary) String() string {
 	var b strings.Builder

@@ -93,6 +93,7 @@ type ObservationParams struct {
 	RateWindow                Duration `yaml:"rate_window"`
 	DefaultCooccurrenceWindow Duration `yaml:"default_cooccurrence_window"`
 	WellAboveFactor           float64  `yaml:"well_above_factor"`
+	AtThresholdBand           float64  `yaml:"at_threshold_band"`
 }
 
 // StoreParams — doc 05 §3.1 + doc 14 §2.3.
@@ -202,6 +203,9 @@ func (p Params) Validate() error {
 	}
 	if p.Observation.WellAboveFactor <= 1.0 {
 		errs = append(errs, fmt.Errorf("observation.well_above_factor must be > 1.0, got %v", p.Observation.WellAboveFactor))
+	}
+	if p.Observation.AtThresholdBand < 0 || p.Observation.AtThresholdBand >= 1.0 {
+		errs = append(errs, fmt.Errorf("observation.at_threshold_band must be in [0, 1.0), got %v", p.Observation.AtThresholdBand))
 	}
 	if p.Selection.TierBBudgetPerCycle <= 0 {
 		errs = append(errs, fmt.Errorf("selection.tier_b_budget_per_cycle must be > 0, got %d", p.Selection.TierBBudgetPerCycle))

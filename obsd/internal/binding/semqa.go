@@ -217,17 +217,7 @@ func validateOne(b *Binding, avail *AvailabilityReport, rule *graph.ThresholdRul
 }
 
 // evidenceUID derives the stream-side CEI UID a binding's evidence carries.
-func evidenceUID(b *Binding) string {
-	parts := strings.Split(b.CEIKey, "|")
-	if len(parts) < 6 || parts[0] != "i" {
-		return "" // PVC pseudo-keys etc. — no scraped evidence channel yet
-	}
-	uid := parts[5]
-	if b.Entity == "Container" {
-		return uid + "/" + b.Container
-	}
-	return uid
-}
+func evidenceUID(b *Binding) string { return b.StreamUID() }
 
 func expectedKind(entityScope string) string {
 	switch entityScope {

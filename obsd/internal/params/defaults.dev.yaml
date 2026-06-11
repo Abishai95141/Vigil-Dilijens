@@ -35,6 +35,9 @@ observation:                        # doc 05 + doc 14 §A3,A5,A6
   well_above_factor: 1.10           # A6 fallback: well-above = 1.10 × bar UNLESS bar = factor×limit
                                     # (factor < 1), in which case well-above = the raw limit itself.
                                     # The raw-limit branch is applied in observe/detect, not here.
+  at_threshold_band: 0.05           # ladder approach zone: within 5% of the bar (healthy side) =
+                                    # "at-threshold" (doc 05 §3.4/§8 — a GLOBAL display convention,
+                                    # not an authored bar; calibrated in 11 M4 like well_above).
 
 store:                              # doc 05 §3.1 + doc 14 §2.3 — the "qss"
   hot_ring: 60m                     # in-memory ring capacity; the ONLY hot-path read surface
