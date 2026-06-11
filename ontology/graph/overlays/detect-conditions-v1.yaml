@@ -1,0 +1,38 @@
+# Detection member-conditions — authored overlay v1 (doc 07 §3.1, doc 02 §3.5).
+#
+# AUTHORED-class content, merged at load like spans/threshold-rules. The graph's
+# phenomena declare member SIGNALS + temporal tags + prose notes ("Slope > 0");
+# detection needs a MACHINE-READABLE check per member: which fingerprint variable
+# (05) satisfies it, at which facet (level / slope / ratio / rate-guard) and state.
+# This overlay is that bridge. It NEVER invents a phenomenon or a member — it only
+# says how to CHECK an already-authored member from a fingerprint.
+#
+# A required member with NO check here is treated by the matcher as UNOBSERVABLE on
+# this signal set (a degraded-match driver, doc 07 §3.3) — never silently satisfied.
+#
+# check fields:
+#   signal  — the KG Signal node id the check satisfies (referential; must be a
+#             member of the phenomenon).
+#   metric  — the concrete fingerprint variable (rule metric) consulted.
+#   facet   — level | slope | ratio | rate-guard (which fingerprint component).
+#   expect  — rising | falling | crossed | at-or-above | breached (the satisfied state).
+#   note    — honesty caveat surfaced on the finding (e.g. window-vs-authored-claim).
+overlay: detection-conditions
+version: 1
+author: vigil-engineering
+status: proposed-v1 (entity-local checks for the signals observable on a cAdvisor-only cluster)
+
+checks:
+  # Memory leak: the authored required member is working-set with a POSITIVE SLOPE
+  # over time. Observable here via the gauge-slope fingerprint facet. The other
+  # required member (kubelet resource endpoint) is NOT on the cAdvisor ingest, so
+  # the matcher surfaces this as a DEGRADED match — honest about the missing input.
+  PHEN_MEMORY_LEAK:
+    - signal: SIG_container_memory_family_14_metrics_529498d3
+      metric: container_memory_working_set_bytes
+      facet: slope
+      expect: rising
+      min_state: at-threshold   # materiality guard (doc 07 §3.6): rising AND near/over
+                                # the limit — a trivial warmup rise on an idle container
+                                # is NOT a leak. Tightens the short-window proxy.
+      note: "rising while at/over the limit bar; the 5m slope approximates the authored T0+hours sustained-rise claim (a warm-window check, qss M2, will tighten it)"

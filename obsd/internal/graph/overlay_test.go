@@ -117,8 +117,11 @@ func TestOverlayVersionPinning(t *testing.T) {
 		t.Errorf("version %q not a sha256 pin", merged.Version)
 	}
 	// Provenance travels with the content.
-	if len(merged.Overlays) != 2 {
-		t.Fatalf("overlay provenance records = %d, want 2", len(merged.Overlays))
+	if len(merged.Overlays) != 3 {
+		t.Fatalf("overlay provenance records = %d, want 3 (spans, rules, detection-conditions)", len(merged.Overlays))
+	}
+	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
+		t.Errorf("expected the authored MEMORY_LEAK member check")
 	}
 	for _, o := range merged.Overlays {
 		if o.Author == "" || o.Name == "" {

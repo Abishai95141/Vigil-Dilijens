@@ -210,3 +210,24 @@ func TestEvalThresholdNonFinite(t *testing.T) {
 
 func nan() float64          { return mathNaN() }
 func inf(s float64) float64 { return mathInf(s) }
+
+// Gauge slope: signed first difference; a falling gauge gives a negative slope
+// (no reset-segmenting), and a gap breaks the window like the counter path.
+func TestEvalGaugeSlope(t *testing.T) {
+	// Rising: 0:100, 30:130, 60:160 → +60 over 60s = +1.0/s.
+	up := samples(rateBase, 0, 100, 30, 130, 60, 160)
+	r := EvalGaugeSlope(up, at(rateBase, 60), 5*time.Minute, 15*time.Second)
+	if r.Delta != 60 || r.PerSecond != 1.0 {
+		t.Errorf("rising slope = %+v, want delta 60 / +1.0/s", r)
+	}
+	// Falling: a gauge legitimately decreases (NOT a reset) → negative slope.
+	down := samples(rateBase, 0, 200, 30, 170, 60, 140)
+	d := EvalGaugeSlope(down, at(rateBase, 60), 5*time.Minute, 15*time.Second)
+	if d.PerSecond != -1.0 {
+		t.Errorf("falling slope = %v, want -1.0/s (gauge decrease is not a reset)", d.PerSecond)
+	}
+	// Single sample → no slope.
+	if got := EvalGaugeSlope(samples(rateBase, 60, 100), at(rateBase, 60), 5*time.Minute, 15*time.Second); got.PerSecond != 0 {
+		t.Errorf("single sample slope = %v, want 0", got.PerSecond)
+	}
+}

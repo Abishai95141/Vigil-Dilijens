@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
@@ -39,6 +40,25 @@ type binder struct {
 	lastObs     *binding.ObservabilityReport
 	lastFinger  string
 	ticksUnseen int
+
+	matcher *detect.Matcher // entity-local phenomenon matcher (doc 07 M1), built once
+}
+
+// detectFindings runs the entity-local matcher (doc 07 M1) over the live
+// fingerprints — the first MEASURED phenomenon matches. Non-gating and stateless;
+// the matcher is built once from the (static) graph.
+func (b *binder) detectFindings(fps []observe.Fingerprint) []detect.Finding {
+	if b == nil || b.graph == nil {
+		return nil
+	}
+	if b.matcher == nil {
+		b.matcher = detect.NewMatcher(b.graph)
+	}
+	var out []detect.Finding
+	for _, fp := range fps {
+		out = append(out, b.matcher.MatchFingerprint(fp)...)
+	}
+	return out
 }
 
 // fingerprints materializes per-entity fingerprints (doc 05 M3) from the latest

@@ -114,8 +114,8 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOverlays: %v", err)
 	}
-	if len(ovls) != 2 {
-		t.Fatalf("overlays = %d, want 2 (spans, threshold rules)", len(ovls))
+	if len(ovls) != 3 {
+		t.Fatalf("overlays = %d, want 3 (spans, threshold rules, detection-conditions)", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {

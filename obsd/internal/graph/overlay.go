@@ -95,14 +95,36 @@ type spanDecl struct {
 	Rationale          string   `yaml:"rationale"`
 }
 
-// overlayFile is the on-disk overlay shape. A file declares spans, rules, or both.
+// MemberCheck is an authored machine-readable check for one phenomenon member
+// (doc 07 §3.1): how to satisfy the member from a fingerprint variable. It does not
+// invent a member — it binds an already-authored one to a fingerprint facet.
+type MemberCheck struct {
+	Phenomenon string `yaml:"-"`
+	Signal     string `yaml:"signal"` // KG Signal node id (must be a member of the phenomenon)
+	Metric     string `yaml:"metric"` // the fingerprint variable consulted
+	Facet      string `yaml:"facet"`  // level | slope | ratio | rate-guard
+	Expect     string `yaml:"expect"` // rising | falling | crossed | at-or-above | breached
+	// MinState is an optional materiality guard (doc 07 §3.6 sensitivity): for a
+	// slope check it requires the variable to ALSO be at least this ladder rung, so
+	// a trivial rise on an idle entity does not fire — only a rise that is material
+	// relative to the bar. Empty = no guard.
+	MinState string `yaml:"min_state"` // "" | at-threshold | above | well-above
+	Note     string `yaml:"note"`      // honesty caveat surfaced on the finding
+}
+
+var knownFacets = map[string]bool{"level": true, "slope": true, "ratio": true, "rate-guard": true}
+var knownExpects = map[string]bool{"rising": true, "falling": true, "crossed": true, "at-or-above": true, "breached": true}
+var knownMinStates = map[string]bool{"": true, "at-threshold": true, "above": true, "well-above": true}
+
+// overlayFile is the on-disk overlay shape. A file declares spans, rules, checks.
 type overlayFile struct {
-	Overlay string              `yaml:"overlay"`
-	Version int                 `yaml:"version"`
-	Author  string              `yaml:"author"`
-	Status  string              `yaml:"status"`
-	Spans   map[string]spanDecl `yaml:"spans"`
-	Rules   []ThresholdRule     `yaml:"rules"`
+	Overlay string                   `yaml:"overlay"`
+	Version int                      `yaml:"version"`
+	Author  string                   `yaml:"author"`
+	Status  string                   `yaml:"status"`
+	Spans   map[string]spanDecl      `yaml:"spans"`
+	Rules   []ThresholdRule          `yaml:"rules"`
+	Checks  map[string][]MemberCheck `yaml:"checks"`
 }
 
 // OverlayInfo is the provenance record of one applied overlay (surfaced, per the
@@ -115,6 +137,7 @@ type OverlayInfo struct {
 	Status  string
 	Spans   int
 	Rules   int
+	Checks  int
 }
 
 // LoadWithOverlays loads the base KG release and merges every overlay file
@@ -239,12 +262,72 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 	}
 	sort.Slice(g.Rules, func(i, j int) bool { return g.Rules[i].ID < g.Rules[j].ID })
 
+	// Detection member-checks: validate and attach (doc 07 §3.1). Each check must
+	// reference a known phenomenon and one of ITS member signals — a check for a
+	// non-member would be detection knowledge with no authored basis.
+	nChecks := 0
+	phenIDs := make([]string, 0, len(f.Checks))
+	for id := range f.Checks {
+		phenIDs = append(phenIDs, id)
+	}
+	sort.Strings(phenIDs)
+	for _, phen := range phenIDs {
+		p, ok := g.Phenomena[phen]
+		if !ok {
+			return fmt.Errorf("checks for unknown phenomenon %q", phen)
+		}
+		for i := range f.Checks[phen] {
+			c := f.Checks[phen][i]
+			c.Phenomenon = phen
+			if err := g.validateCheck(p, &c); err != nil {
+				return fmt.Errorf("phenomenon %s check %d: %w", phen, i, err)
+			}
+			g.Checks[phen] = append(g.Checks[phen], &c)
+			nChecks++
+		}
+	}
+
 	g.Overlays = append(g.Overlays, OverlayInfo{
 		File: name, Name: f.Overlay, Version: f.Version, Author: f.Author, Status: f.Status,
-		Spans: len(f.Spans), Rules: len(f.Rules),
+		Spans: len(f.Spans), Rules: len(f.Rules), Checks: nChecks,
 	})
 	return nil
 }
+
+// validateCheck enforces the check vocabulary + referential integrity: the signal
+// must be a MEMBER of the phenomenon (so the bridge can't bind a member the graph
+// never declared).
+func (g *Graph) validateCheck(p *Phenomenon, c *MemberCheck) error {
+	if g.Signals[c.Signal] == nil {
+		return fmt.Errorf("references unknown signal %q", c.Signal)
+	}
+	if !knownFacets[c.Facet] {
+		return fmt.Errorf("unknown facet %q (level|slope|ratio|rate-guard)", c.Facet)
+	}
+	if !knownExpects[c.Expect] {
+		return fmt.Errorf("unknown expect %q", c.Expect)
+	}
+	if !knownMinStates[c.MinState] {
+		return fmt.Errorf("unknown min_state %q (at-threshold|above|well-above)", c.MinState)
+	}
+	if strings.TrimSpace(c.Metric) == "" {
+		return fmt.Errorf("missing metric")
+	}
+	isMember := false
+	for _, m := range p.Members {
+		if m.SignalID == c.Signal {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		return fmt.Errorf("signal %q is not a member of %s (a check cannot bind an undeclared member)", c.Signal, c.Phenomenon)
+	}
+	return nil
+}
+
+// ChecksFor returns the authored member-checks for a phenomenon.
+func (g *Graph) ChecksFor(phenID string) []*MemberCheck { return g.Checks[phenID] }
 
 func (g *Graph) validateRule(r *ThresholdRule) error {
 	if strings.TrimSpace(r.ID) == "" {

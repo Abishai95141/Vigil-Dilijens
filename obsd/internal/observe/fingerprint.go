@@ -60,7 +60,12 @@ type VariableThreshold struct {
 	BarSource string // config | default (flagged) — provenance rides along
 	Flagged   bool   // default-sourced bar
 	Stale     bool   // newest sample older than the watermark (treat as missing, 07)
-	Deriv     DerivationRef
+	// Slope is the signed per-second slope of the variable over the rate window
+	// (gauge variables only; 0 otherwise) — the "is this rising/falling" evidence
+	// some phenomenon members need (e.g. memory-leak working-set slope > 0).
+	Slope        float64
+	SlopeSamples int
+	Deriv        DerivationRef
 }
 
 // VariableRate is one rate-guarded variable's fingerprint component.
@@ -227,13 +232,17 @@ func evalThresholdVar(b *binding.Binding, rule *graph.ThresholdRule, streamID, u
 		vt.Deriv = DerivationRef{StreamID: streamID, SampleAt: latest.At, Samples: rr.Samples, How: "counter-rate"}
 		vt.Stale = stale(latest.At, evalNow, p.Watermark)
 	default:
-		// Gauge: the latest value, directly.
+		// Gauge: the latest value, directly, plus its window slope (signed) for
+		// rising/falling members.
 		latest, ok := reader.Latest(streamID)
 		if !ok {
 			return VariableThreshold{}, false
 		}
 		vt.Value = latest.Value
-		vt.Deriv = DerivationRef{StreamID: streamID, SampleAt: latest.At, How: "gauge-level"}
+		sl := EvalGaugeSlope(reader.LastN(streamID, ringWindowN(p)), evalNow, p.RateWindow, p.ScrapeInterval)
+		vt.Slope = sl.PerSecond
+		vt.SlopeSamples = sl.Samples
+		vt.Deriv = DerivationRef{StreamID: streamID, SampleAt: latest.At, Samples: sl.Samples, How: "gauge-level"}
 		vt.Stale = stale(latest.At, evalNow, p.Watermark)
 	}
 

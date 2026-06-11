@@ -190,6 +190,58 @@ func EvalRate(samples []qss.Sample, now time.Time, window, scrapeInterval time.D
 	return res
 }
 
+// GaugeSlope is the signed first difference of a GAUGE over the window — the
+// rate-of-change primitive applied to a level series (doc 05 §3.2: differencing).
+// Unlike the counter path it does NOT reset-segment (a gauge legitimately falls);
+// it is the plain slope (last − first)/elapsed over the contiguous run ending at
+// the latest sample, with the same > 2-interval gap break (A5). Used for "is this
+// rising" members (e.g. memory-leak working-set slope > 0).
+type SlopeResult struct {
+	PerSecond float64 // signed slope; > 0 rising, < 0 falling
+	Delta     float64 // signed (last − first) over the valid run
+	Window    time.Duration
+	Elapsed   time.Duration
+	Samples   int
+	GapBroken bool
+}
+
+// EvalGaugeSlope computes the signed slope of a gauge over the window ending at now.
+func EvalGaugeSlope(samples []qss.Sample, now time.Time, window, scrapeInterval time.Duration) SlopeResult {
+	res := SlopeResult{Window: window}
+	start := now.Add(-window)
+	win := make([]qss.Sample, 0, len(samples))
+	for _, s := range samples {
+		if !s.At.Before(start) && !s.At.After(now) {
+			win = append(win, s)
+		}
+	}
+	res.Samples = len(win)
+	if len(win) < 2 {
+		return res
+	}
+	sort.SliceStable(win, func(i, j int) bool { return win[i].At.Before(win[j].At) })
+
+	// Keep the contiguous run ending at the latest sample (gaps break the window).
+	gapThreshold := 2 * scrapeInterval
+	firstIdx := 0
+	for i := 1; i < len(win); i++ {
+		if win[i].At.Sub(win[i-1].At) > gapThreshold {
+			firstIdx = i
+			res.GapBroken = true
+		}
+	}
+	run := win[firstIdx:]
+	if len(run) < 2 {
+		return res
+	}
+	res.Delta = run[len(run)-1].Value - run[0].Value
+	res.Elapsed = run[len(run)-1].At.Sub(run[0].At)
+	if res.Elapsed > 0 {
+		res.PerSecond = res.Delta / res.Elapsed.Seconds()
+	}
+	return res
+}
+
 // ---- Primitive 3: Co-occurrence (conjunction) ------------------------------
 
 // CoocState is the conjunction verdict.

@@ -273,7 +273,10 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, stor
 			renderBinding(out, bd, boutiqueNamespace)
 			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
 			// now" — re-materialized each tick against fresh samples.
-			renderFingerprints(out, bnd.fingerprints(now), boutiqueNamespace)
+			fps := bnd.fingerprints(now)
+			renderFingerprints(out, fps, boutiqueNamespace)
+			// Entity-local phenomenon matches (doc 07 M1) over those fingerprints.
+			renderFindings(out, bnd.detectFindings(fps))
 		}
 	}
 

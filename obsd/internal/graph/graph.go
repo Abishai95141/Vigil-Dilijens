@@ -201,9 +201,11 @@ type Graph struct {
 	edgesByDst  map[string][]*Edge
 
 	// Authored overlay content (doc 02 §3.6, merged by LoadWithOverlays): structured
-	// threshold rules (sorted by ID) and the provenance of every applied overlay.
+	// threshold rules (sorted by ID), detection member-checks (per phenomenon, doc 07),
+	// and the provenance of every applied overlay.
 	Rules     []*ThresholdRule
 	rulesByID map[string]*ThresholdRule
+	Checks    map[string][]*MemberCheck // phenomenon id -> authored member checks
 	Overlays  []OverlayInfo
 }
 
@@ -251,6 +253,7 @@ func Parse(raw []byte) (*Graph, error) {
 		edgesBySrc:        map[string][]*Edge{},
 		edgesByDst:        map[string][]*Edge{},
 		rulesByID:         map[string]*ThresholdRule{},
+		Checks:            map[string][]*MemberCheck{},
 	}
 
 	for i, nraw := range f.Nodes {
