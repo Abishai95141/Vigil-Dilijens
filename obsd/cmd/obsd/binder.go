@@ -23,6 +23,10 @@ import (
 // re-poll that picks up config drift (limits edited in place). It never gates the
 // identity path (doc 01 non-gating: detection-side layers run identically whether
 // binding is present or absent).
+//
+// Each compile runs the full doc 04 pass: platform facts -> signal availability
+// gating (M1) -> instantiation + per-instance bars (M2/M4) -> semantic QA against
+// live stream evidence (M3) -> per-phenomenon observability (M5 / 05 M4).
 type binder struct {
 	graph    *graph.Graph // nil = binding disabled (stated at startup)
 	client   kubernetes.Interface
@@ -30,8 +34,17 @@ type binder struct {
 	ingestor *observe.Ingestor // stream evidence for semantic QA (doc 04 M3)
 
 	last        *binding.Result
+	lastAvail   *binding.AvailabilityReport
+	lastObs     *binding.ObservabilityReport
 	lastFinger  string
 	ticksUnseen int
+}
+
+// bound is the composite the renderer consumes.
+type bound struct {
+	Result *binding.Result
+	Avail  *binding.AvailabilityReport
+	Obs    *binding.ObservabilityReport
 }
 
 // configDriftRebindTicks forces a re-bind every Nth inventory tick even with an
@@ -42,23 +55,52 @@ const configDriftRebindTicks = 4
 // compile returns the current bound customer graph, re-compiling only on a
 // trigger. A snapshot/list failure keeps the previous result and says so — a
 // stale-but-stated report, never a silent gap.
-func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecord, now time.Time) *binding.Result {
+func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecord, now time.Time) *bound {
 	if b == nil || b.graph == nil {
 		return nil
+	}
+	snapshot := func() *bound {
+		if b.last == nil {
+			return nil
+		}
+		return &bound{Result: b.last, Avail: b.lastAvail, Obs: b.lastObs}
 	}
 	finger := inventoryFingerprint(inventory)
 	if b.last != nil && finger == b.lastFinger && b.ticksUnseen < configDriftRebindTicks {
 		b.ticksUnseen++
-		return b.last
+		return snapshot()
 	}
 
 	snap, err := kube.SnapshotConfig(ctx, b.client)
 	if err != nil {
 		b.logger.Warn("binding: config snapshot failed; keeping previous bound graph", "err", err)
-		return b.last
+		return snapshot()
 	}
-	res := binding.Compile(b.graph, inventory, snap, now)
-	b.last = res
+	facts, err := kube.GatherFacts(ctx, b.client)
+	var avail *binding.AvailabilityReport
+	if err != nil {
+		// Facts unavailable: availability gating skipped FOR THIS COMPILE, stated.
+		b.logger.Warn("binding: platform facts unavailable; availability gating skipped this compile", "err", err)
+	} else {
+		avail = binding.GateSignals(b.graph, facts)
+	}
+
+	res := binding.Compile(b.graph, inventory, snap, avail, now)
+
+	// Semantic QA (doc 04 M3) against live stream evidence.
+	rulesByID := make(map[string]*graph.ThresholdRule, len(b.graph.Rules))
+	for _, r := range b.graph.Rules {
+		rulesByID[r.ID] = r
+	}
+	bounds := binding.RangeBounds{MaxMemoryBytes: 2 * float64(snap.MaxNodeAllocatableMemory())}
+	qa := binding.ValidateBindings(res, avail, rulesByID, evidenceAdapter{b.ingestor}, bounds)
+
+	var obs *binding.ObservabilityReport
+	if avail != nil {
+		obs = binding.PhenomenonObservability(b.graph, avail)
+	}
+
+	b.last, b.lastAvail, b.lastObs = res, avail, obs
 	b.lastFinger = finger
 	b.ticksUnseen = 0
 	b.logger.Info("bound customer graph compiled",
@@ -67,8 +109,42 @@ func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecor
 		"resolvability", res.Coverage.Resolvability,
 		"unbounded", len(res.Coverage.UnboundedWorkloads),
 		"default_bars", res.Coverage.DefaultBars,
+		"qa_verified", qa.Verified, "qa_suspect", qa.Suspect, "qa_failed", qa.Failed,
 	)
-	return res
+	return snapshot()
+}
+
+// evidenceAdapter exposes the observation layer to binding QA (the interface is
+// owned by binding so the internal package graph stays acyclic).
+type evidenceAdapter struct{ in *observe.Ingestor }
+
+var _ binding.StreamEvidence = evidenceAdapter{}
+
+func (e evidenceAdapter) StreamsFor(uid, metric string) []string {
+	if e.in == nil {
+		return nil
+	}
+	return e.in.StreamsByUIDMetric(uid, metric)
+}
+
+func (e evidenceAdapter) StreamInfo(streamID string) (string, string, bool) {
+	if e.in == nil {
+		return "", "", false
+	}
+	m, ok := e.in.Meta(streamID)
+	return m.Kind, m.Type, ok
+}
+
+func (e evidenceAdapter) History(streamID string, n int) []binding.EvidencePoint {
+	if e.in == nil {
+		return nil
+	}
+	samples := e.in.Hot().LastN(streamID, n)
+	out := make([]binding.EvidencePoint, len(samples))
+	for i, s := range samples {
+		out[i] = binding.EvidencePoint{At: s.At, Value: s.Value}
+	}
+	return out
 }
 
 // inventoryFingerprint hashes the sorted active CEI keys: the re-binding trigger

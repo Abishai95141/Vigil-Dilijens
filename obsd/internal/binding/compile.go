@@ -20,7 +20,7 @@ import (
 // threshold resolution and resolvability accounting. Equivalence-group resolution
 // and semantic QA (M3) come next; until then every binding is suspect by
 // construction, and the report says so.
-func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConfig, now time.Time) *Result {
+func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConfig, avail *AvailabilityReport, now time.Time) *Result {
 	res := &Result{GraphVersion: g.Version, At: now}
 
 	// Deterministic input views: pods and nodes sorted by CEI key; PVC list sorted.
@@ -52,6 +52,18 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 		if s := g.Signals[rule.Signal]; s != nil {
 			em = Emission{Source: s.Source, CollectionMethod: s.CollectionMethod}
 		}
+		// Availability gating (the M1<->M2 join): a rule whose signal is not
+		// obtainable on THIS cluster instantiates every pair OUT-OF-SCOPE with the
+		// availability reason — a bar nothing can ever evaluate is not "bound",
+		// and the absence is enumerated, never hidden (doc 04 §3.1.1).
+		if avail != nil {
+			if av, ok := avail.PerSignal[rule.Signal]; ok && av.State == OutOfScopeUnobtainable {
+				reason := "signal unobtainable on this cluster: " + strings.Join(av.Reasons, "; ")
+				bindAllOutOfScope(res, &cov, rule, em, reason, pods, nodes, pvcs)
+				res.Coverage.PerRule = append(res.Coverage.PerRule, cov)
+				continue
+			}
+		}
 		switch rule.EntityScope {
 		case "Container":
 			for _, pod := range pods {
@@ -74,6 +86,35 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 
 	finalize(res)
 	return res
+}
+
+// bindAllOutOfScope lands every would-be instantiation of a rule in the
+// out-of-scope state with one stated reason (signal unobtainable here). The pairs
+// still EXIST in the report — "recorded as out-of-scope, not failure" and never
+// silently absent (doc 04 §3.1.1, §3.5).
+func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, reason string, pods, nodes []identity.InstanceRecord, pvcs []PVCRef) {
+	add := func(b Binding) {
+		b.State = StateOutOfScope
+		b.Validation = ValidationSuspect
+		b.Reason = reason
+		b.Emission = em
+		cov.OutOfScope++
+		res.Bindings = append(res.Bindings, b)
+	}
+	switch rule.EntityScope {
+	case "Container":
+		for _, pod := range pods {
+			add(Binding{CEIKey: pod.CEI.Key(), RoleKey: pod.RoleCEI.Key(), Entity: "Container", RuleID: rule.ID, Metric: rule.Metric})
+		}
+	case "Node":
+		for _, node := range nodes {
+			add(Binding{CEIKey: node.CEI.Key(), Entity: "Node", RuleID: rule.ID, Metric: rule.Metric})
+		}
+	case "PVC":
+		for _, ref := range pvcs {
+			add(Binding{CEIKey: "pvc|" + ref.Namespace + "|" + ref.Name, Entity: "PVC", RuleID: rule.ID, Metric: rule.Metric})
+		}
+	}
 }
 
 // bindContainers instantiates a container-scoped rule across one pod's declared
@@ -332,9 +373,10 @@ func finalize(res *Result) {
 	sort.Strings(res.Coverage.UnboundedWorkloads)
 
 	res.Coverage.Notes = []string{
-		"all bindings suspect by construction: semantic-validation suite (doc 04 M3) pending",
-		"bound = instantiated with bar resolution recorded; collection wiring (doc 05) pending",
-		"equivalence-group resolution (doc 04 §3.1.2) pending: rules address canonical metrics directly",
+		"bindings start suspect; semantic QA (04 M3) promotes/demotes per compile against hot-window evidence — verified is never permanent",
+		"evidence is hot-window only: warm storage + replay bundles (qss M2, 05 M5) pending",
+		"equivalence resolver compiled (35 groups); v1 rules address canonical names directly — the dialect sweep activates with non-native exporters",
+		"primitive evaluation (05 M2: threshold/rate/co-occurrence over these bars) is the next milestone",
 	}
 }
 

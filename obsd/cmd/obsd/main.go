@@ -259,8 +259,8 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, stor
 		// presented adjacently, each from its own source, never fused.
 		active := store.ActiveInstances()
 		renderInventory(out, active, edges, clusterID, now, rep, g)
-		if res := bnd.compile(ctx, active, now); res != nil {
-			renderBinding(out, res, boutiqueNamespace)
+		if bd := bnd.compile(ctx, active, now); bd != nil {
+			renderBinding(out, bd, boutiqueNamespace)
 		}
 	}
 

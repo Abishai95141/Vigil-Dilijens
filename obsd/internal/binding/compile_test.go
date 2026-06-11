@@ -124,7 +124,7 @@ func find(t *testing.T, res *Result, ruleID, ceiSubstr string) *Binding {
 func TestPerInstanceConfigRelativeBars(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	res := Compile(g, inv, cfg, compileAt)
+	res := Compile(g, inv, cfg, nil, compileAt)
 
 	web := find(t, res, "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT", "web-a")
 	if web.Bar == nil || web.State != StateBound {
@@ -159,7 +159,7 @@ func TestPerInstanceConfigRelativeBars(t *testing.T) {
 func TestResolvabilityHoleListedNeverSilent(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	res := Compile(g, inv, cfg, compileAt)
+	res := Compile(g, inv, cfg, nil, compileAt)
 
 	pay := find(t, res, "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT", "payment-x")
 	if pay.State != StateBound || pay.Bar != nil {
@@ -189,7 +189,7 @@ func TestResolvabilityHoleListedNeverSilent(t *testing.T) {
 func TestEligibilityGateOutOfScope(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	res := Compile(g, inv, cfg, compileAt)
+	res := Compile(g, inv, cfg, nil, compileAt)
 
 	throttled := find(t, res, "THR_CONTAINER_CPU_THROTTLE_RATIO", "payment-x")
 	if throttled.State != StateOutOfScope {
@@ -210,7 +210,7 @@ func TestEligibilityGateOutOfScope(t *testing.T) {
 func TestDefaultBarsAlwaysFlagged(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	res := Compile(g, inv, cfg, compileAt)
+	res := Compile(g, inv, cfg, nil, compileAt)
 	defaults := 0
 	for _, b := range res.Bindings {
 		if b.Bar != nil && b.Bar.Source == SourceDefault {
@@ -230,7 +230,7 @@ func TestDefaultBarsAlwaysFlagged(t *testing.T) {
 func TestUnresolvedConfigRowStated(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	res := Compile(g, inv, cfg, compileAt)
+	res := Compile(g, inv, cfg, nil, compileAt)
 	ghost := find(t, res, "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT", "ghost-x")
 	if ghost.State != StateUnresolved || ghost.Reason == "" {
 		t.Errorf("ghost pod should be unresolved with reason: %+v", ghost)
@@ -242,7 +242,7 @@ func TestUnresolvedConfigRowStated(t *testing.T) {
 func TestRoleLayerAggregation(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	res := Compile(g, inv, cfg, compileAt)
+	res := Compile(g, inv, cfg, nil, compileAt)
 	var webRole *RoleBinding
 	for i := range res.Roles {
 		r := &res.Roles[i]
@@ -270,8 +270,8 @@ func TestRoleLayerAggregation(t *testing.T) {
 func TestCompileDeterministic(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	a := Compile(g, inv, cfg, compileAt)
-	b := Compile(g, inv, cfg, compileAt)
+	a := Compile(g, inv, cfg, nil, compileAt)
+	b := Compile(g, inv, cfg, nil, compileAt)
 	if !reflect.DeepEqual(a, b) {
 		t.Error("Compile is not deterministic for identical inputs")
 	}
@@ -280,7 +280,7 @@ func TestCompileDeterministic(t *testing.T) {
 	for i, r := range inv {
 		rev[len(inv)-1-i] = r
 	}
-	c := Compile(g, rev, cfg, compileAt)
+	c := Compile(g, rev, cfg, nil, compileAt)
 	if !reflect.DeepEqual(a, c) {
 		t.Error("Compile depends on inventory order")
 	}
@@ -291,14 +291,14 @@ func TestCompileDeterministic(t *testing.T) {
 func TestAllBindingsSuspectUntilSemanticQA(t *testing.T) {
 	g := loadGraph(t)
 	inv, cfg := boutiqueFixture(t)
-	res := Compile(g, inv, cfg, compileAt)
+	res := Compile(g, inv, cfg, nil, compileAt)
 	for _, b := range res.Bindings {
 		if b.Validation != ValidationSuspect {
 			t.Errorf("binding %s/%s validation = %s, want suspect (M3 pending)", b.RuleID, b.CEIKey, b.Validation)
 		}
 	}
 	notes := strings.Join(res.Coverage.Notes, "\n")
-	if !strings.Contains(notes, "semantic-validation") || !strings.Contains(notes, "doc 05") {
+	if !strings.Contains(notes, "semantic QA") || !strings.Contains(notes, "hot-window") {
 		t.Errorf("honesty notes incomplete:\n%s", notes)
 	}
 }

@@ -164,9 +164,12 @@ type CoverageReport struct {
 
 	DefaultBars int // flagged default-sourced bars in play
 
+	// Validation is the semantic-QA rollup (doc 04 §3.2): verified / suspect /
+	// failed counts plus the hard findings. Populated by ValidateBindings.
+	Validation QASummary
+
 	// Notes are standing honesty caveats (pending milestones), stated rather than
-	// implied: semantic QA (M3) pending => all bindings suspect; collection (05)
-	// pending => bound means instantiated+resolved, not yet collecting.
+	// implied.
 	Notes []string
 }
 

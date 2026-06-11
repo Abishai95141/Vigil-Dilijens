@@ -96,6 +96,18 @@ func (s *ConfigSnapshot) PVC(namespace, name string) (binding.PVCConfig, bool) {
 	return c, ok
 }
 
+// MaxNodeAllocatableMemory returns the largest node allocatable in the snapshot —
+// the cluster's own declared capacity ceiling, used as QA's plausibility bound.
+func (s *ConfigSnapshot) MaxNodeAllocatableMemory() int64 {
+	var max int64
+	for _, n := range s.nodes {
+		if n.AllocatableMemoryBytes > max {
+			max = n.AllocatableMemoryBytes
+		}
+	}
+	return max
+}
+
 // PVCs enumerates the snapshot's claims in deterministic order.
 func (s *ConfigSnapshot) PVCs() []binding.PVCRef {
 	out := make([]binding.PVCRef, 0, len(s.pvcs))

@@ -10,16 +10,31 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 )
 
-// renderBinding writes the bound-customer-graph coverage report (doc 04 §3.5) to w:
-// per-rule binding states, the resolvability metric with its numerator/denominator,
-// the unbounded-workload list (never hidden), a sample of resolved per-instance
-// bars for the workload namespace, and the standing honesty notes. Everything shown
-// is MEASURED-class: facts about the system's own visibility (doc 04 §4).
-func renderBinding(w io.Writer, res *binding.Result, focusNamespace string) {
+// renderBinding writes the coverage report v1 (doc 04 §3.5) to w: signal
+// availability on this platform, per-rule binding states, the resolvability
+// metric with its numerator/denominator, the unbounded-workload list (never
+// hidden), semantic-QA verdicts with hard findings, per-phenomenon observability,
+// resolved per-instance bars for the workload namespace, and the standing honesty
+// notes. Everything shown is MEASURED-class: facts about the system's own
+// visibility (doc 04 §4).
+func renderBinding(w io.Writer, bd *bound, focusNamespace string) {
+	res := bd.Result
 	const rule = "--------------------------------------------------------------------------------"
 	fmt.Fprintln(w, rule)
 	fmt.Fprintf(w, " bound customer graph (doc 04) — ontology %s · compiled %s\n",
 		shortUID(strings.TrimPrefix(res.GraphVersion, "sha256:")), res.At.UTC().Format("15:04:05Z"))
+
+	// Signal availability (doc 04 §3.1): what this platform can emit at all.
+	if av := bd.Avail; av != nil {
+		fmt.Fprintf(w, " signal availability: %d obtainable · %d out-of-scope · %d indeterminate (of %d authored)\n",
+			av.Counts[binding.Obtainable], av.Counts[binding.OutOfScopeUnobtainable], av.Counts[binding.Indeterminate],
+			av.Counts[binding.Obtainable]+av.Counts[binding.OutOfScopeUnobtainable]+av.Counts[binding.Indeterminate])
+		fmt.Fprintf(w, " tools present: %s\n", strings.Join(av.ToolsPresent, " "))
+		fmt.Fprintf(w, " tools absent:  %s\n", strings.Join(av.ToolsAbsent, " "))
+		if len(av.ActiveGates) > 0 {
+			fmt.Fprintf(w, " active distro gates: %s\n", strings.Join(av.ActiveGates, " "))
+		}
+	}
 
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, "  RULE\tSCOPE\tINST\tCFG-BOUND\tDEFAULT(flagged)\tUNBOUNDED\tOUT-OF-SCOPE\tUNRESOLVED")
@@ -31,6 +46,24 @@ func renderBinding(w io.Writer, res *binding.Result, focusNamespace string) {
 
 	fmt.Fprintf(w, " resolvability: %d/%d config-eligible pairs have a config-sourced bar (%.2f) · %d flagged default bars\n",
 		res.Coverage.ConfigBound, res.Coverage.ConfigEligible, res.Coverage.Resolvability, res.Coverage.DefaultBars)
+
+	// Semantic QA (doc 04 §3.2/M3): trust statuses against live stream evidence.
+	qa := res.Coverage.Validation
+	fmt.Fprintf(w, " semantic QA: %d verified · %d suspect · %d failed\n", qa.Verified, qa.Suspect, qa.Failed)
+	for _, f := range qa.Findings {
+		fmt.Fprintf(w, "   !! %s\n", f)
+	}
+
+	// Per-phenomenon observability (doc 04 M5 / doc 05 M4).
+	if obs := bd.Obs; obs != nil {
+		fmt.Fprintf(w, " %s\n", obs.String())
+		if full := obs.Names("full"); len(full) > 0 {
+			fmt.Fprintf(w, "   fully observable: %s\n", strings.Join(full, " "))
+		}
+		if partial := obs.Names("partial"); len(partial) > 0 {
+			fmt.Fprintf(w, "   partially observable: %s\n", strings.Join(partial, " "))
+		}
+	}
 
 	if n := len(res.Coverage.UnboundedWorkloads); n > 0 {
 		fmt.Fprintf(w, " unbounded (Tier-B ineligible, %d):\n", n)
