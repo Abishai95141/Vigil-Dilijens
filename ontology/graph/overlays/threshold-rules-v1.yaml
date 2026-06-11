@@ -1,0 +1,157 @@
+# Structured threshold rules — authored overlay v1 (doc 02 §3.4, doc 04 §3.4).
+#
+# AUTHORED-class content, merged at load like spans-v1. Each rule maps one
+# concrete variable to where its bar comes from. "Dynamic to the customer's
+# system" means READS THEIR CONFIGURATION, never learns their behaviour
+# (doc 02 §3.4): config-relative rules name the customer config path the bar is
+# read from, per instance, at binding time (doc 04). Rules whose bar cannot come
+# from customer config carry an ontology DEFAULT, which is a flagged,
+# lower-trust bar wherever surfaced and high-blast-radius content under doc 12.
+#
+# Field semantics:
+#   signal       — the KG Signal node the variable belongs to (referential, linted).
+#                  cAdvisor/node-exporter series are encoded as family signals in
+#                  the KG, so `metric` names the concrete series within it.
+#   metric       — the canonical series the rule evaluates (rate over `window`
+#                  for counters); `divisor_metric` makes the evaluated quantity a
+#                  ratio (metric / divisor).
+#   kind         — config-relative | absolute | rate-of-change | co-occurrence
+#                  (the complete vocabulary; nothing else exists, doc 02 §3.4).
+#   config_path  — for config-relative: where in the customer's spec the bar is
+#                  read. Machine-resolvable vocabulary understood by binding (04):
+#                    container.resources.limits.memory
+#                    container.resources.limits.cpu
+#                    pvc.spec.resources.requests.storage
+#                    node.status.allocatable.memory
+#   eligibility_config_path — the rule instantiates only where this path resolves
+#                  (e.g. CFS throttling cannot occur without a CPU limit);
+#                  non-resolution is out-of-scope WITH REASON, never silent.
+#   factor       — multiplier on the config value (bar = config x factor).
+#   default      — ontology default; ALWAYS flagged when used (no config source).
+#   direction    — above | below: which side of the bar is the violation.
+#   entity_scope — the entity type instantiation fans out across (doc 04 axis 2).
+#   window       — evaluation window for rates/ratios.
+#
+# v2 authoring queue (deliberately NOT invented here): apiserver inflight limits
+# (flag-sourced, not API-readable), etcd WAL-fsync p99 bar, ARP gc_thresh ratios.
+overlay: threshold-rules
+version: 1
+author: vigil-engineering
+status: proposed-v1 (ratified by commit review; defaults are doc 12 high-rigor content)
+
+rules:
+  - id: THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT
+    signal: SIG_container_memory_family_14_metrics_529498d3
+    metric: container_memory_working_set_bytes
+    kind: config-relative
+    config_path: container.resources.limits.memory
+    factor: 0.95
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      The OOM-precursor bar (doc 04 §3.3's worked example): the kernel OOM-kills
+      the cgroup when working set reaches the memory limit, so 95% of the
+      container's own declared limit is the early bar. No limit declared -> no
+      bar -> unbounded (listed, Tier-B-ineligible), never a guessed default.
+
+  - id: THR_CONTAINER_CPU_USAGE_VS_LIMIT
+    signal: SIG_container_cpu_family_12_metrics_857b041d
+    metric: container_cpu_usage_seconds_total
+    kind: config-relative
+    config_path: container.resources.limits.cpu
+    factor: 0.90
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      CPU rate (cores, over the window) sustained at >=90% of the container's
+      declared CPU limit means CFS throttling is imminent or active. Counter:
+      evaluated as rate over the window. Unset limit -> unbounded, listed.
+
+  - id: THR_CONTAINER_CPU_THROTTLE_RATIO
+    signal: SIG_container_cpu_family_12_metrics_857b041d
+    metric: container_cpu_cfs_throttled_periods_total
+    divisor_metric: container_cpu_cfs_periods_total
+    kind: absolute
+    eligibility_config_path: container.resources.limits.cpu
+    default: 0.25
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      Throttled-period ratio (PHEN_THROTTLING_CASCADE's T0 derivation). The ratio
+      bar is not derivable from any config value, so it is an ontology default
+      (flagged). Eligibility-gated on a declared CPU limit: CFS throttling cannot
+      occur without one, so absence is out-of-scope with reason, not unbounded.
+
+  - id: THR_PVC_USED_VS_REQUESTED
+    signal: SIG_kubelet_volume_stats_used_bytes_38fa9389
+    metric: kubelet_volume_stats_used_bytes
+    kind: config-relative
+    config_path: pvc.spec.resources.requests.storage
+    factor: 0.85
+    direction: above
+    entity_scope: PVC
+    window: 15m
+    rationale: >-
+      PVC fill bar (PHEN_STORAGE_SATURATION member): 85% of the customer's own
+      declared storage request. Declared request is the borrowed-normativity
+      source; capacity-status divergence is a binding QA concern (04 §3.2).
+
+  - id: THR_NODE_MEMAVAILABLE_VS_ALLOCATABLE
+    signal: SIG_node_memory_family_50_metrics_from_proc_meminfo_2c1e8b7c
+    metric: node_memory_MemAvailable_bytes
+    kind: config-relative
+    config_path: node.status.allocatable.memory
+    factor: 0.10
+    direction: below
+    entity_scope: Node
+    window: 5m
+    rationale: >-
+      Node memory headroom (PHEN_EVICTION_MEMORY / PHEN_OOM_KILL_SYSTEM T0):
+      MemAvailable sinking below 10% of the node's declared allocatable memory
+      precedes kubelet eviction and system OOM. Allocatable is the node's own
+      API-declared capacity config.
+
+  - id: THR_NODE_FS_AVAIL_RATIO
+    signal: SIG_node_filesystem_avail_bytes_879074ea
+    metric: node_filesystem_avail_bytes
+    divisor_metric: node_filesystem_size_bytes
+    kind: absolute
+    default: 0.15
+    direction: below
+    entity_scope: Node
+    window: 15m
+    rationale: >-
+      Filesystem headroom ratio (PHEN_DISK_PID_INODE_PRESSURE T0). The kubelet's
+      nodefs eviction default (15% free) is not readable from the API, so this is
+      an ontology default mirroring the upstream kubelet default — flagged.
+
+  - id: THR_CONTAINER_RESTARTS_RATE
+    signal: SIG_container_restart_count_kube_pod_container_status_restarts_t_268d5088
+    metric: kube_pod_container_status_restarts_total
+    kind: rate-of-change
+    default: 3
+    direction: above
+    entity_scope: Container
+    window: 15m
+    rationale: >-
+      Restart-burst guard (PHEN_PROBE_FAILURE_RESTART / PHEN_OOM_KILL_CGROUP T0+
+      member): more than 3 restarts inside the window indicates a crash loop.
+      No config source exists for restart tolerance; ontology default, flagged.
+
+  - id: THR_NODE_CONNTRACK_UTILIZATION
+    signal: SIG_node_nf_conntrack_entries_6161e704
+    metric: node_nf_conntrack_entries
+    divisor_metric: node_nf_conntrack_entries_limit
+    kind: absolute
+    default: 0.75
+    direction: above
+    entity_scope: Node
+    window: 5m
+    rationale: >-
+      Conntrack utilization (PHEN_CONNTRACK_EXHAUSTION's own authored T0 note:
+      "Utilization >=0.75"). The limit is kernel-exposed as a sibling series, not
+      customer Kubernetes config, so the ratio bar is an ontology default
+      mirroring the KG's authored hint — flagged.

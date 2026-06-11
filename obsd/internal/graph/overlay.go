@@ -1,0 +1,301 @@
+package graph
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Authored overlays (doc 02 §3.6, doc 12). The base KG release is a clean vendored
+// mirror; authored deltas — phenomenon span declarations and structured threshold
+// rules — live in ontology/graph/overlays/*.yaml and are merged here at load.
+// Overlays are AUTHORED-class content with author/version/status provenance; the
+// loader merges and validates, it never invents. Merge order is the sorted file
+// name order, and the release Version pin hashes base + overlays, so a changed
+// overlay is a changed release (doc 12 §3.1).
+
+// Span vocabulary (doc 02 §3.5): the complete set; nothing else exists.
+const (
+	SpanEntityLocal = "entity-local"
+	SpanFirstOrder  = "first-order"
+	SpanSecondOrder = "second-order"
+)
+
+// Threshold-rule kinds (doc 02 §3.4): the complete vocabulary of checks.
+const (
+	RuleConfigRelative = "config-relative"
+	RuleAbsolute       = "absolute"
+	RuleRateOfChange   = "rate-of-change"
+	RuleCoOccurrence   = "co-occurrence"
+)
+
+// Machine-resolvable config paths (doc 02 §3.4 "config path"): the vocabulary the
+// binding engine (04) knows how to read from live cluster objects. Adding a path
+// here requires a matching resolver in binding.
+const (
+	PathContainerLimitsMemory = "container.resources.limits.memory"
+	PathContainerLimitsCPU    = "container.resources.limits.cpu"
+	PathPVCRequestsStorage    = "pvc.spec.resources.requests.storage"
+	PathNodeAllocatableMemory = "node.status.allocatable.memory"
+)
+
+var knownConfigPaths = map[string]bool{
+	PathContainerLimitsMemory: true,
+	PathContainerLimitsCPU:    true,
+	PathPVCRequestsStorage:    true,
+	PathNodeAllocatableMemory: true,
+}
+
+var knownSpans = map[string]bool{SpanEntityLocal: true, SpanFirstOrder: true, SpanSecondOrder: true}
+
+// knownTraversalEdgeTypes is the instance-topology edge vocabulary spans may walk
+// (doc 02 §3.2; instance edges and their timestamps belong to identity, doc 03).
+var knownTraversalEdgeTypes = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true}
+
+var knownEntityScopes = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true}
+
+var knownDirections = map[string]bool{"above": true, "below": true}
+
+// ThresholdRule is a structured, authored threshold rule (doc 02 §3.4): where one
+// concrete variable's bar comes from. Config-relative rules read the customer's own
+// config per instance at binding time (doc 04 §3.4); rules carrying an ontology
+// Default produce flagged, lower-trust bars wherever surfaced.
+type ThresholdRule struct {
+	ID            string   `yaml:"id"`
+	Signal        string   `yaml:"signal"`         // KG Signal node id (referential)
+	Metric        string   `yaml:"metric"`         // concrete series within the signal (families bundle many)
+	DivisorMetric string   `yaml:"divisor_metric"` // optional: evaluated quantity is Metric/DivisorMetric
+	Kind          string   `yaml:"kind"`
+	ConfigPath    string   `yaml:"config_path"`             // config-relative only
+	Eligibility   string   `yaml:"eligibility_config_path"` // optional: instantiate only where this path resolves
+	Factor        float64  `yaml:"factor"`                  // bar = config value x Factor
+	Default       *float64 `yaml:"default"`                 // ontology default; ALWAYS flagged when used
+	Direction     string   `yaml:"direction"`               // above | below
+	EntityScope   string   `yaml:"entity_scope"`            // instantiation fan-out target (doc 04 axis 2)
+	Window        string   `yaml:"window"`
+	Rationale     string   `yaml:"rationale"`
+}
+
+// WindowDuration parses the rule's evaluation window.
+func (r *ThresholdRule) WindowDuration() (time.Duration, error) {
+	return time.ParseDuration(r.Window)
+}
+
+// spanDecl is one phenomenon's authored span declaration.
+type spanDecl struct {
+	Span               string   `yaml:"span"`
+	TraversalEdgeTypes []string `yaml:"traversal_edge_types"`
+	Rationale          string   `yaml:"rationale"`
+}
+
+// overlayFile is the on-disk overlay shape. A file declares spans, rules, or both.
+type overlayFile struct {
+	Overlay string              `yaml:"overlay"`
+	Version int                 `yaml:"version"`
+	Author  string              `yaml:"author"`
+	Status  string              `yaml:"status"`
+	Spans   map[string]spanDecl `yaml:"spans"`
+	Rules   []ThresholdRule     `yaml:"rules"`
+}
+
+// OverlayInfo is the provenance record of one applied overlay (surfaced, per the
+// authored-knowledge discipline: author + version travel with the content).
+type OverlayInfo struct {
+	File    string
+	Name    string
+	Version int
+	Author  string
+	Status  string
+	Spans   int
+	Rules   int
+}
+
+// LoadWithOverlays loads the base KG release and merges every overlay file
+// (*.yaml/*.yml) in overlayDir, in sorted file-name order. The returned graph's
+// Version pins base + overlays together. An empty overlayDir, or a directory with
+// no overlay files, yields the base graph unchanged (gaps then stay visible to
+// graphlint — never silently defaulted).
+func LoadWithOverlays(kgPath, overlayDir string) (*Graph, error) {
+	raw, err := os.ReadFile(kgPath)
+	if err != nil {
+		return nil, fmt.Errorf("read ontology graph %q: %w", kgPath, err)
+	}
+	g, err := Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse ontology graph %q: %w", kgPath, err)
+	}
+	if overlayDir == "" {
+		return g, nil
+	}
+
+	paths, err := overlayPaths(overlayDir)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.New()
+	hash.Write(raw)
+	for _, p := range paths {
+		oraw, err := os.ReadFile(p)
+		if err != nil {
+			return nil, fmt.Errorf("read overlay %q: %w", p, err)
+		}
+		if err := g.applyOverlay(filepath.Base(p), oraw); err != nil {
+			return nil, fmt.Errorf("overlay %q: %w", p, err)
+		}
+		hash.Write([]byte{0})
+		hash.Write(oraw)
+	}
+	if len(paths) > 0 {
+		g.Version = "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	}
+	return g, nil
+}
+
+func overlayPaths(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // no overlay dir: base graph only, gaps stay visible
+		}
+		return nil, fmt.Errorf("read overlay dir %q: %w", dir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if ext := filepath.Ext(e.Name()); ext == ".yaml" || ext == ".yml" {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	sort.Strings(out) // deterministic merge order
+	return out, nil
+}
+
+// applyOverlay validates and merges one overlay into the graph.
+func (g *Graph) applyOverlay(name string, raw []byte) error {
+	var f overlayFile
+	if err := yaml.Unmarshal(raw, &f); err != nil {
+		return fmt.Errorf("unmarshal: %w", err)
+	}
+	if f.Overlay == "" {
+		return fmt.Errorf("missing 'overlay' name field")
+	}
+	if strings.TrimSpace(f.Author) == "" {
+		return fmt.Errorf("missing author provenance (authored-knowledge discipline, doc 02 §3.6)")
+	}
+
+	// Spans: set each phenomenon's declared span + traversal edges.
+	ids := make([]string, 0, len(f.Spans))
+	for id := range f.Spans {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		d := f.Spans[id]
+		p, ok := g.Phenomena[id]
+		if !ok {
+			return fmt.Errorf("span for unknown phenomenon %q", id)
+		}
+		if !knownSpans[d.Span] {
+			return fmt.Errorf("phenomenon %s: invalid span %q (vocabulary: entity-local|first-order|second-order)", id, d.Span)
+		}
+		for _, t := range d.TraversalEdgeTypes {
+			if !knownTraversalEdgeTypes[t] {
+				return fmt.Errorf("phenomenon %s: unknown traversal edge type %q", id, t)
+			}
+		}
+		if d.Span != SpanEntityLocal && len(d.TraversalEdgeTypes) == 0 {
+			return fmt.Errorf("phenomenon %s: span %s requires traversal edge types (walks follow only declared types, doc 02 §3.5)", id, d.Span)
+		}
+		if d.Span == SpanEntityLocal && len(d.TraversalEdgeTypes) > 0 {
+			return fmt.Errorf("phenomenon %s: entity-local span must not declare traversal edges", id)
+		}
+		if strings.TrimSpace(d.Rationale) == "" {
+			return fmt.Errorf("phenomenon %s: span declarations are falsifiable claims and need a rationale (doc 02 §3.6)", id)
+		}
+		if p.HasSpan() && p.Span != d.Span {
+			return fmt.Errorf("phenomenon %s: span conflict (%q already declared, overlay says %q)", id, p.Span, d.Span)
+		}
+		p.Span = d.Span
+		p.TraversalEdgeTypes = append([]string(nil), d.TraversalEdgeTypes...)
+	}
+
+	// Threshold rules: validate coherence and attach.
+	for i := range f.Rules {
+		r := f.Rules[i]
+		if err := g.validateRule(&r); err != nil {
+			return fmt.Errorf("rule %d (%s): %w", i, r.ID, err)
+		}
+		g.Rules = append(g.Rules, &r)
+		g.rulesByID[r.ID] = &r
+	}
+	sort.Slice(g.Rules, func(i, j int) bool { return g.Rules[i].ID < g.Rules[j].ID })
+
+	g.Overlays = append(g.Overlays, OverlayInfo{
+		File: name, Name: f.Overlay, Version: f.Version, Author: f.Author, Status: f.Status,
+		Spans: len(f.Spans), Rules: len(f.Rules),
+	})
+	return nil
+}
+
+func (g *Graph) validateRule(r *ThresholdRule) error {
+	if strings.TrimSpace(r.ID) == "" {
+		return fmt.Errorf("missing id")
+	}
+	if g.rulesByID[r.ID] != nil {
+		return fmt.Errorf("duplicate rule id")
+	}
+	if g.Signals[r.Signal] == nil {
+		return fmt.Errorf("references unknown signal %q", r.Signal)
+	}
+	if strings.TrimSpace(r.Metric) == "" {
+		return fmt.Errorf("missing metric")
+	}
+	if !knownEntityScopes[r.EntityScope] {
+		return fmt.Errorf("unknown entity_scope %q", r.EntityScope)
+	}
+	if !knownDirections[r.Direction] {
+		return fmt.Errorf("direction must be above|below, got %q", r.Direction)
+	}
+	if _, err := r.WindowDuration(); err != nil {
+		return fmt.Errorf("bad window: %w", err)
+	}
+	if r.Eligibility != "" && !knownConfigPaths[r.Eligibility] {
+		return fmt.Errorf("unknown eligibility_config_path %q", r.Eligibility)
+	}
+	switch r.Kind {
+	case RuleConfigRelative:
+		if !knownConfigPaths[r.ConfigPath] {
+			return fmt.Errorf("config-relative rule needs a known config_path, got %q", r.ConfigPath)
+		}
+		if r.Factor <= 0 {
+			return fmt.Errorf("config-relative rule needs factor > 0")
+		}
+	case RuleAbsolute, RuleRateOfChange:
+		if r.Default == nil {
+			return fmt.Errorf("%s rule needs an ontology default (flagged when used)", r.Kind)
+		}
+		if r.ConfigPath != "" {
+			return fmt.Errorf("%s rule must not carry a config_path (use eligibility_config_path for gating)", r.Kind)
+		}
+	case RuleCoOccurrence:
+		// participation-only; no bar fields required
+	default:
+		return fmt.Errorf("unknown kind %q (vocabulary: config-relative|absolute|rate-of-change|co-occurrence)", r.Kind)
+	}
+	return nil
+}
+
+// RuleByID returns an attached threshold rule.
+func (g *Graph) RuleByID(id string) (*ThresholdRule, bool) {
+	r, ok := g.rulesByID[id]
+	return r, ok
+}

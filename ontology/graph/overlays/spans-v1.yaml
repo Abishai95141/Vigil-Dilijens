@@ -1,0 +1,324 @@
+# Phenomenon span declarations — authored overlay v1 (doc 02 §3.5/§3.6, doc 14 A14).
+#
+# AUTHORED-class content. The base KG (k8s_signal_kg.json) is a clean vendored
+# mirror; authored deltas live in overlays like this one and are merged
+# deterministically at load (obsd/internal/graph) and at lint (tools/graphlint).
+# Per doc 02 §3.6 an undeclared span is INVALID — never "entity-local by default" —
+# so every one of the 38 phenomena is declared here explicitly.
+#
+# Span vocabulary (doc 02 §3.5): entity-local | first-order | second-order.
+# It declares the MAXIMUM TOPOLOGY-WALK DEPTH detection may use to join members.
+# Traversal edge types are the only edges such walks may follow (doc 02 §3.2).
+#
+# Addressing principle (stated once, applied throughout): members that live on
+# cluster-singleton control-plane roles (kube-apiserver, etcd, kube-scheduler,
+# CoreDNS as a role) are joined by DIRECT ROLE REFERENCE in the bound graph, not
+# by a topology walk; they therefore do not widen the span. Spans only count
+# hops over instance topology edges (runs-on, mounts, selects).
+#
+# Every span below is a falsifiable empirical claim (doc 02 §3.6): the harness
+# (doc 11) falsifies a span by exhibiting a confirmed occurrence whose members
+# could not be joined within the declared walk. Rationales state the member
+# layout the claim rests on.
+overlay: phenomenon-spans
+version: 1
+author: vigil-engineering
+status: proposed-v1 (ratified by commit review; falsification targets for doc 11)
+
+spans:
+  PHEN_APISERVER_OVERLOAD_APF:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      All required members (inflight gauge, APF rejections, queue wait) are emitted
+      by the kube-apiserver singleton itself; client-side 429 log lines are
+      corroborating and cluster-diffuse, not joinable by topology walk.
+
+  PHEN_ARP_NEIGHBOR:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      node_arp_entries and the dmesg overflow line are both carried by the Node
+      entity; no member leaves the node.
+
+  PHEN_CERT_EXPIRY:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      Each member (cert-expiration quantile, cert file mtime, TLS handshake error)
+      is local to the control-plane component whose certificate is expiring; the
+      components are singleton roles joined by direct reference, no walk.
+
+  PHEN_CNI_FAILURE:
+    span: second-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Members join a failing workload pod (sandbox events, ContainerCreating) to
+      the CNI agent pod on the same node (cilium/felix metrics, runtime log):
+      pod -> node -> CNI agent pod is a two-hop runs-on walk.
+
+  PHEN_CONNTRACK_EXHAUSTION:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      The table and its limit are node-scoped; symptomatic UDP/DNS failures and the
+      CNI agent's BPF map pressure are carried by pods one runs-on hop from the node.
+
+  PHEN_CRI_ERRORS:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      kubelet runtime-operation errors and the runtime daemon log are both carried
+      by the Node; downstream PLEG impact is expressed as a relation edge, not a
+      member walk.
+
+  PHEN_DISK_PID_INODE_PRESSURE:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Node conditions and filesystem/inode/PID gauges are node-scoped; the eviction
+      events land on pods one runs-on hop away.
+
+  PHEN_DNS_CACHE_THRASH:
+    span: first-order
+    traversal_edge_types: [selects, runs-on]
+    rationale: >-
+      Cache hit/miss and latency members live on the CoreDNS pods, aggregated
+      across replicas via the kube-dns service's selects edges; conntrack
+      corroboration sits one runs-on hop away on each CoreDNS pod's node.
+
+  PHEN_DNS_FAILURE:
+    span: first-order
+    traversal_edge_types: [selects, runs-on]
+    rationale: >-
+      SERVFAIL/REFUSED rcodes and upstream health-check failures are CoreDNS-pod
+      members joined across replicas via selects; client-side "no such host" log
+      lines are corroborating and cluster-diffuse (no walk claims them).
+
+  PHEN_ETCD_COMPACTION_LAG:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      DB size, in-use size, compaction, and WAL-fsync members are all emitted by
+      the etcd singleton itself.
+
+  PHEN_ETCD_SLOW_PATH:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      etcd members (fsync, apply lag, leader changes) and the downstream
+      apiserver request-duration member both live on control-plane singleton
+      roles, joined by direct reference; no instance-topology walk is involved.
+
+  PHEN_EVICTION_MEMORY:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      memory.available, the eviction-manager log, and MemoryPressure are
+      node-scoped; Evicted events and Failed phases land on pods one runs-on hop
+      away.
+
+  PHEN_HPA_FLAPPING:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      Replica oscillation and SuccessfulRescale events are all statements about
+      one workload role (the HPA's scale target); no member leaves that role.
+
+  PHEN_IMAGE_GC_EVENTS:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      kubelet GC log lines, remove_image operations, and imagefs availability are
+      all carried by the Node.
+
+  PHEN_IMAGE_PULL_FAILURE:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Pull events and waiting-state reasons are pod members; the kubelet
+      pull-error counter and runtime daemon log are carried by the pod's node,
+      one runs-on hop.
+
+  PHEN_INIT_CONTAINER_FAILURE:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      KSM init-container status, lastState.terminated, and Init:CrashLoopBackOff
+      are all pod-local members.
+
+  PHEN_KUBELET_API_CONNECTION:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      rest_client latency/5xx members are kubelet (Node) members; the node's own
+      lease falling behind is the node-lease self-edge. Downstream NodeNotReady is
+      a relation, not a member walk.
+
+  PHEN_KUBE_PROXY_SYNC_SLOW:
+    span: second-order
+    traversal_edge_types: [runs-on, selects]
+    rationale: >-
+      Sync-duration members live on the kube-proxy pod; the "endpoint not ready"
+      consequence surfaces on service-selected pods reached via the node the proxy
+      programs: kube-proxy pod -> node -> affected pod (runs-on x2), with selects
+      tying affected pods to their service.
+
+  PHEN_MEMORY_HIGH_THROTTLE:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      memory.events high counts, PSI stalls, and the working-set plateau are all
+      members of the throttled container itself (cgroupv2-gated).
+
+  PHEN_MEMORY_LEAK:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      Working-set slope, RSS slope, major faults, and heap profiles are all
+      container-local; the eventual OOM is a relation edge (downstream), not a
+      member.
+
+  PHEN_MESH_CIRCUIT_BREAKER:
+    span: first-order
+    traversal_edge_types: [selects]
+    rationale: >-
+      Ejection gauges and failure classifications are emitted by the client pod's
+      sidecar about a target service; the ejected backends are that service's
+      pods, one selects hop away.
+
+  PHEN_NETWORK_IMPAIRMENT:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Host-netns retransmits are node members; per-pod-netns drop counters and
+      CNI datapath drops are carried by pods one runs-on hop from that node.
+
+  PHEN_NETWORK_POLICY_DROPS:
+    span: second-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Policy verdict/drop counters are emitted by the CNI agent pod; the denied
+      traffic's symptoms surface on workload pods on the same node:
+      CNI agent pod -> node -> affected pod is a two-hop runs-on walk.
+
+  PHEN_NODE_NOT_READY:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Ready-condition members, NodeNotReady events, and the kubelet log are
+      node-scoped; NodeLost pod evictions land one runs-on hop away.
+
+  PHEN_OOM_KILL_CGROUP:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Container/pod members (memory.events, oom_events_total, lastState, restarts,
+      pre-OOM working set) sit with the victim; the required kernel-log member
+      (dmesg "Memory cgroup out of memory") and the host-OOM discriminator
+      (node_vmstat_oom_kill) are carried by the pod's node, one runs-on hop.
+      Sibling eviction and node stress are relation edges, not members.
+
+  PHEN_OOM_KILL_SYSTEM:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      node_vmstat_oom_kill, dmesg, and MemoryPressure are node members; the kernel
+      chooses victims across cgroups, so victim evidence lands on pods one
+      runs-on hop away.
+
+  PHEN_PDB_VIOLATION:
+    span: first-order
+    traversal_edge_types: [selects]
+    rationale: >-
+      current_healthy < desired_healthy is a statement about the PDB's workload
+      role, whose member pods are one selects hop away; the eviction-API 429
+      member is carried by the kube-apiserver singleton, joined by direct
+      reference.
+
+  PHEN_PLEG_HANGS:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      Relist duration/interval and the "PLEG is not healthy" log line are all
+      kubelet (Node) members; NodeNotReady is a relation edge downstream.
+
+  PHEN_POD_OVERHEAD_SANDBOX:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      kube_pod_overhead and the inflated working set are pod members; the
+      sandbox-runtime traces (kata/runsc) are carried by the pod's node, one
+      runs-on hop (capability-gated).
+
+  PHEN_POD_STUCK_TERMINATING:
+    span: first-order
+    traversal_edge_types: [runs-on, mounts]
+    rationale: >-
+      deletionTimestamp and its KSM mirror are pod members; the PreStop/finalizer
+      evidence lives in the node's kubelet log (one runs-on hop), and the common
+      detach-failure corroboration sits on the pod's PVCs (one mounts hop).
+
+  PHEN_PROBE_CASCADE_META:
+    span: second-order
+    traversal_edge_types: [runs-on, selects]
+    rationale: >-
+      Meta-phenomenon: joins a pod's probe failure to its trigger phenomena, whose
+      members are node-scoped (throttling, conntrack, network) or service-scoped
+      (kube-proxy programming) relative to the probed pod — up to two hops over
+      runs-on/selects. The trigger/downstream structure itself is carried by
+      relation edges.
+
+  PHEN_PROBE_FAILURE_RESTART:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      prober results, Unhealthy/Killing events, restart counter, backoff state,
+      and lastState are all normalized to the probed pod itself.
+
+  PHEN_RUNTIME_IO_STALL:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      Runtime operation latency and the snapshotter log are Node members; PLEG
+      impact is a relation edge.
+
+  PHEN_SCHEDULING_FAILURE:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      Pending phase and FailedScheduling events are pod members; scheduler queue
+      gauges are carried by the kube-scheduler singleton, joined by direct
+      reference. The unscheduled pod has no node yet, so no runs-on walk exists
+      even in principle.
+
+  PHEN_STORAGE_SATURATION:
+    span: second-order
+    traversal_edge_types: [runs-on, mounts]
+    rationale: >-
+      Disk IO-time and PSI members are node-scoped; per-container IO sits one
+      runs-on hop away, and PVC fill-ratio members sit a further mounts hop from
+      those pods: node -> pod -> PVC.
+
+  PHEN_THROTTLING_CASCADE:
+    span: first-order
+    traversal_edge_types: [runs-on]
+    rationale: >-
+      Throttled-period ratios and cascading latency are container/pod members;
+      CPU PSI corroboration is carried by the pod's node, one runs-on hop. The
+      probe cascade is a relation edge.
+
+  PHEN_VOLUME_MOUNT_FAILURE:
+    span: first-order
+    traversal_edge_types: [mounts, runs-on]
+    rationale: >-
+      Attach/mount events and stuck pod states are pod members; the CSI health
+      gauge sits on the pod's PVC (one mounts hop) and the kubelet volume-operation
+      errors and CSI driver log on the pod's node (one runs-on hop).
+
+  PHEN_WEBHOOK_LATENCY:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      Admission duration, rejection count, and fail-open count are all emitted by
+      the kube-apiserver singleton about its webhook calls.

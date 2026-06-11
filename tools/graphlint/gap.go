@@ -19,9 +19,13 @@ type GapReport struct {
 	MetricSignals int
 
 	// ThresholdHintEdges counts owned_by_agent edges carrying a free-text threshold
-	// hint — the closest the KG has to borrowed-normativity rules, which still need
-	// authoring into structured config-relative threshold rules (doc 04 §3.4).
+	// hint — the closest the base KG has to borrowed-normativity rules, which still
+	// need authoring into structured config-relative threshold rules (doc 04 §3.4).
 	ThresholdHintEdges int
+
+	// ThresholdRulesStructured counts the structured threshold rules contributed by
+	// authored overlays (doc 02 §3.4) — populated by the caller after merge.
+	ThresholdRulesStructured int
 
 	TemporalVocabulary []string // distinct temporal tags actually used (informational)
 	DataTypeVariants   int      // distinct free-text data_type values (forecast-funnel normalization, doc 09)
@@ -95,8 +99,8 @@ func (g GapReport) String() string {
 		}
 		fmt.Fprintf(&b, "      span-less: %s%s\n", strings.Join(ids, ", "), more)
 	}
-	fmt.Fprintf(&b, "    signals: %d total, %d metric; threshold rules: 0 structured (config-relative), %d agent hints to author\n",
-		g.SignalsTotal, g.MetricSignals, g.ThresholdHintEdges)
+	fmt.Fprintf(&b, "    signals: %d total, %d metric; threshold rules: %d structured (authored overlays), %d agent hints remaining to structure\n",
+		g.SignalsTotal, g.MetricSignals, g.ThresholdRulesStructured, g.ThresholdHintEdges)
 	fmt.Fprintf(&b, "    data_type variants: %d (needs normalization for the forecast funnel, doc 09)\n", g.DataTypeVariants)
 	fmt.Fprintf(&b, "    temporal vocabulary in use (%d): %s\n", len(g.TemporalVocabulary), strings.Join(g.TemporalVocabulary, " "))
 	return b.String()

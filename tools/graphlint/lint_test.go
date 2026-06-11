@@ -1,10 +1,16 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 const (
-	schemaPath = "../../ontology/schema/kg.schema.json"
-	realKGPath = "../../ontology/graph/k8s_signal_kg.json"
+	schemaPath     = "../../ontology/schema/kg.schema.json"
+	realKGPath     = "../../ontology/graph/k8s_signal_kg.json"
+	realOverlayDir = "../../ontology/graph/overlays"
 )
 
 func TestValidFixturePassesNoGap(t *testing.T) {
@@ -12,7 +18,7 @@ func TestValidFixturePassesNoGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compileSchema: %v", err)
 	}
-	res, err := lintFile(sch, "testdata/valid_kg.json")
+	res, err := lintFile(sch, "testdata/valid_kg.json", nil)
 	if err != nil {
 		t.Fatalf("lintFile: %v", err)
 	}
@@ -26,7 +32,7 @@ func TestValidFixturePassesNoGap(t *testing.T) {
 
 func TestReferentialViolationFails(t *testing.T) {
 	sch, _ := compileSchema(schemaPath)
-	res, err := lintFile(sch, "testdata/invalid_ref.json")
+	res, err := lintFile(sch, "testdata/invalid_ref.json", nil)
 	if err != nil {
 		t.Fatalf("lintFile: %v", err)
 	}
@@ -40,7 +46,7 @@ func TestReferentialViolationFails(t *testing.T) {
 
 func TestSchemaViolationFails(t *testing.T) {
 	sch, _ := compileSchema(schemaPath)
-	res, err := lintFile(sch, "testdata/invalid_schema.json")
+	res, err := lintFile(sch, "testdata/invalid_schema.json", nil)
 	if err != nil {
 		t.Fatalf("lintFile: %v", err)
 	}
@@ -54,7 +60,7 @@ func TestSchemaViolationFails(t *testing.T) {
 // lost with no error.
 func TestSchemaRejectsTypodEdgeField(t *testing.T) {
 	sch, _ := compileSchema(schemaPath)
-	res, err := lintFile(sch, "testdata/invalid_edge_field.json")
+	res, err := lintFile(sch, "testdata/invalid_edge_field.json", nil)
 	if err != nil {
 		t.Fatalf("lintFile: %v", err)
 	}
@@ -63,44 +69,133 @@ func TestSchemaRejectsTypodEdgeField(t *testing.T) {
 	}
 }
 
-// The real 842-node KG must be structurally valid and referentially intact — and
-// the gap analysis must surface that ALL 38 phenomena lack a declared span (the
-// doc 14 A14 authoring queue) and report the reference scale.
-func TestRealKGValidAndGapReported(t *testing.T) {
+// WITHOUT overlays the base KG's authoring gap must stay visible: all 38 phenomena
+// lack a span in the base release (doc 02 §3.6 — never defaulted, only authored).
+// After the agent-name curation, the base graph carries no referential warnings.
+func TestRealKGBaseGapStillReportedWithoutOverlays(t *testing.T) {
 	sch, err := compileSchema(schemaPath)
 	if err != nil {
 		t.Fatalf("compileSchema: %v", err)
 	}
-	res, err := lintFile(sch, realKGPath)
+	res, err := lintFile(sch, realKGPath, nil)
 	if err != nil {
 		t.Fatalf("lintFile real KG: %v", err)
 	}
-	// The detection-critical structure must be clean: schema valid + no hard ref
-	// errors. (The owned_by_agent agent-name typos surface as warnings, below.)
 	if !res.ok() {
 		t.Errorf("real KG core structure should be clean:\n schema=%v\n ref=%v", res.schemaErrors, res.refErrors)
 	}
-	// Any referential warning must be confined to owned_by_agent (organizational).
-	for _, w := range res.refWarnings {
-		if w.EdgeType != "owned_by_agent" {
-			t.Errorf("unexpected core ref warning: %s", w)
-		}
+	if res.refWarnTotal != 0 {
+		t.Errorf("owned_by_agent warnings = %d, want 0 after the agent-name curation; e.g. %v", res.refWarnTotal, res.refWarnings)
 	}
-
 	g := res.gap
-	if g.PhenomenaTotal != 38 {
-		t.Errorf("phenomena total = %d, want 38", g.PhenomenaTotal)
+	if g.PhenomenaTotal != 38 || g.PhenomenaMissingSpan != 38 || g.PhenomenaWithSpan != 0 {
+		t.Errorf("base gap = total %d / missing %d / with %d, want 38/38/0", g.PhenomenaTotal, g.PhenomenaMissingSpan, g.PhenomenaWithSpan)
 	}
-	if g.PhenomenaMissingSpan != 38 || g.PhenomenaWithSpan != 0 {
-		t.Errorf("expected all 38 phenomena missing a span (the gap), got missing=%d with=%d", g.PhenomenaMissingSpan, g.PhenomenaWithSpan)
+	if !g.hasGaps() {
+		t.Error("base KG without overlays must report the span gap")
 	}
 	if g.SignalsTotal != 589 || g.MetricSignals != 457 {
 		t.Errorf("signals = %d (metric %d), want 589 (457)", g.SignalsTotal, g.MetricSignals)
 	}
-	if !g.hasGaps() {
-		t.Error("real KG must report authoring gaps (missing spans)")
-	}
 	if len(g.TemporalVocabulary) < 5 {
 		t.Errorf("expected the rich temporal vocabulary, got %v", g.TemporalVocabulary)
+	}
+}
+
+// WITH the authored overlays the gap is closed: 38/38 spans declared, structured
+// threshold rules attached, zero remaining gaps — the -strict gate passes honestly
+// because the content was authored, not defaulted.
+func TestRealKGWithOverlaysStrictClean(t *testing.T) {
+	sch, err := compileSchema(schemaPath)
+	if err != nil {
+		t.Fatalf("compileSchema: %v", err)
+	}
+	ovls, err := loadOverlays(realOverlayDir)
+	if err != nil {
+		t.Fatalf("loadOverlays: %v", err)
+	}
+	if len(ovls) != 2 {
+		t.Fatalf("overlays = %d, want 2 (spans, threshold rules)", len(ovls))
+	}
+	res, err := lintFile(sch, realKGPath, ovls)
+	if err != nil {
+		t.Fatalf("lintFile: %v", err)
+	}
+	if !res.ok() {
+		t.Errorf("merged lint should be clean: schema=%v ref=%v overlay=%v", res.schemaErrors, res.refErrors, res.overlayErrors)
+	}
+	g := res.gap
+	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 38 {
+		t.Errorf("merged spans = with %d / missing %d, want 38/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
+	}
+	if g.ThresholdRulesStructured != 8 {
+		t.Errorf("structured rules = %d, want 8", g.ThresholdRulesStructured)
+	}
+	if g.hasGaps() {
+		t.Error("no gaps should remain with overlays applied (-strict must pass)")
+	}
+	if res.refWarnTotal != 0 {
+		t.Errorf("warnings remain: %d", res.refWarnTotal)
+	}
+}
+
+// Defective overlays are hard errors: dangling phenomenon, bad vocabulary, missing
+// rationale, incoherent rules — a defective authored delta must not merge.
+func TestOverlayDefectsAreHardErrors(t *testing.T) {
+	sch, _ := compileSchema(schemaPath)
+	dir := t.TempDir()
+	bad := `
+overlay: bad
+author: a
+spans:
+  PHEN_DOES_NOT_EXIST: {span: galaxy-wide, rationale: ""}
+  PHEN_OOM_KILL_CGROUP: {span: first-order, rationale: r}
+rules:
+  - {id: R1, signal: SIG_NOPE, metric: "", kind: config-relative, direction: sideways, entity_scope: Galaxy, window: 5x}
+`
+	if err := os.WriteFile(filepath.Join(dir, "bad.yaml"), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ovls, err := loadOverlays(dir)
+	if err != nil {
+		t.Fatalf("loadOverlays: %v", err)
+	}
+	res, err := lintFile(sch, realKGPath, ovls)
+	if err != nil {
+		t.Fatalf("lintFile: %v", err)
+	}
+	if res.ok() {
+		t.Error("defective overlay must fail the lint")
+	}
+	wantFragments := []string{
+		"unknown phenomenon", "invalid span", "requires traversal edge types", "rationale",
+		"unknown signal", "missing metric", "config_path", "direction", "entity_scope", "bad window",
+	}
+	joined := strings.Join(res.overlayErrors, "\n")
+	for _, w := range wantFragments {
+		if !strings.Contains(joined, w) {
+			t.Errorf("overlay errors missing %q in:\n%s", w, joined)
+		}
+	}
+	// Gap analysis must NOT consume a defective merge: spans stay un-merged.
+	if res.gap.PhenomenaWithSpan != 0 {
+		t.Errorf("defective overlay was partially merged: with-span = %d", res.gap.PhenomenaWithSpan)
+	}
+}
+
+// The overlays directory is excluded from graph-file collection (overlays are
+// authored deltas, not graph releases — they must not be schema-checked as graphs).
+func TestCollectSkipsOverlaysDir(t *testing.T) {
+	files, err := collect([]string{"../../ontology/graph"})
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	for _, f := range files {
+		if strings.Contains(f, string(filepath.Separator)+"overlays"+string(filepath.Separator)) {
+			t.Errorf("collect picked up an overlay file as a graph: %s", f)
+		}
+	}
+	if len(files) != 1 {
+		t.Errorf("collected %d graph files under ontology/graph, want 1 (the KG release): %v", len(files), files)
 	}
 }

@@ -199,6 +199,12 @@ type Graph struct {
 	edgesByType map[string][]*Edge
 	edgesBySrc  map[string][]*Edge
 	edgesByDst  map[string][]*Edge
+
+	// Authored overlay content (doc 02 §3.6, merged by LoadWithOverlays): structured
+	// threshold rules (sorted by ID) and the provenance of every applied overlay.
+	Rules     []*ThresholdRule
+	rulesByID map[string]*ThresholdRule
+	Overlays  []OverlayInfo
 }
 
 type kgFile struct {
@@ -244,6 +250,7 @@ func Parse(raw []byte) (*Graph, error) {
 		edgesByType:       map[string][]*Edge{},
 		edgesBySrc:        map[string][]*Edge{},
 		edgesByDst:        map[string][]*Edge{},
+		rulesByID:         map[string]*ThresholdRule{},
 	}
 
 	for i, nraw := range f.Nodes {

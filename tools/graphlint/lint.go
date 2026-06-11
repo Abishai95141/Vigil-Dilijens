@@ -66,20 +66,24 @@ func (e RefError) String() string {
 
 // fileResult is the lint outcome for one graph file.
 type fileResult struct {
-	path         string
-	schemaErrors []string
-	refErrors    []RefError // dangling refs on detection-critical edge types (capped display list)
-	refWarnings  []RefError // dangling refs on owned_by_agent (organizational; capped display list)
-	refErrTotal  int        // total core ref errors (uncapped)
-	refWarnTotal int        // total owned_by_agent ref warnings (uncapped)
-	gap          GapReport
+	path          string
+	schemaErrors  []string
+	refErrors     []RefError // dangling refs on detection-critical edge types (capped display list)
+	refWarnings   []RefError // dangling refs on owned_by_agent (organizational; capped display list)
+	refErrTotal   int        // total core ref errors (uncapped)
+	refWarnTotal  int        // total owned_by_agent ref warnings (uncapped)
+	overlayErrors []string   // defective authored overlays (hard errors)
+	overlays      []overlayDoc
+	gap           GapReport
 }
 
 // ok reports whether the file passed the HARD checks (schema + core referential
-// integrity). owned_by_agent ref warnings do not fail the graph: it is an
-// organizational annotation, not detection knowledge, so a mistyped agent name is a
-// curation item, not a corruption of what detection reads.
-func (r fileResult) ok() bool { return len(r.schemaErrors) == 0 && len(r.refErrors) == 0 }
+// integrity + overlay validity). owned_by_agent ref warnings do not fail the graph:
+// it is an organizational annotation, not detection knowledge, so a mistyped agent
+// name is a curation item, not a corruption of what detection reads.
+func (r fileResult) ok() bool {
+	return len(r.schemaErrors) == 0 && len(r.refErrors) == 0 && len(r.overlayErrors) == 0
+}
 
 func compileSchema(schemaPath string) (*jsonschema.Schema, error) {
 	raw, err := os.ReadFile(schemaPath)
@@ -194,8 +198,11 @@ func referentialIntegrity(doc kgDoc) (errs, warns []RefError, errTotal, warnTota
 	return errs, warns, errTotal, warnTotal
 }
 
-// lintFile runs all checks on one graph file.
-func lintFile(sch *jsonschema.Schema, path string) (fileResult, error) {
+// lintFile runs all checks on one graph file. Overlays (authored spans + threshold
+// rules) are validated against the document and merged before the gap analysis, so
+// the report states what remains owed AFTER the authored deltas apply; overlay
+// defects are hard errors (a defective authored delta must not merge).
+func lintFile(sch *jsonschema.Schema, path string, ovls []overlayDoc) (fileResult, error) {
 	inst, doc, err := decode(path)
 	if err != nil {
 		return fileResult{}, err
@@ -205,7 +212,14 @@ func lintFile(sch *jsonschema.Schema, path string) (fileResult, error) {
 		res.schemaErrors = append(res.schemaErrors, err.Error())
 	}
 	res.refErrors, res.refWarnings, res.refErrTotal, res.refWarnTotal = referentialIntegrity(doc)
+	res.overlayErrors = validateOverlays(doc, ovls)
+	rules := 0
+	if len(res.overlayErrors) == 0 {
+		rules = mergeOverlays(&doc, ovls)
+	}
 	res.gap = analyzeGap(doc)
+	res.gap.ThresholdRulesStructured = rules
+	res.overlays = ovls
 	return res, nil
 }
 
@@ -226,6 +240,11 @@ func collect(roots []string) ([]string, error) {
 				return err
 			}
 			if d.IsDir() {
+				// Overlays are authored deltas, not graph releases: they are
+				// validated and merged via -overlays, never schema-checked as graphs.
+				if d.Name() == "overlays" {
+					return fs.SkipDir
+				}
 				return nil
 			}
 			switch strings.ToLower(filepath.Ext(p)) {
