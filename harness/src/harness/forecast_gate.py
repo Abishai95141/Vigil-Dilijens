@@ -53,6 +53,15 @@ MIN_SCORED_FORECASTS = 5
 # the event the class exists to warn about (learned from corpus B1, where the
 # above-bar window fell between scrapes and a hollow pass nearly resulted).
 MIN_CROSSINGS = 3
+# Recall is PER PHYSICAL EVENT, not per as-of forecast (learned from corpus C):
+# the product promise is "minutes of warning before the crossing" — at least
+# one candidate with adequate LEAD per realized crossing event. Per-forecast
+# anticipation is reported as a sharpness diagnostic, never gated: punishing a
+# 12-minutes-out "cannot see it yet" silence would punish honesty (the same
+# discipline that yields zero false warnings).
+MIN_LEAD_STEPS = 8        # ≥2 min at the 15s dev cadence
+EVENT_RECALL_MIN = 1.0    # every realized crossing event must get an advance warning
+MIN_CROSSING_EVENTS = 3   # distinct physical events required before a verdict
 
 
 @dataclass
@@ -70,6 +79,9 @@ class ClassReport:
     actual_crossings: int = 0
     warned_crossings: int = 0
     missed_crossings: int = 0
+    # physical crossing EVENTS: key (streamUid, crossing sample ns) ->
+    # best warning lead in steps (None = never warned ahead)
+    events: dict = field(default_factory=dict)
     misses_by_reason: dict = field(default_factory=dict)
     false_warnings: int = 0
     candidates_full_obs: int = 0
@@ -111,6 +123,20 @@ class ClassReport:
         if not self.ttc_frac_errors:
             return float("nan")
         return float(np.median(self.ttc_frac_errors))
+
+    @property
+    def event_count(self) -> int:
+        return len(self.events)
+
+    @property
+    def events_warned(self) -> int:
+        return sum(
+            1 for lead in self.events.values() if lead is not None and lead >= MIN_LEAD_STEPS
+        )
+
+    @property
+    def event_recall(self) -> float:
+        return self.events_warned / self.event_count if self.event_count else float("nan")
 
 
 def load_events(path: str | Path) -> list[dict]:
@@ -185,6 +211,13 @@ def score_class(
 
             if actual_idx is not None:
                 rep.actual_crossings += 1
+                ev_key = (tr["streamUid"], future[actual_idx][0])
+                lead = actual_idx + 1 if cand else None
+                prev = rep.events.get(ev_key)
+                if ev_key not in rep.events or (
+                    lead is not None and (prev is None or lead > prev)
+                ):
+                    rep.events[ev_key] = lead
                 if cand:
                     rep.warned_crossings += 1
                     rep.candidates_full_obs += 1
@@ -238,14 +271,27 @@ def gate(rep: ClassReport) -> GateVerdict:
                 " crossing evidence, not on its absence"
             ],
         )
+    if rep.event_count < MIN_CROSSING_EVENTS:
+        return GateVerdict(
+            False,
+            True,
+            [
+                f"insufficient event evidence: {rep.event_count} distinct crossing"
+                f" events < {MIN_CROSSING_EVENTS}"
+            ],
+        )
     reasons: list[str] = []
     cov = rep.coverage
     if not (BAND_COVERAGE_MIN <= cov <= BAND_COVERAGE_MAX):
         reasons.append(
             f"band coverage {cov:.3f} outside [{BAND_COVERAGE_MIN}, {BAND_COVERAGE_MAX}]"
         )
-    if rep.actual_crossings > 0 and rep.recall < RECALL_MIN:
-        reasons.append(f"crossing recall {rep.recall:.3f} < {RECALL_MIN}")
+    if rep.event_recall < EVENT_RECALL_MIN:
+        reasons.append(
+            f"event recall {rep.event_recall:.3f} < {EVENT_RECALL_MIN}: "
+            f"{rep.events_warned}/{rep.event_count} crossing events got a warning"
+            f" with ≥{MIN_LEAD_STEPS} steps lead"
+        )
     if rep.candidates_full_obs > 0 and rep.false_rate > FALSE_WARNING_MAX:
         reasons.append(f"false-warning rate {rep.false_rate:.3f} > {FALSE_WARNING_MAX}")
     if rep.ttc_frac_errors and rep.ttc_median_frac > TTC_MEDIAN_FRAC_MAX:
@@ -262,8 +308,12 @@ def render(rep: ClassReport, verdict: GateVerdict) -> str:
         f" (skipped short-future: {rep.forecasts_skipped_short_future})",
         f"  band coverage:    {rep.coverage:.3f} over {rep.band_points}"
         " realized points (nominal 0.8)",
-        f"  crossings:        {rep.actual_crossings} actual · {rep.warned_crossings} warned"
-        f" · {rep.missed_crossings} missed {rep.misses_by_reason or ''}",
+        f"  events:           {rep.event_count} physical crossings"
+        f" · {rep.events_warned} warned with ≥{MIN_LEAD_STEPS} steps lead"
+        f" (event recall {rep.event_recall:.2f})",
+        f"  per-forecast:     {rep.actual_crossings} crossing-bearing forecasts"
+        f" · {rep.warned_crossings} warned · {rep.missed_crossings} quiet"
+        f" {rep.misses_by_reason or ''} (sharpness diagnostic, not gated)",
         f"  in-band:          {rep.crossings_in_band}/{rep.warned_crossings}"
         " actual crossings inside [earliest, latest]",
         f"  false warnings:   {rep.false_warnings}/{rep.candidates_full_obs}"
@@ -289,12 +339,28 @@ def render(rep: ClassReport, verdict: GateVerdict) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="forecast backtest gate (doc 11 M5 / 09 M3)")
-    ap.add_argument("--events", required=True, help="JSONL from `replay -forecast`")
-    ap.add_argument("--readings", required=True, help="Parquet from `replay -export-parquet`")
+    ap.add_argument("--events", required=True, nargs="+",
+                    help="JSONL file(s) from `replay -forecast` — one per bundle")
+    ap.add_argument("--readings", required=True, nargs="+",
+                    help="Parquet file(s) from `replay -export-parquet`, paired with --events")
     ap.add_argument("--metric", default="container_memory_working_set_bytes")
     args = ap.parse_args()
+    if len(args.events) != len(args.readings):
+        ap.error("--events and --readings must pair up")
 
-    rep = score_class(load_events(args.events), load_readings(args.readings), args.metric)
+    # Merge bundles: pod UIDs are unique per pod instance, and a stream that
+    # spans captures concatenates in time order — the per-forecast future
+    # resolution is by timestamp either way.
+    events: list[dict] = []
+    readings: dict[tuple[str, str], list[tuple[int, float]]] = {}
+    for ev_path, rd_path in zip(args.events, args.readings, strict=True):
+        events.extend(load_events(ev_path))
+        for k, series in load_readings(rd_path).items():
+            readings.setdefault(k, []).extend(series)
+    for series in readings.values():
+        series.sort()
+
+    rep = score_class(events, readings, args.metric)
     verdict = gate(rep)
     print(render(rep, verdict))
     return 0 if verdict.passed else 1

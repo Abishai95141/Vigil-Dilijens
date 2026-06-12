@@ -110,8 +110,9 @@ def test_hidden_crossing_is_a_recall_miss():
     v = gate(rep)
     assert rep.missed_crossings == rep.actual_crossings
     assert rep.misses_by_reason.get("flat-series") == rep.actual_crossings
+    assert rep.events_warned == 0
     assert not v.passed
-    assert any("recall" in r for r in v.reasons)
+    assert any("event recall" in r for r in v.reasons)
 
 
 def test_false_warning_counted_only_with_full_observation():
