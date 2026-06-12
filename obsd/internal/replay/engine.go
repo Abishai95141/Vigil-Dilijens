@@ -101,6 +101,10 @@ func Run(opts Options) (*Report, error) {
 	for k, v := range m.EdgeBudgets {
 		budgets[identity.EdgeType(k)] = v
 	}
+	// Cascade recognition is windowed over the tick SEQUENCE (doc 07 §3.4):
+	// the tracker accumulates across ticks exactly as live did, and resets at
+	// every run-start frame — the live process restart that emptied it.
+	tracker := detect.NewCascadeTracker(m.FPParams.CooccurrenceWindow)
 
 	segs, err := qss.ListSegments(filepath.Join(opts.BundleDir, segmentsDir))
 	if err != nil {
@@ -126,9 +130,11 @@ func Run(opts Options) (*Report, error) {
 			switch f.Kind {
 			case qss.FrameRunStart:
 				// A process-run boundary: live evaluation restarted with empty
-				// rings and a fresh stream registry; the reconstruction must too,
-				// or replay would evaluate pre-restart samples live never saw.
+				// rings, a fresh stream registry, and an empty cascade tracker;
+				// the reconstruction must too, or replay would evaluate
+				// pre-restart state live never saw.
 				reader.reset()
+				tracker.Reset()
 				rep.Runs++
 			case qss.FrameDef:
 				idxDef[f.Idx] = f.Def
@@ -145,7 +151,7 @@ func Run(opts Options) (*Report, error) {
 				if err := json.Unmarshal(f.Payload, &rec); err != nil {
 					return fmt.Errorf("tick frame: %w", err)
 				}
-				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets)
+				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets, tracker)
 				if err != nil {
 					return err
 				}
@@ -177,10 +183,11 @@ type barsEpoch struct {
 // selected (Tier-A) entities, and compare digests.
 func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 	rules map[string]*graph.ThresholdRule, matcher *detect.Matcher, reader *bundleReader, m Manifest,
-	budgets map[identity.EdgeType]time.Duration) (TickOutcome, error) {
+	budgets map[identity.EdgeType]time.Duration, tracker *detect.CascadeTracker) (TickOutcome, error) {
 
 	var fps []observe.Fingerprint
 	var findings []detect.Finding
+	var cascades []detect.Cascade
 	if rec.BarsEpoch > 0 {
 		ep, ok := bars[rec.BarsEpoch]
 		if !ok {
@@ -225,8 +232,12 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		}
 		w := identity.TimeWindow{Start: rec.EvalNow.Add(-m.FPParams.CooccurrenceWindow), End: rec.EvalNow}
 		findings = matcher.Match(fps, ep.selected, topo, w)
+		// Cascades (07 M5): recognize against the tracker's window, THEN
+		// observe this tick — the same order live evaluation uses.
+		cascades = matcher.Cascades(rec.EvalNow, findings, tracker, topo, w)
+		tracker.Observe(rec.EvalNow, findings)
 	}
-	digest, canonical, err := Digest(rec.EvalNow, fps, findings)
+	digest, canonical, err := Digest(rec.EvalNow, fps, findings, cascades)
 	if err != nil {
 		return TickOutcome{}, err
 	}

@@ -88,8 +88,22 @@ func psiBinding() binding.Binding {
 	}
 }
 
+// oomBinding: the cgroup OOM-kill guard (07 M5) — the downstream half of the
+// authored MEMORY_LEAK -> OOM_KILL_CGROUP relation the fixture exercises.
+func oomBinding() binding.Binding {
+	return binding.Binding{
+		CEIKey: podCEI, RoleKey: "r|cl|shop|Deployment|web", Entity: "Container", Container: "web",
+		RuleID: "THR_CONTAINER_OOM_EVENTS", Metric: "container_oom_events_total",
+		State: binding.StateBound, Validation: binding.ValidationSuspect,
+		Bar: &binding.ResolvedBar{
+			Kind: "rate-of-change", Source: binding.SourceDefault, Flagged: true,
+			Value: 1, Unit: "count", Direction: "above", Window: "15m", ResolvedAt: base,
+		},
+	}
+}
+
 func fixtureBindings() []binding.Binding {
-	return []binding.Binding{leakBinding(), throttleBinding(), psiBinding()}
+	return []binding.Binding{leakBinding(), throttleBinding(), psiBinding(), oomBinding()}
 }
 
 func leakDef() qss.StreamDef {
@@ -120,6 +134,14 @@ func psiDef() qss.StreamDef {
 	return qss.StreamDef{
 		ID: nodeCEI + "|node_pressure_cpu_waiting_seconds_total", CEIKey: nodeCEI, UID: "nodeuid-1",
 		Kind: "Node", Metric: "node_pressure_cpu_waiting_seconds_total", Type: "counter",
+		Node: "n1", Cadence: "scrape",
+	}
+}
+
+func oomDef() qss.StreamDef {
+	return qss.StreamDef{
+		ID: podCEI + "|container_oom_events_total", CEIKey: podCEI, UID: "poduid-1/web",
+		Kind: "Container", Metric: "container_oom_events_total", Type: "counter",
 		Node: "n1", Cadence: "scrape",
 	}
 }
@@ -171,8 +193,9 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 	matcher := detect.NewMatcher(g)
 	res := &binding.Result{Bindings: fixtureBindings()}
 	selected := selection.TierASet(res, g)
+	tracker := detect.NewCascadeTracker(fpParams().CooccurrenceWindow)
 	live := newBundleReader() // the in-memory "live" view (same read semantics as the Ingestor)
-	defs := []qss.StreamDef{leakDef(), throttledDef(), periodsDef(), psiDef()}
+	defs := []qss.StreamDef{leakDef(), throttledDef(), periodsDef(), psiDef(), oomDef()}
 	for _, d := range defs {
 		live.register(d)
 	}
@@ -202,6 +225,13 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 		if i == tamperRound {
 			captured = val - float64(20<<20) // the disk copy lies by -20Mi
 		}
+		// The OOM counter increments at round 6: the authored MEMORY_LEAK ->
+		// OOM_KILL_CGROUP relation then recognizes as a CASCADE (07 M5) — the
+		// leak fired earlier ticks on the same entity, inside the window.
+		oom := 0.0
+		if i >= 6 {
+			oom = 1.0
+		}
 		samples := []struct {
 			def  qss.StreamDef
 			live float64
@@ -213,6 +243,7 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 			{periodsDef(), float64(15 * i), float64(15 * i)},
 			// Node PSI: +3 stall-seconds per 15s scrape = 0.2/s >> 0.10.
 			{psiDef(), float64(3 * i), float64(3 * i)},
+			{oomDef(), oom, oom},
 		}
 		for _, s := range samples {
 			live.hot.Append(s.def.ID, qss.Sample{At: recv, Value: s.live})
@@ -230,7 +261,9 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 		w := identity.TimeWindow{Start: evalNow.Add(-fpParams().CooccurrenceWindow), End: evalNow}
 		fps := observe.Materialize(res, rules, live, fpParams(), evalNow)
 		findings := matcher.Match(fps, selected, topo, w)
-		digest, _, derr := Digest(evalNow, fps, findings)
+		cascades := matcher.Cascades(evalNow, findings, tracker, topo, w)
+		tracker.Observe(evalNow, findings)
+		digest, _, derr := Digest(evalNow, fps, findings, cascades)
 		if derr != nil {
 			t.Fatalf("digest: %v", derr)
 		}
@@ -279,8 +312,8 @@ func TestBundleReplaysByteIdentical(t *testing.T) {
 	if len(rep.Ticks) != len(recs) {
 		t.Errorf("ticks replayed = %d, want %d", len(rep.Ticks), len(recs))
 	}
-	if rep.Samples != 32 || rep.Streams != 4 {
-		t.Errorf("samples=%d streams=%d, want 32/4", rep.Samples, rep.Streams)
+	if rep.Samples != 40 || rep.Streams != 5 {
+		t.Errorf("samples=%d streams=%d, want 40/5", rep.Samples, rep.Streams)
 	}
 	if rep.TopologyLess {
 		t.Error("a topology-recording bundle must not report TopologyLess")
@@ -302,15 +335,29 @@ func TestBundleReplaysByteIdentical(t *testing.T) {
 	if err != nil || len(ticksOut) == 0 {
 		t.Fatalf("canonical tick output missing: %v %v", ticksOut, err)
 	}
-	sawCascade := false
+	sawFirstOrder, sawStory := false, false
 	for _, p := range ticksOut {
 		raw, _ := os.ReadFile(p)
-		if strings.Contains(string(raw), "PHEN_THROTTLING_CASCADE") && strings.Contains(string(raw), `"first-order"`) {
-			sawCascade = true
+		s := string(raw)
+		if strings.Contains(s, "PHEN_THROTTLING_CASCADE") && strings.Contains(s, `"first-order"`) {
+			sawFirstOrder = true
+		}
+		// The 07 M5 story: the authored MEMORY_LEAK -> OOM_KILL_CGROUP relation
+		// recognized as one cascade, in the replayed canonical bytes.
+		var tr TickResult
+		if json.Unmarshal(raw, &tr) == nil {
+			for _, c := range tr.Cascades {
+				if c.Trigger.Phenomenon == "PHEN_MEMORY_LEAK" && c.Downstream.Phenomenon == "PHEN_OOM_KILL_CGROUP" {
+					sawStory = true
+				}
+			}
 		}
 	}
-	if !sawCascade {
+	if !sawFirstOrder {
 		t.Error("the replayed output must contain the first-order THROTTLING_CASCADE finding (span path included)")
+	}
+	if !sawStory {
+		t.Error("the replayed output must contain the recognized MEMORY_LEAK -> OOM_KILL_CGROUP cascade")
 	}
 }
 
@@ -410,12 +457,12 @@ func TestFixtureBundleReplays(t *testing.T) {
 // vs its replay), and the digest is sensitive to every component.
 func TestDigestCanonicalization(t *testing.T) {
 	at := base
-	dNil, _, _ := Digest(at, nil, nil)
-	dEmpty, _, _ := Digest(at, []observe.Fingerprint{}, []detect.Finding{})
+	dNil, _, _ := Digest(at, nil, nil, nil)
+	dEmpty, _, _ := Digest(at, []observe.Fingerprint{}, []detect.Finding{}, []detect.Cascade{})
 	if dNil != dEmpty {
 		t.Error("nil and empty must digest identically")
 	}
-	dOther, _, _ := Digest(at.Add(time.Nanosecond), nil, nil)
+	dOther, _, _ := Digest(at.Add(time.Nanosecond), nil, nil, nil)
 	if dOther == dNil {
 		t.Error("digest must be sensitive to the evaluation instant")
 	}
@@ -427,7 +474,7 @@ func TestDigestCanonicalization(t *testing.T) {
 func TestDigestNonFiniteIsErrorNotPanic(t *testing.T) {
 	var z float64
 	fp := observe.Fingerprint{CEIKey: "x", Thresholds: []observe.VariableThreshold{{Value: z / z}}}
-	if _, _, err := Digest(base, []observe.Fingerprint{fp}, nil); err == nil {
+	if _, _, err := Digest(base, []observe.Fingerprint{fp}, nil, nil); err == nil {
 		t.Fatal("a NaN in a fingerprint must surface as a digest error")
 	}
 }
@@ -468,6 +515,11 @@ func TestRestartContinuationReplays(t *testing.T) {
 		}
 		live := newBundleReader() // fresh per run — the restart's empty rings
 		live.register(def)
+		// Fresh tracker per run: a process restart empties the cascade memory;
+		// the engine mirrors this at every run-start frame.
+		res := &binding.Result{Bindings: []binding.Binding{leakBinding()}}
+		selected := selection.TierASet(res, g)
+		tracker := detect.NewCascadeTracker(fpParams().CooccurrenceWindow)
 		for i := 0; i < n; i++ {
 			recv := base.Add(offset + time.Duration(i)*15*time.Second)
 			val := float64((110 + 4*i) << 20)
@@ -476,12 +528,14 @@ func TestRestartContinuationReplays(t *testing.T) {
 				t.Fatal(err)
 			}
 			evalNow := recv.Add(time.Second)
-			fps := observe.Materialize(&binding.Result{Bindings: []binding.Binding{leakBinding()}}, rules, live, fpParams(), evalNow)
-			var findings []detect.Finding
-			for _, fp := range fps {
-				findings = append(findings, matcher.MatchFingerprint(fp)...)
-			}
-			digest, _, derr := Digest(evalNow, fps, findings)
+			w := identity.TimeWindow{Start: evalNow.Add(-fpParams().CooccurrenceWindow), End: evalNow}
+			fps := observe.Materialize(res, rules, live, fpParams(), evalNow)
+			// This bundle predates topology recording (no budget pin), so the
+			// engine evaluates with nil topology — the live sim must too.
+			findings := matcher.Match(fps, selected, nil, w)
+			cascades := matcher.Cascades(evalNow, findings, tracker, nil, w)
+			tracker.Observe(evalNow, findings)
+			digest, _, derr := Digest(evalNow, fps, findings, cascades)
 			if derr != nil {
 				t.Fatal(derr)
 			}

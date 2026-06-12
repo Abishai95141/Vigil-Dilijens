@@ -14,10 +14,14 @@ import (
 
 // TickResult is the canonical serialization of one evaluation tick's complete
 // deterministic output — the unit the replay guarantee is stated over.
+// Cascades are part of it (doc 07 §3.4/M5): recognition is windowed over the
+// tick SEQUENCE, and replay reproduces the sequence, so the stories must
+// reproduce byte-identically too.
 type TickResult struct {
 	EvalNow      time.Time             `json:"eval_now"`
 	Fingerprints []observe.Fingerprint `json:"fingerprints"`
 	Findings     []detect.Finding      `json:"findings"`
+	Cascades     []detect.Cascade      `json:"cascades"`
 }
 
 // Digest computes the canonical digest of one tick's output: sha256 over the
@@ -31,14 +35,17 @@ type TickResult struct {
 // them; this is defence in depth) surfaces as an error — handled by the caller
 // (live: tick stated as uncapturable; replay: the run fails loudly) — never a
 // panic in a long-running daemon and never a silently wrong digest.
-func Digest(evalNow time.Time, fps []observe.Fingerprint, findings []detect.Finding) (string, []byte, error) {
+func Digest(evalNow time.Time, fps []observe.Fingerprint, findings []detect.Finding, cascades []detect.Cascade) (string, []byte, error) {
 	if fps == nil {
 		fps = []observe.Fingerprint{}
 	}
 	if findings == nil {
 		findings = []detect.Finding{}
 	}
-	canonical, err := json.Marshal(TickResult{EvalNow: evalNow, Fingerprints: fps, Findings: findings})
+	if cascades == nil {
+		cascades = []detect.Cascade{}
+	}
+	canonical, err := json.Marshal(TickResult{EvalNow: evalNow, Fingerprints: fps, Findings: findings, Cascades: cascades})
 	if err != nil {
 		return "", nil, fmt.Errorf("replay: canonical encoding: %w", err)
 	}

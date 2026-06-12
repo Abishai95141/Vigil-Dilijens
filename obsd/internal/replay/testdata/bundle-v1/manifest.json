@@ -2,7 +2,7 @@
   "bundle_version": 1,
   "created_at": "2026-06-11T12:00:00Z",
   "cluster_id": "test-cluster",
-  "graph_version": "sha256:76fc6dc3f30b3c94a533a87c99aba0c092ecbcf1f1e0e2217087f84142fb43d7",
+  "graph_version": "sha256:337eff7382755464ecae551c32fc1c1447f0cc80f12d5b978abafa2edcee16be",
   "params_version": "0",
   "profile": "dev",
   "fp_params": {

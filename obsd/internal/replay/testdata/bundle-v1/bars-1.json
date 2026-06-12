@@ -82,6 +82,33 @@
         "Source": "",
         "CollectionMethod": ""
       }
+    },
+    {
+      "CEIKey": "i|cl|shop|Pod|web-a|poduid-1",
+      "RoleKey": "r|cl|shop|Deployment|web",
+      "Entity": "Container",
+      "Container": "web",
+      "RuleID": "THR_CONTAINER_OOM_EVENTS",
+      "Metric": "container_oom_events_total",
+      "State": "bound",
+      "Validation": "suspect",
+      "Reason": "",
+      "Bar": {
+        "Kind": "rate-of-change",
+        "Source": "default",
+        "Flagged": true,
+        "ConfigPath": "",
+        "Factor": 0,
+        "Value": 1,
+        "Unit": "count",
+        "Direction": "above",
+        "Window": "15m",
+        "ResolvedAt": "2026-06-11T12:00:00Z"
+      },
+      "Emission": {
+        "Source": "",
+        "CollectionMethod": ""
+      }
     }
   ]
 }
