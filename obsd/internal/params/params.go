@@ -61,6 +61,7 @@ type Params struct {
 	Scrape      ScrapeParams      `yaml:"scrape"`
 	Identity    IdentityParams    `yaml:"identity"`
 	Observation ObservationParams `yaml:"observation"`
+	Detection   DetectionParams   `yaml:"detection"`
 	Store       StoreParams       `yaml:"store"`
 	Binding     BindingParams     `yaml:"binding"`
 	Selection   SelectionParams   `yaml:"selection"`
@@ -94,6 +95,24 @@ type ObservationParams struct {
 	DefaultCooccurrenceWindow Duration `yaml:"default_cooccurrence_window"`
 	WellAboveFactor           float64  `yaml:"well_above_factor"`
 	AtThresholdBand           float64  `yaml:"at_threshold_band"`
+}
+
+// DetectionParams — doc 07 §3.6: the sensitivity parameters. How strict a match
+// must be is tunable, never hard-coded; the shipped DEFAULTS are justified by
+// precision/recall on the labeled replay corpus (07 M6 / 11 M4) — the evidence
+// is corpus/labels/calibration-07M6.md. Both values are digest-bearing and ride
+// the replay-bundle manifest (a capture replays under ITS regime, never the
+// local file's).
+type DetectionParams struct {
+	// MinCompleteness is the span-completeness threshold for degraded surfacing
+	// (doc 07 §3.6): a degraded match whose required-member completeness falls
+	// below it does not surface. 0 = every anchored degraded match surfaces (the
+	// anchor-evidence rule remains the structural noise gate).
+	MinCompleteness float64 `yaml:"min_completeness"`
+	// CascadeWindow is how far back a trigger finding may lie and still pair
+	// with a downstream finding into one cascade (doc 07 §3.4). Per-relation
+	// widths are future authoring; one global width for now, stated.
+	CascadeWindow Duration `yaml:"cascade_window"`
 }
 
 // StoreParams — doc 05 §3.1 + doc 14 §2.3.
@@ -207,6 +226,10 @@ func (p Params) Validate() error {
 	if p.Observation.AtThresholdBand < 0 || p.Observation.AtThresholdBand >= 1.0 {
 		errs = append(errs, fmt.Errorf("observation.at_threshold_band must be in [0, 1.0), got %v", p.Observation.AtThresholdBand))
 	}
+	if p.Detection.MinCompleteness < 0 || p.Detection.MinCompleteness >= 1.0 {
+		errs = append(errs, fmt.Errorf("detection.min_completeness must be in [0, 1.0), got %v", p.Detection.MinCompleteness))
+	}
+	positive("detection.cascade_window", p.Detection.CascadeWindow)
 	if p.Selection.TierBBudgetPerCycle <= 0 {
 		errs = append(errs, fmt.Errorf("selection.tier_b_budget_per_cycle must be > 0, got %d", p.Selection.TierBBudgetPerCycle))
 	}

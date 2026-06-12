@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 )
 
@@ -14,8 +15,18 @@ import (
 // its match quality, the per-member evidence with the AUTHORED note (the only
 // "why"), and what was unobservable. A single crossing is not here — only matched
 // phenomena surface (doc 07 §3.5).
-func renderFindings(w io.Writer, findings []detect.Finding) {
+func renderFindings(w io.Writer, findings []detect.Finding, obs *binding.ObservabilityReport) {
 	const bar = "================================================================================"
+	// Binding-time observability per phenomenon (doc 04 M5): the pre-declared
+	// "this phenomenon can only ever match degraded here" honesty, JOINED AT THE
+	// SCREEN (doc 01: classes presented adjacently at the surfacing layer) —
+	// the deterministic finding itself never carries availability state.
+	declared := map[string]binding.PhenomenonCoverage{}
+	if obs != nil {
+		for _, pc := range obs.PerPhenomenon {
+			declared[pc.PhenomenonID] = pc
+		}
+	}
 	fmt.Fprintln(w, bar)
 	if len(findings) == 0 {
 		fmt.Fprintln(w, " detection (doc 07, entity-local + first-order) — no phenomena matched this tick")
@@ -52,6 +63,13 @@ func renderFindings(w io.Writer, findings []detect.Finding) {
 		}
 		for _, u := range f.Unobservable {
 			fmt.Fprintf(w, "      ! unobservable required member: %s\n", u)
+		}
+		for _, g := range f.SupportingGaps {
+			fmt.Fprintf(w, "      ~ unobservable supporting member: %s\n", g)
+		}
+		if pc, ok := declared[f.Phenomenon]; ok && pc.Observability != "full" && f.Quality == detect.QualityDegraded {
+			fmt.Fprintf(w, "    pre-declared (binding-time): this phenomenon can only ever match DEGRADED on this cluster (%d/%d required members obtainable)\n",
+				pc.RequiredObtainable, pc.RequiredTotal)
 		}
 		for _, step := range f.SpanPath {
 			fmt.Fprintf(w, "    span path: %s ─%s→ %s  [%s]\n", ceiHuman(step.From), step.Type, ceiHuman(step.To), step.Result)

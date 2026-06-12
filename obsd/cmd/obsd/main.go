@@ -197,6 +197,8 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		Band:               p.Observation.AtThresholdBand,
 		WellAboveFactor:    p.Observation.WellAboveFactor,
 		CooccurrenceWindow: p.Observation.DefaultCooccurrenceWindow.Duration(),
+		MinCompleteness:    p.Detection.MinCompleteness,
+		CascadeWindow:      p.Detection.CascadeWindow.Duration(),
 	}
 
 	// Replay capture (doc 05 M5, doc 14 §2.3): the qss warm tier + bundle writer.
@@ -437,7 +439,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// (doc 06 provides the Tier-A set to detection), then cascade
 			// recognition over the authored relations (doc 07 M5).
 			findings = bnd.detectFindings(fps, selected, topo, evalWindow)
-			renderFindings(out, findings)
+			renderFindings(out, findings, bnd.lastObs)
 			cascades = bnd.cascades(now, findings, topo, evalWindow)
 			renderCascades(out, cascades)
 			// Surfacing (doc 10 M1): publish the Coverage Report snapshot the API

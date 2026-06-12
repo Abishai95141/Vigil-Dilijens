@@ -95,6 +95,15 @@ type Finding struct {
 	Members      []MemberEvidence // the evidence trail (required + observed supporting)
 	Unobservable []string         // required members that could not be checked here
 
+	// SupportingGaps enumerates supporting members that HAVE an authored check
+	// but whose variable was absent/stale here (doc 07 §3.3: degraded-match
+	// honesty extends to the strengthening evidence — a gap is named, never
+	// silently uncounted). Quality stays keyed to required coverage + path
+	// validity; supporting gaps are honesty metadata, not quality-bearing
+	// (the M4 policy decision, stated).
+	SupportingGaps       []string
+	SupportingUnobserved int
+
 	// Span instantiation (doc 07 §3.8) — spanned findings only.
 	Span         string     // entity-local | first-order | second-order
 	SpanPath     []EdgeStep // every edge evidence actually crossed, with verdicts
@@ -119,6 +128,13 @@ type Matcher struct {
 	firstOrder  int                                      // census: spanned with depth 1
 	secondOrder int                                      // census: spanned with depth 2
 	downstream  map[string][]downstreamRef               // phen -> declared downstream phenomena (07 M5)
+
+	// MinCompleteness is the span-completeness threshold for degraded surfacing
+	// (doc 07 §3.6, an M6-calibrated sensitivity parameter): a degraded match
+	// whose required-member completeness falls below it does not surface. Set it
+	// once, before the first Match, from the PINNED parameter set (live: the
+	// params file; replay: the bundle manifest) — it is digest-bearing.
+	MinCompleteness float64
 }
 
 // NewMatcher indexes the graph's phenomena, their authored checks, and the
@@ -321,14 +337,19 @@ func (m *Matcher) evalPhenomenon(p *graph.Phenomenon, fp observe.Fingerprint) (F
 				}
 				f.Unobservable = append(f.Unobservable, label)
 			}
-		} else {
-			// Supporting member: strengthens, never required.
-			if check != nil {
+		} else if check != nil {
+			// Supporting member: strengthens, never required. A checked-but-
+			// unobservable supporting member is a NAMED gap (M4) — previously it
+			// was silently counted as observable.
+			if ev.Observable {
 				f.SupportingObservble++
 				if ev.Met {
 					f.SupportingMet++
 					f.Members = append(f.Members, ev)
 				}
+			} else {
+				f.SupportingUnobserved++
+				f.SupportingGaps = append(f.SupportingGaps, unobservableLabel(mem, ev.Metric, ev.Note))
 			}
 		}
 	}
@@ -345,6 +366,12 @@ func (m *Matcher) evalPhenomenon(p *graph.Phenomenon, fp observe.Fingerprint) (F
 		f.Quality = QualityFull
 	} else {
 		f.Quality = QualityDegraded
+	}
+	// Degraded-surfacing threshold (doc 07 §3.6, M4/M6): below the calibrated
+	// completeness floor a degraded match does not surface — a sensitivity
+	// policy from the PINNED parameter set, never a hard-coded judgement.
+	if f.Quality == QualityDegraded && f.Completeness < m.MinCompleteness {
+		return Finding{}, false
 	}
 	return f, true
 }
@@ -568,6 +595,9 @@ func (m *Matcher) evalSpanned(p *graph.Phenomenon, fp observe.Fingerprint, index
 					f.SupportingMet++
 					f.Members = append(f.Members, ev)
 				}
+			} else {
+				f.SupportingUnobserved++
+				f.SupportingGaps = append(f.SupportingGaps, unobservableLabel(mem, ev.Metric, note))
 			}
 			continue
 		}
@@ -659,6 +689,12 @@ func (m *Matcher) evalSpanned(p *graph.Phenomenon, fp observe.Fingerprint, index
 					reason = walkNote
 				}
 				f.Unobservable = append(f.Unobservable, unobservableLabel(mem, check.Metric, note)+" ["+reason+"]")
+			} else {
+				// A checked supporting member unreachable across the span is a
+				// NAMED gap too (M4) — strengthening evidence that could not be
+				// looked for, never silently uncounted.
+				f.SupportingUnobserved++
+				f.SupportingGaps = append(f.SupportingGaps, unobservableLabel(mem, check.Metric, note))
 			}
 		}
 	}
@@ -684,6 +720,11 @@ func (m *Matcher) evalSpanned(p *graph.Phenomenon, fp observe.Fingerprint, index
 		f.Quality = QualityFull
 	} else {
 		f.Quality = QualityDegraded
+	}
+	// Degraded-surfacing threshold (doc 07 §3.6, M4/M6): below the calibrated
+	// completeness floor a degraded match does not surface.
+	if f.Quality == QualityDegraded && f.Completeness < m.MinCompleteness {
+		return Finding{}, false
 	}
 	return f, true
 }

@@ -39,6 +39,17 @@ observation:                        # doc 05 + doc 14 §A3,A5,A6
                                     # "at-threshold" (doc 05 §3.4/§8 — a GLOBAL display convention,
                                     # not an authored bar; calibrated in 11 M4 like well_above).
 
+detection:                          # doc 07 §3.6 — sensitivity parameters (07 M4/M6)
+  min_completeness: 0.0             # degraded matches below this required-completeness do not
+                                    # surface. CALIBRATED 0 (permissive): on the labeled corpus
+                                    # precision is already 1.0 at 0 (the anchor-evidence rule
+                                    # carries the FP defence) while any positive threshold costs
+                                    # recall on sparsely-checked phenomena (e.g. OOM_KILL_CGROUP at
+                                    # 1/8 required observable) — corpus/labels/calibration-07M6.md.
+  cascade_window: 10m               # trigger→downstream pairing window (doc 07 §3.4); matches the
+                                    # default co-occurrence window until per-relation widths are
+                                    # authored. Digest-bearing; pinned in the replay manifest.
+
 store:                              # doc 05 §3.1 + doc 14 §2.3 — the "qss"
   hot_ring: 60m                     # in-memory ring capacity; the ONLY hot-path read surface
   warm_retention: 168h              # 7d on-disk segments (covers max TimesFM context with margin)

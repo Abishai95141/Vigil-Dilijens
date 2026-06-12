@@ -227,3 +227,80 @@ func TestCascadesDeterministic(t *testing.T) {
 		t.Error("Cascades is not deterministic")
 	}
 }
+
+// The degraded-surfacing floor (doc 07 §3.6, M4/M6): a degraded match below the
+// calibrated completeness threshold does not surface; a FULL match is never
+// subject to it; floor 0 surfaces every anchored degraded match.
+func TestMinCompletenessPolicy(t *testing.T) {
+	g := loadGraph(t)
+	topo := cascadeTopo(t)
+
+	// MEMORY_LEAK fires degraded at completeness 0.5 (1 of 2 required checked).
+	at := func(floor float64) *Finding {
+		m := NewMatcher(g)
+		m.MinCompleteness = floor
+		return findPhen(m.Match([]observe.Fingerprint{leakingFP(evalAt)}, nil, topo, w), "PHEN_MEMORY_LEAK")
+	}
+	if at(0) == nil {
+		t.Fatal("floor 0 must surface the degraded leak")
+	}
+	if at(0.5) == nil {
+		t.Error("completeness 0.5 meets a 0.5 floor (>=) and must surface")
+	}
+	if at(0.6) != nil {
+		t.Error("completeness 0.5 under a 0.6 floor must NOT surface")
+	}
+
+	// A FULL match is never floor-gated: the throttling-cascade pair at 100%.
+	m := NewMatcher(g)
+	m.MinCompleteness = 0.99
+	full := observe.Fingerprint{
+		CEIKey: csPodKey, Namespace: "shop", Name: "web-a", Kind: "Container", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_CONTAINER_CPU_THROTTLE_RATIO", Metric: "container_cpu_cfs_throttled_periods_total",
+			State: observe.StateAbove, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-r", SampleAt: evalAt, How: "counter-ratio"},
+		}},
+	}
+	psi := observe.Fingerprint{
+		CEIKey: csNodeKey, Name: "worker-1", Kind: "Node", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_NODE_CPU_PSI_STALL", Metric: "node_pressure_cpu_waiting_seconds_total",
+			State: observe.StateAbove, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-p", SampleAt: evalAt, How: "counter-rate"},
+		}},
+	}
+	f := findPhen(m.Match([]observe.Fingerprint{full, psi}, nil, topo, w), "PHEN_THROTTLING_CASCADE")
+	if f == nil || f.Quality != QualityFull {
+		t.Errorf("a FULL match must surface regardless of the floor: %+v", f)
+	}
+}
+
+// M4: a checked-but-unobservable SUPPORTING member is a NAMED gap on the
+// finding — never silently uncounted (quality stays keyed to required
+// coverage, the stated policy).
+func TestSupportingGapNamed(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	topo := cascadeTopo(t)
+	// STORAGE_SATURATION's PVC member (supporting role) is checked but no PVC
+	// fingerprint exists: the gap must be named on the finding.
+	nodeFP := observe.Fingerprint{
+		CEIKey: csNodeKey, Name: "worker-1", Kind: "Node", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_NODE_IO_PSI_STALL", Metric: "node_pressure_io_waiting_seconds_total",
+			State: observe.StateAbove, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-io", SampleAt: evalAt, How: "counter-rate"},
+		}},
+	}
+	f := findPhen(m.Match([]observe.Fingerprint{nodeFP}, nil, topo, w), "PHEN_STORAGE_SATURATION")
+	if f == nil {
+		t.Fatal("STORAGE_SATURATION should fire degraded at the node")
+	}
+	if f.SupportingUnobserved == 0 || len(f.SupportingGaps) != f.SupportingUnobserved {
+		t.Errorf("the checked-but-unreachable PVC supporting member must be a NAMED gap: unobs=%d gaps=%v",
+			f.SupportingUnobserved, f.SupportingGaps)
+	}
+	if f.Quality != QualityDegraded {
+		t.Errorf("quality stays keyed to required coverage: %s", f.Quality)
+	}
+}

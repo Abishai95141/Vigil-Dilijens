@@ -54,7 +54,7 @@ func (b *binder) cascades(now time.Time, findings []detect.Finding, topo detect.
 		return nil
 	}
 	if b.tracker == nil {
-		b.tracker = detect.NewCascadeTracker(b.fpParams.CooccurrenceWindow)
+		b.tracker = detect.NewCascadeTracker(b.fpParams.EffectiveCascadeWindow())
 	}
 	cs := b.matcher.Cascades(now, findings, b.tracker, topo, w)
 	b.tracker.Observe(now, findings)
@@ -77,6 +77,9 @@ func (b *binder) detectFindings(fps []observe.Fingerprint, selected map[string][
 	}
 	if b.matcher == nil {
 		b.matcher = detect.NewMatcher(b.graph)
+		// The M6-calibrated degraded-surfacing floor, from the pinned parameter
+		// set (doc 07 §3.6) — set once, before the first Match.
+		b.matcher.MinCompleteness = b.fpParams.MinCompleteness
 	}
 	return b.matcher.Match(fps, selected, topo, w)
 }

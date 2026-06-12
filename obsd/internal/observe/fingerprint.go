@@ -19,6 +19,8 @@ import (
 // stays exact. Everything here is MEASURED-class arithmetic; nothing learns.
 
 // FPParams are the evaluation constants (from the params file, doc 14 §5).
+// Every field is DIGEST-BEARING: a replay bundle pins the whole set in its
+// manifest and replays under the capture's regime, never the local file's.
 type FPParams struct {
 	ScrapeInterval     time.Duration
 	RateWindow         time.Duration
@@ -26,6 +28,23 @@ type FPParams struct {
 	Band               float64 // at-threshold approach band
 	WellAboveFactor    float64
 	CooccurrenceWindow time.Duration
+
+	// Detection sensitivity (doc 07 §3.6, calibrated by 07 M6 / 11 M4):
+	// MinCompleteness gates degraded surfacing; CascadeWindow bounds
+	// trigger→downstream pairing (0 = fall back to CooccurrenceWindow, the
+	// pre-M6 regime old bundles captured under).
+	MinCompleteness float64
+	CascadeWindow   time.Duration
+}
+
+// EffectiveCascadeWindow resolves the cascade-pairing window: the calibrated
+// CascadeWindow when set, else the co-occurrence window (the regime bundles
+// captured before 07 M6 ran under — replay must honour it, stated).
+func (p FPParams) EffectiveCascadeWindow() time.Duration {
+	if p.CascadeWindow > 0 {
+		return p.CascadeWindow
+	}
+	return p.CooccurrenceWindow
 }
 
 // StreamReader is the read-side of the observation store the materializer needs
