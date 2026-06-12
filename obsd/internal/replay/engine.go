@@ -15,6 +15,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
 )
 
 // Options configures one replay run.
@@ -137,6 +138,9 @@ func Run(opts Options) (*Report, error) {
 	// the tracker accumulates across ticks exactly as live did, and resets at
 	// every run-start frame — the live process restart that emptied it.
 	tracker := detect.NewCascadeTracker(regime.EffectiveCascadeWindow())
+	// The unexplained channel (doc 08) ages cards across windows the same way
+	// and resets at the same boundary; both are part of the digest.
+	unexpTracker := unexplained.NewTracker(opts.Graph.Version)
 
 	segs, err := qss.ListSegments(filepath.Join(opts.BundleDir, segmentsDir))
 	if err != nil {
@@ -167,6 +171,7 @@ func Run(opts Options) (*Report, error) {
 				// pre-restart state live never saw.
 				reader.reset()
 				tracker.Reset()
+				unexpTracker.Reset()
 				rep.Runs++
 			case qss.FrameDef:
 				idxDef[f.Idx] = f.Def
@@ -183,7 +188,7 @@ func Run(opts Options) (*Report, error) {
 				if err := json.Unmarshal(f.Payload, &rec); err != nil {
 					return fmt.Errorf("tick frame: %w", err)
 				}
-				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets, tracker, regime, rep.EvaluationMode)
+				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets, tracker, unexpTracker, regime, rep.EvaluationMode)
 				if err != nil {
 					return err
 				}
@@ -215,12 +220,13 @@ type barsEpoch struct {
 // selected (Tier-A) entities, and compare digests.
 func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 	rules map[string]*graph.ThresholdRule, matcher *detect.Matcher, reader *bundleReader, m Manifest,
-	budgets map[identity.EdgeType]time.Duration, tracker *detect.CascadeTracker,
+	budgets map[identity.EdgeType]time.Duration, tracker *detect.CascadeTracker, unexpTracker *unexplained.Tracker,
 	regime observe.FPParams, evalMode bool) (TickOutcome, error) {
 
 	var fps []observe.Fingerprint
 	var findings []detect.Finding
 	var cascades []detect.Cascade
+	var unexp []unexplained.Finding
 	if rec.BarsEpoch > 0 {
 		ep, ok := bars[rec.BarsEpoch]
 		if !ok {
@@ -269,8 +275,11 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		// observe this tick — the same order live evaluation uses.
 		cascades = matcher.Cascades(rec.EvalNow, findings, tracker, topo, w)
 		tracker.Observe(rec.EvalNow, findings)
+		// Unexplained channel (doc 08): loud-but-unmatched routing, after
+		// detection so the coverage check sees this tick's matches.
+		unexp = unexpTracker.Route(rec.EvalNow, fps, findings)
 	}
-	digest, canonical, err := Digest(rec.EvalNow, fps, findings, cascades)
+	digest, canonical, err := Digest(rec.EvalNow, fps, findings, cascades, unexp)
 	if err != nil {
 		return TickOutcome{}, err
 	}

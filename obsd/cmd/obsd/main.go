@@ -38,12 +38,23 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
 	fstore "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/store"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
 )
 
 // phase0aCoverageTarget is the join-coverage threshold for the Phase-0a exit gate.
 // Mis-joins must be zero regardless; coverage tolerates transient observe lag.
 const phase0aCoverageTarget = 0.99
+
+// Curation-feedback thresholds (doc 08 §3.6 / §8 open question): a recurring
+// unexplained signature surfaces as a candidate-phenomenon report once it has
+// persisted this many evaluation windows OR appeared on this many distinct
+// entities — recurrence across TIME or across ENTITIES is each a growth signal.
+// Off the deterministic path; tunable policy, held here until governance owns it.
+const (
+	unexplainedCurationWindows  = 20 // ~5 min at the 15s dev tick
+	unexplainedCurationEntities = 3
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -276,6 +287,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	}
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
+	// The unexplained-channel snapshot (doc 08), published each tick like coverage —
+	// off the deterministic path, race-free via the atomic.
+	var unexpView atomic.Pointer[vapi.UnexplainedView]
 
 	// The store gate: scrape cycles write under the write lock; evaluation ticks
 	// read under the read lock. Ticks therefore always observe whole scrape
@@ -288,17 +302,18 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var providers *vapi.Providers
 	if apiEnabled {
 		providers = &vapi.Providers{
-			Coverage: func() *vapi.CoverageView { return coverage.Load() },
+			Coverage:    func() *vapi.CoverageView { return coverage.Load() },
+			Unexplained: func() *vapi.UnexplainedView { return unexpView.Load() },
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
 		}
-		logger.Info("operator surfacing API enabled (doc 10 M1)", "routes", "/api/coverage /api/findings")
+		logger.Info("operator surfacing API enabled (doc 10 M1)", "routes", "/api/coverage /api/findings /api/unexplained")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
-		capture, &coverage, findingsStore, budgets)
+		capture, &coverage, &unexpView, findingsStore, budgets)
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -347,7 +362,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -396,6 +411,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		var fps []observe.Fingerprint
 		var findings []detect.Finding
 		var cascades []detect.Cascade
+		var unexp []unexplained.Finding
 		barsEpoch := 0
 		barsOK := true
 		// Topology snapshot (doc 07 M2/§3.7): ONE canonical snapshot per tick
@@ -442,11 +458,26 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			renderFindings(out, findings, bnd.lastObs)
 			cascades = bnd.cascades(now, findings, topo, evalWindow)
 			renderCascades(out, cascades)
+			// Unexplained channel (doc 08): loud-but-unmatched routing — the
+			// blind-spot patch, after detection so coverage sees this tick's
+			// matches. Part of the digest (windowed, deterministic).
+			unexp = bnd.routeUnexplained(now, fps, findings)
+			renderUnexplained(out, unexp, bnd.unexp)
 			// Surfacing (doc 10 M1): publish the Coverage Report snapshot the API
 			// serves, and persist the findings feed (A7). Off the deterministic
 			// path — failures are logged, never allowed to perturb the tick.
 			if coverage != nil {
 				coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, now, bd.Result, bnd.lastObs, selResult))
+			}
+			// The unexplained-channel snapshot (doc 08): open cards + curation
+			// candidates + the residual blind-spot notice, surfaced to /api.
+			if unexpView != nil && bnd.unexp != nil {
+				unexpView.Store(&vapi.UnexplainedView{
+					GeneratedAt: now, GraphVersion: graphVersion,
+					OpenCards:  bnd.unexp.OpenCards(),
+					Candidates: bnd.unexp.Candidates(unexplainedCurationWindows, unexplainedCurationEntities),
+					BlindSpot:  unexplained.BlindSpotNotice,
+				})
 			}
 			if findingsStore != nil {
 				if err := findingsStore.UpsertFindings(now, findings); err != nil {
@@ -468,7 +499,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		}
 		// The tick digest: the canonical hash of this tick's complete deterministic
 		// output (doc 05 §3.5) — the value replay must reproduce byte-identically.
-		digest, _, derr := replay.Digest(now, fps, findings, cascades)
+		digest, _, derr := replay.Digest(now, fps, findings, cascades, unexp)
 		if derr != nil {
 			// Unreachable while the ingest gate drops non-finite values; if it ever
 			// fires, the tick is honestly uncapturable — stated, not invented.

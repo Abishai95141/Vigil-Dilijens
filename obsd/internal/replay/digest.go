@@ -10,18 +10,20 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
 )
 
 // TickResult is the canonical serialization of one evaluation tick's complete
 // deterministic output — the unit the replay guarantee is stated over.
-// Cascades are part of it (doc 07 §3.4/M5): recognition is windowed over the
-// tick SEQUENCE, and replay reproduces the sequence, so the stories must
-// reproduce byte-identically too.
+// Cascades (doc 07 §3.4/M5) and the unexplained channel (doc 08) are part of
+// it: both are windowed over the tick SEQUENCE, and replay reproduces the
+// sequence, so they must reproduce byte-identically too.
 type TickResult struct {
 	EvalNow      time.Time             `json:"eval_now"`
 	Fingerprints []observe.Fingerprint `json:"fingerprints"`
 	Findings     []detect.Finding      `json:"findings"`
 	Cascades     []detect.Cascade      `json:"cascades"`
+	Unexplained  []unexplained.Finding `json:"unexplained"`
 }
 
 // Digest computes the canonical digest of one tick's output: sha256 over the
@@ -35,7 +37,7 @@ type TickResult struct {
 // them; this is defence in depth) surfaces as an error — handled by the caller
 // (live: tick stated as uncapturable; replay: the run fails loudly) — never a
 // panic in a long-running daemon and never a silently wrong digest.
-func Digest(evalNow time.Time, fps []observe.Fingerprint, findings []detect.Finding, cascades []detect.Cascade) (string, []byte, error) {
+func Digest(evalNow time.Time, fps []observe.Fingerprint, findings []detect.Finding, cascades []detect.Cascade, unexp []unexplained.Finding) (string, []byte, error) {
 	if fps == nil {
 		fps = []observe.Fingerprint{}
 	}
@@ -45,7 +47,10 @@ func Digest(evalNow time.Time, fps []observe.Fingerprint, findings []detect.Find
 	if cascades == nil {
 		cascades = []detect.Cascade{}
 	}
-	canonical, err := json.Marshal(TickResult{EvalNow: evalNow, Fingerprints: fps, Findings: findings, Cascades: cascades})
+	if unexp == nil {
+		unexp = []unexplained.Finding{}
+	}
+	canonical, err := json.Marshal(TickResult{EvalNow: evalNow, Fingerprints: fps, Findings: findings, Cascades: cascades, Unexplained: unexp})
 	if err != nil {
 		return "", nil, fmt.Errorf("replay: canonical encoding: %w", err)
 	}

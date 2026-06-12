@@ -7,6 +7,7 @@ import (
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
 )
 
 // renderFindings writes the entity-local detection findings (doc 07) to w — the
@@ -109,6 +110,47 @@ func renderCascades(w io.Writer, cs []detect.Cascade) {
 		fmt.Fprintln(w, "    provenance: two MEASURED co-occurrences joined by an AUTHORED relation — adjacent, never fused; not a causal proof")
 	}
 	fmt.Fprintln(w)
+}
+
+// renderUnexplained writes the unexplained-anomaly channel (doc 08): loud
+// activity matching NO curated phenomenon, surfaced for human investigation with
+// NO causal claim — the absence of a reason is the point, kept visible. The
+// channel discloses its own residual blind spot (§3.2). MEASURED, never AUTHORED.
+func renderUnexplained(w io.Writer, cards []unexplained.Finding, tr *unexplained.Tracker) {
+	const bar = "================================================================================"
+	if len(cards) == 0 {
+		return
+	}
+	fmt.Fprintln(w, bar)
+	fmt.Fprintf(w, " unexplained channel (doc 08) — %d loud-but-unmatched card(s) [%s]\n", len(cards), unexplained.Mark)
+	for _, c := range cards {
+		ent := c.Name
+		if c.Namespace != "" {
+			ent = c.Namespace + "/" + c.Name
+		}
+		fmt.Fprintf(w, "\n  ◇ %s (%s)  [%s · seen %d window(s)]\n", ent, c.Kind, c.Status, c.Occurrences)
+		for _, s := range c.LoudStates {
+			prov := "config"
+			if s.Flagged {
+				prov = "default-flagged"
+			}
+			fmt.Fprintf(w, "      • loud: %s = %s (%s, bar:%s)\n", shortMetric(s.Metric), s.State, s.Kind, prov)
+		}
+		fmt.Fprintf(w, "    match check: %s\n", c.MatchCheck)
+		fmt.Fprintf(w, "    provenance: MEASURED · NOT a reason (this channel describes loudness, it never explains)\n")
+	}
+	// Candidate-phenomenon reports (doc 08 §3.6) — recurring unexplained patterns
+	// proposed for human curation; the system proposes, it never authors.
+	if tr != nil {
+		if cands := tr.Candidates(8, 3); len(cands) > 0 {
+			fmt.Fprintf(w, "\n  ⌬ curation feedback (doc 08 §3.6) — %d candidate-phenomenon report(s):\n", len(cands))
+			for _, cr := range cands {
+				fmt.Fprintf(w, "    · %s\n", cr.Rationale)
+			}
+		}
+	}
+	fmt.Fprintf(w, "  %s\n", unexplained.BlindSpotNotice)
+	fmt.Fprintln(w, bar)
 }
 
 // ceiHuman compacts a CEI key to ns/name (kind) for log lines.

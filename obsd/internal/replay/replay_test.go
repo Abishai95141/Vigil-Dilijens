@@ -15,6 +15,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
 )
 
 const (
@@ -194,6 +195,7 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 	res := &binding.Result{Bindings: fixtureBindings()}
 	selected := selection.TierASet(res, g)
 	tracker := detect.NewCascadeTracker(fpParams().CooccurrenceWindow)
+	unexpTracker := unexplained.NewTracker(g.Version)
 	live := newBundleReader() // the in-memory "live" view (same read semantics as the Ingestor)
 	defs := []qss.StreamDef{leakDef(), throttledDef(), periodsDef(), psiDef(), oomDef()}
 	for _, d := range defs {
@@ -263,7 +265,8 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 		findings := matcher.Match(fps, selected, topo, w)
 		cascades := matcher.Cascades(evalNow, findings, tracker, topo, w)
 		tracker.Observe(evalNow, findings)
-		digest, _, derr := Digest(evalNow, fps, findings, cascades)
+		unexp := unexpTracker.Route(evalNow, fps, findings)
+		digest, _, derr := Digest(evalNow, fps, findings, cascades, unexp)
 		if derr != nil {
 			t.Fatalf("digest: %v", derr)
 		}
@@ -457,12 +460,12 @@ func TestFixtureBundleReplays(t *testing.T) {
 // vs its replay), and the digest is sensitive to every component.
 func TestDigestCanonicalization(t *testing.T) {
 	at := base
-	dNil, _, _ := Digest(at, nil, nil, nil)
-	dEmpty, _, _ := Digest(at, []observe.Fingerprint{}, []detect.Finding{}, []detect.Cascade{})
+	dNil, _, _ := Digest(at, nil, nil, nil, nil)
+	dEmpty, _, _ := Digest(at, []observe.Fingerprint{}, []detect.Finding{}, []detect.Cascade{}, []unexplained.Finding{})
 	if dNil != dEmpty {
 		t.Error("nil and empty must digest identically")
 	}
-	dOther, _, _ := Digest(at.Add(time.Nanosecond), nil, nil, nil)
+	dOther, _, _ := Digest(at.Add(time.Nanosecond), nil, nil, nil, nil)
 	if dOther == dNil {
 		t.Error("digest must be sensitive to the evaluation instant")
 	}
@@ -474,7 +477,7 @@ func TestDigestCanonicalization(t *testing.T) {
 func TestDigestNonFiniteIsErrorNotPanic(t *testing.T) {
 	var z float64
 	fp := observe.Fingerprint{CEIKey: "x", Thresholds: []observe.VariableThreshold{{Value: z / z}}}
-	if _, _, err := Digest(base, []observe.Fingerprint{fp}, nil, nil); err == nil {
+	if _, _, err := Digest(base, []observe.Fingerprint{fp}, nil, nil, nil); err == nil {
 		t.Fatal("a NaN in a fingerprint must surface as a digest error")
 	}
 }
@@ -515,11 +518,12 @@ func TestRestartContinuationReplays(t *testing.T) {
 		}
 		live := newBundleReader() // fresh per run — the restart's empty rings
 		live.register(def)
-		// Fresh tracker per run: a process restart empties the cascade memory;
-		// the engine mirrors this at every run-start frame.
+		// Fresh trackers per run: a process restart empties the cascade and
+		// unexplained memories; the engine mirrors this at every run-start frame.
 		res := &binding.Result{Bindings: []binding.Binding{leakBinding()}}
 		selected := selection.TierASet(res, g)
 		tracker := detect.NewCascadeTracker(fpParams().CooccurrenceWindow)
+		unexpTracker := unexplained.NewTracker(g.Version)
 		for i := 0; i < n; i++ {
 			recv := base.Add(offset + time.Duration(i)*15*time.Second)
 			val := float64((110 + 4*i) << 20)
@@ -535,7 +539,8 @@ func TestRestartContinuationReplays(t *testing.T) {
 			findings := matcher.Match(fps, selected, nil, w)
 			cascades := matcher.Cascades(evalNow, findings, tracker, nil, w)
 			tracker.Observe(evalNow, findings)
-			digest, _, derr := Digest(evalNow, fps, findings, cascades)
+			unexp := unexpTracker.Route(evalNow, fps, findings)
+			digest, _, derr := Digest(evalNow, fps, findings, cascades, unexp)
 			if derr != nil {
 				t.Fatal(derr)
 			}

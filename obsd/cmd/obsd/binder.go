@@ -16,6 +16,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
 )
 
 // binder runs the discovery-time binding compilation (doc 04). Binding runs on
@@ -43,6 +44,22 @@ type binder struct {
 
 	matcher *detect.Matcher        // the phenomenon matcher (doc 07 M1–M3), built once
 	tracker *detect.CascadeTracker // windowed cascade memory (doc 07 M5); reset = process restart
+	unexp   *unexplained.Tracker   // the unexplained channel (doc 08); reset = process restart
+}
+
+// routeUnexplained runs the unexplained channel (doc 08): loud-but-unmatched
+// routing over this tick's fingerprints and findings, after detection so the
+// coverage check sees this tick's matches. The tracker ages/dedups across ticks
+// in-process (a process restart empties it, the replay engine resets at the
+// run boundary), so a captured tick's unexplained cards reproduce byte-identical.
+func (b *binder) routeUnexplained(now time.Time, fps []observe.Fingerprint, findings []detect.Finding) []unexplained.Finding {
+	if b == nil || b.graph == nil {
+		return nil
+	}
+	if b.unexp == nil {
+		b.unexp = unexplained.NewTracker(b.graph.Version)
+	}
+	return b.unexp.Route(now, fps, findings)
 }
 
 // cascades recognizes the authored relations currently manifest (doc 07 §3.4)
