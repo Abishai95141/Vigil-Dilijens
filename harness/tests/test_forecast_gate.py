@@ -143,3 +143,16 @@ def test_no_crossing_evidence_is_insufficient_even_with_good_coverage():
     v = gate(score_class(events, readings, METRIC))
     assert v.insufficient and not v.passed
     assert any("crossing evidence" in r for r in v.reasons)
+
+
+def test_band_membership_is_gated():
+    """The band is the promise: warnings whose band misses the realized
+    crossing fail the class even with perfect coverage and recall."""
+    events, readings = well_calibrated_events(MIN_SCORED_FORECASTS + 2)
+    for e in events:  # band closes long before the actual crossing
+        c = e["traces"][0]["candidate"]
+        c["latestAt"] = c["earliestAt"]
+        c["latestBeyondHorizon"] = False
+    v = gate(score_class(events, readings, METRIC))
+    assert not v.passed
+    assert any("in-band" in r for r in v.reasons)
