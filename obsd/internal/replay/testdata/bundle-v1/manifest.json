@@ -11,7 +11,9 @@
     "Watermark": 30000000000,
     "Band": 0.05,
     "WellAboveFactor": 1.1,
-    "CooccurrenceWindow": 600000000000
+    "CooccurrenceWindow": 600000000000,
+    "MinCompleteness": 0,
+    "CascadeWindow": 0
   },
   "scrape_interval": 15000000000,
   "hot_ring_capacity": 240,

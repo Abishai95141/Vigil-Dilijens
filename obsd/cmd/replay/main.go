@@ -1,11 +1,18 @@
 // Command replay is the harness replay runner (doc 11 §3.1, doc 05 M5): it
 // re-runs a recorded bundle — readings (qss segments), resolved bars per epoch,
-// the pinned graph release, and the captured parameter set — through the REAL
-// observation and detection components, and verifies that every recorded
-// evaluation tick reproduces byte-identically (digest equality).
+// per-tick topology snapshots, the pinned graph release, and the captured
+// parameter set — through the REAL observation and detection components, and
+// verifies that every recorded evaluation tick reproduces byte-identically
+// (digest equality).
 //
-// Exit status: 0 = every tick matched; 1 = any mismatch or error. A mismatch is
-// a determinism violation and is never downgraded to a warning.
+// With -eval (doc 11 M4 / 07 M6 sensitivity sweeps) it instead RE-EVALUATES
+// the recorded inputs under overridden sensitivity parameters and writes the
+// resulting findings — explicitly an evaluation, never a verification: no
+// digest is compared and the output says so.
+//
+// Exit status: 0 = every tick matched (or evaluation completed); 1 = any
+// mismatch or error. A mismatch is a determinism violation and is never
+// downgraded to a warning.
 package main
 
 import (
@@ -36,6 +43,14 @@ func run(args []string, out *os.File) error {
 		parquetOut  = fs.String("export-parquet", "", "export the bundle's readings to this Parquet file (the Python-harness bridge)")
 		quiet       = fs.Bool("q", false, "summary only (no per-tick lines)")
 		showVersion = fs.Bool("version", false, "print version and exit")
+
+		// Evaluation mode (doc 11 M4 sweeps): re-evaluate under overridden
+		// sensitivity. Negative = keep the manifest's pinned value.
+		evalMode    = fs.Bool("eval", false, "EVALUATION mode: re-evaluate under the -eval-* overrides; verifies nothing")
+		evalBand    = fs.Float64("eval-band", -1, "override at-threshold band (with -eval)")
+		evalMinComp = fs.Float64("eval-min-completeness", -1, "override degraded-surfacing completeness floor (with -eval)")
+		evalWellAb  = fs.Float64("eval-well-above", -1, "override well-above factor (with -eval)")
+		evalCascade = fs.Duration("eval-cascade-window", -1, "override cascade pairing window (with -eval)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -53,7 +68,32 @@ func run(args []string, out *os.File) error {
 		return fmt.Errorf("load ontology: %w", err)
 	}
 
-	rep, err := replay.Run(replay.Options{BundleDir: *bundle, Graph: g, OutDir: *outDir})
+	opts := replay.Options{BundleDir: *bundle, Graph: g, OutDir: *outDir}
+	if *evalMode {
+		// Start from the bundle's PINNED regime and override only the swept
+		// knobs — structural pins (scrape interval, rate window, watermark)
+		// always stay the capture's.
+		pinned, err := replay.ReadManifest(*bundle)
+		if err != nil {
+			return err
+		}
+		regime := pinned.FPParams
+		if *evalBand >= 0 {
+			regime.Band = *evalBand
+		}
+		if *evalMinComp >= 0 {
+			regime.MinCompleteness = *evalMinComp
+		}
+		if *evalWellAb >= 0 {
+			regime.WellAboveFactor = *evalWellAb
+		}
+		if *evalCascade >= 0 {
+			regime.CascadeWindow = *evalCascade
+		}
+		opts.Evaluate = &regime
+	}
+
+	rep, err := replay.Run(opts)
 	if err != nil {
 		return err
 	}
@@ -67,10 +107,15 @@ func run(args []string, out *os.File) error {
 	if rep.UnsealedTail {
 		fmt.Fprintln(out, "  note: an unsealed .active segment was ignored (capture not closed cleanly)")
 	}
+	if rep.EvaluationMode {
+		fmt.Fprintln(out, "  MODE: EVALUATION (overridden sensitivity) — findings re-derived, NOTHING VERIFIED")
+	}
 	if !*quiet {
 		for _, tk := range rep.Ticks {
 			mark := "ok"
-			if !tk.Match {
+			if rep.EvaluationMode {
+				mark = "evaluated"
+			} else if !tk.Match {
 				mark = "MISMATCH"
 			}
 			fmt.Fprintf(out, "  tick %s  bars-epoch=%d  fingerprints=%d findings=%d  digest %s…  %s\n",
@@ -102,6 +147,10 @@ func run(args []string, out *os.File) error {
 	}
 	if exportErr != nil {
 		return exportErr
+	}
+	if rep.EvaluationMode {
+		fmt.Fprintf(out, "  evaluation complete: %d ticks re-derived under the override (no verification claim)\n", len(rep.Ticks))
+		return nil
 	}
 	fmt.Fprintf(out, "  verdict: all %d ticks replayed byte-identically (doc 05 §3.5 holds)\n", len(rep.Ticks))
 	return nil

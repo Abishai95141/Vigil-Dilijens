@@ -162,6 +162,20 @@ func (c *Capture) WriteManifest(m Manifest) error {
 	return writeJSON(path, m)
 }
 
+// ReadManifest loads a bundle's manifest (the pinned regime) — used by
+// evaluation-mode callers that derive their overrides FROM the pins.
+func ReadManifest(bundleDir string) (Manifest, error) {
+	var m Manifest
+	raw, err := os.ReadFile(filepath.Join(bundleDir, manifestName))
+	if err != nil {
+		return m, fmt.Errorf("replay: read manifest: %w", err)
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return m, fmt.Errorf("replay: parse manifest: %w", err)
+	}
+	return m, nil
+}
+
 // barsHash content-hashes a resolved-bar set with every ResolvedAt zeroed: the
 // re-resolution STAMP changes on every periodic recompile, but an unchanged set
 // of bars must not mint a new epoch (live evidence: 3 epochs in 3.5 minutes of

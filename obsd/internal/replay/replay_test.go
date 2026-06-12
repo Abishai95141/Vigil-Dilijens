@@ -619,3 +619,59 @@ func TestImplausibleManifestRefused(t *testing.T) {
 		t.Error("a zeroed watermark must refuse to replay")
 	}
 }
+
+// Evaluation mode (doc 11 M4 / 07 M6): the recorded inputs re-evaluate under an
+// OVERRIDDEN sensitivity regime — different findings may emerge, no digest is
+// compared (the recorded digests describe the capture regime), and the report
+// says EvaluationMode. Verification mode on the same bundle stays strict.
+func TestEvaluationModeSweeps(t *testing.T) {
+	g := loadGraph(t)
+	dir := t.TempDir()
+	buildBundle(t, dir, g, -1)
+
+	// Verification baseline: strict, byte-identical.
+	ver, err := Run(Options{BundleDir: dir, Graph: g})
+	if err != nil {
+		t.Fatalf("verification run: %v", err)
+	}
+	if ver.EvaluationMode || ver.Mismatches != 0 {
+		t.Fatalf("baseline must verify cleanly: eval=%v mismatches=%d", ver.EvaluationMode, ver.Mismatches)
+	}
+	baseFindings := 0
+	for _, tk := range ver.Ticks {
+		baseFindings += tk.Findings
+	}
+
+	// Evaluation: a hostile floor (0.9) suppresses the degraded matches the
+	// capture regime surfaced — fewer findings, ZERO mismatches reported, mode
+	// flagged.
+	override := ver.Manifest.FPParams
+	override.MinCompleteness = 0.9
+	ev, err := Run(Options{BundleDir: dir, Graph: g, Evaluate: &override})
+	if err != nil {
+		t.Fatalf("evaluation run: %v", err)
+	}
+	if !ev.EvaluationMode {
+		t.Fatal("the report must state EVALUATION mode")
+	}
+	if ev.Mismatches != 0 {
+		t.Fatalf("evaluation mode verifies nothing — mismatches must be 0, got %d", ev.Mismatches)
+	}
+	evFindings := 0
+	for _, tk := range ev.Ticks {
+		evFindings += tk.Findings
+		if tk.RecordedDigest != "" {
+			t.Fatal("evaluation outcomes must carry no recorded-digest verdicts")
+		}
+	}
+	if evFindings >= baseFindings {
+		t.Errorf("a 0.9 completeness floor must suppress degraded findings: base=%d eval=%d", baseFindings, evFindings)
+	}
+
+	// An implausible override refuses loudly.
+	bad := ver.Manifest.FPParams
+	bad.MinCompleteness = 1.5
+	if _, err := Run(Options{BundleDir: dir, Graph: g, Evaluate: &bad}); err == nil {
+		t.Error("an implausible evaluation regime must refuse")
+	}
+}

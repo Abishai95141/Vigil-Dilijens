@@ -22,6 +22,16 @@ type Options struct {
 	BundleDir string
 	Graph     *graph.Graph // must match the manifest's pinned version
 	OutDir    string       // when set, the canonical JSON of every tick is written here
+
+	// Evaluate switches the engine into EVALUATION mode (doc 11 M4 / 07 M6
+	// sensitivity sweeps — the manifest's long-stated "time-shifted evaluation"
+	// absence): the recorded readings, bars, and topology are re-evaluated
+	// under THESE parameters instead of the manifest's, and recorded digests
+	// are NOT compared (they describe the capture regime, not this one — a
+	// comparison would be a guaranteed, meaningless mismatch). The report says
+	// EvaluationMode loudly; evaluation output must never be presented as
+	// verification.
+	Evaluate *observe.FPParams
 }
 
 // TickOutcome is one replayed tick's verdict.
@@ -48,6 +58,10 @@ type Report struct {
 	// TopologyLess: the bundle predates topology recording (no edge-budget pin)
 	// — first-order matching was skipped, exactly the regime that captured it.
 	TopologyLess bool
+	// EvaluationMode: the run re-evaluated under OVERRIDDEN parameters (doc 11
+	// M4 sweeps); tick outcomes carry findings/cascades counts but NO digest
+	// verdicts — this run verifies nothing.
+	EvaluationMode bool
 }
 
 // Run replays a bundle through the real observation and detection components,
@@ -77,7 +91,8 @@ func Run(opts Options) (*Report, error) {
 	// silently different semantics (zero watermark = everything stale) and the
 	// failure would masquerade as a determinism violation. Refuse instead.
 	if m.FPParams.ScrapeInterval <= 0 || m.FPParams.RateWindow <= 0 || m.FPParams.Watermark <= 0 ||
-		m.FPParams.Band < 0 || m.FPParams.Band >= 1 || m.FPParams.WellAboveFactor <= 0 {
+		m.FPParams.Band < 0 || m.FPParams.Band >= 1 || m.FPParams.WellAboveFactor <= 0 ||
+		m.FPParams.MinCompleteness < 0 || m.FPParams.MinCompleteness >= 1 || m.FPParams.CascadeWindow < 0 {
 		return nil, fmt.Errorf("replay: manifest parameter set implausible (%+v) — refusing to replay with different semantics", m.FPParams)
 	}
 	// The hot-ring capacity is a digest-bearing constant (it bounds what a window
@@ -101,10 +116,27 @@ func Run(opts Options) (*Report, error) {
 	for k, v := range m.EdgeBudgets {
 		budgets[identity.EdgeType(k)] = v
 	}
+	// The evaluation regime: the manifest's pinned parameters for VERIFICATION;
+	// the caller's overrides for EVALUATION (sensitivity sweeps). Verification
+	// always replays under the capture's regime, never the local file's.
+	regime := m.FPParams
+	if opts.Evaluate != nil {
+		e := *opts.Evaluate
+		if e.ScrapeInterval <= 0 || e.RateWindow <= 0 || e.Watermark <= 0 ||
+			e.Band < 0 || e.Band >= 1 || e.WellAboveFactor <= 0 ||
+			e.MinCompleteness < 0 || e.MinCompleteness >= 1 || e.CascadeWindow < 0 {
+			return nil, fmt.Errorf("replay: evaluation parameter set implausible (%+v)", e)
+		}
+		regime = e
+		rep.EvaluationMode = true
+	}
+	// Detection sensitivity from the regime (doc 07 §3.6): the matcher's
+	// degraded-surfacing floor and the cascade window.
+	matcher.MinCompleteness = regime.MinCompleteness
 	// Cascade recognition is windowed over the tick SEQUENCE (doc 07 §3.4):
 	// the tracker accumulates across ticks exactly as live did, and resets at
 	// every run-start frame — the live process restart that emptied it.
-	tracker := detect.NewCascadeTracker(m.FPParams.CooccurrenceWindow)
+	tracker := detect.NewCascadeTracker(regime.EffectiveCascadeWindow())
 
 	segs, err := qss.ListSegments(filepath.Join(opts.BundleDir, segmentsDir))
 	if err != nil {
@@ -151,12 +183,12 @@ func Run(opts Options) (*Report, error) {
 				if err := json.Unmarshal(f.Payload, &rec); err != nil {
 					return fmt.Errorf("tick frame: %w", err)
 				}
-				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets, tracker)
+				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets, tracker, regime, rep.EvaluationMode)
 				if err != nil {
 					return err
 				}
 				rep.Ticks = append(rep.Ticks, outcome)
-				if !outcome.Match {
+				if !rep.EvaluationMode && !outcome.Match {
 					rep.Mismatches++
 				}
 			}
@@ -183,7 +215,8 @@ type barsEpoch struct {
 // selected (Tier-A) entities, and compare digests.
 func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 	rules map[string]*graph.ThresholdRule, matcher *detect.Matcher, reader *bundleReader, m Manifest,
-	budgets map[identity.EdgeType]time.Duration, tracker *detect.CascadeTracker) (TickOutcome, error) {
+	budgets map[identity.EdgeType]time.Duration, tracker *detect.CascadeTracker,
+	regime observe.FPParams, evalMode bool) (TickOutcome, error) {
 
 	var fps []observe.Fingerprint
 	var findings []detect.Finding
@@ -209,7 +242,7 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 			ep = &barsEpoch{res: res, selected: selection.TierASet(res, opts.Graph)}
 			bars[rec.BarsEpoch] = ep
 		}
-		fps = observe.Materialize(ep.res, rules, reader, m.FPParams, rec.EvalNow)
+		fps = observe.Materialize(ep.res, rules, reader, regime, rec.EvalNow)
 
 		// Topology (doc 07 §3.7): rebuild the recorded snapshot under the PINNED
 		// budgets and walk it through the same Match path live used. A tick with
@@ -230,7 +263,7 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		} else if rec.Topology != nil {
 			return TickOutcome{}, fmt.Errorf("replay: tick %s records topology but the manifest pins no edge budgets — suspicion thresholds unknown; refusing to guess", rec.EvalNow.Format(time.RFC3339Nano))
 		}
-		w := identity.TimeWindow{Start: rec.EvalNow.Add(-m.FPParams.CooccurrenceWindow), End: rec.EvalNow}
+		w := identity.TimeWindow{Start: rec.EvalNow.Add(-regime.CooccurrenceWindow), End: rec.EvalNow}
 		findings = matcher.Match(fps, ep.selected, topo, w)
 		// Cascades (07 M5): recognize against the tracker's window, THEN
 		// observe this tick — the same order live evaluation uses.
@@ -246,6 +279,12 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		RecordedDigest: rec.Digest, ReplayedDigest: digest,
 		Match:        digest == rec.Digest,
 		Fingerprints: len(fps), Findings: len(findings),
+	}
+	if evalMode {
+		// Evaluation mode verifies nothing: the recorded digest describes the
+		// CAPTURE regime; comparing it against an overridden regime would be a
+		// guaranteed, meaningless mismatch dressed as a verdict.
+		out.RecordedDigest, out.Match = "", true
 	}
 	if opts.OutDir != "" {
 		name := fmt.Sprintf("tick-%s.json", rec.EvalNow.UTC().Format("20060102T150405.000000000Z"))
