@@ -73,7 +73,7 @@ var (
 	ovFacetVocab     = map[string]bool{"level": true, "slope": true, "ratio": true, "rate-guard": true}
 	ovExpectVocab    = map[string]bool{"rising": true, "falling": true, "crossed": true, "at-or-above": true, "breached": true}
 	ovMinStateVocab  = map[string]bool{"": true, "at-threshold": true, "above": true, "well-above": true}
-	ovOnVocab        = map[string]bool{"": true, "anchor": true, "neighbour": true}
+	ovOnVocab        = map[string]bool{"": true, "anchor": true, "neighbour": true, "two-hop": true}
 	ovPathVocab      = map[string]bool{
 		"container.resources.limits.memory":   true,
 		"container.resources.limits.cpu":      true,
@@ -151,6 +151,7 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 	anchorOf := map[string]string{}           // phen -> declared anchor
 	hasChecks := map[string]bool{}            // phen -> any check authored
 	hasNeighbourCheck := map[string]bool{}    // phen -> any neighbour-scoped check
+	hasTwoHopCheck := map[string]bool{}       // phen -> any two-hop-scoped check
 	seenCheck := map[string]map[string]bool{} // phen -> signal -> dup guard
 	for _, o := range ovls {
 		at := filepath.Base(o.path)
@@ -307,8 +308,11 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 				if !ovOnVocab[c.On] {
 					errs = append(errs, fmt.Sprintf("%s: %s check %d: unknown on %q (anchor|neighbour)", at, phen, i, c.On))
 				}
-				if c.On == "neighbour" {
+				if c.On == "neighbour" || c.On == "two-hop" {
 					hasNeighbourCheck[phen] = true
+				}
+				if c.On == "two-hop" {
+					hasTwoHopCheck[phen] = true
 				}
 				if seenCheck[phen] == nil {
 					seenCheck[phen] = map[string]bool{}
@@ -343,6 +347,9 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 		}
 		if hasNeighbourCheck[id] && !spanned {
 			errs = append(errs, fmt.Sprintf("%s: neighbour-scoped check on a non-spanned phenomenon (span %q)", id, span))
+		}
+		if hasTwoHopCheck[id] && span != "second-order" {
+			errs = append(errs, fmt.Sprintf("%s: two-hop check requires a second-order span, got %q", id, span))
 		}
 		if spanned && hasChecks[id] && anchorOf[id] == "" {
 			errs = append(errs, fmt.Sprintf("%s: spanned phenomenon with checks must declare an anchor (doc 07 §3.2)", id))

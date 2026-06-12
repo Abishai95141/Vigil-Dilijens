@@ -65,8 +65,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 10 {
-		t.Fatalf("rules = %d, want 10 (8 v1 + 2 v2)", len(g.Rules))
+	if len(g.Rules) != 12 {
+		t.Fatalf("rules = %d, want 12 (8 v1 + 2 v2 + 2 v3)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -117,8 +117,8 @@ func TestOverlayVersionPinning(t *testing.T) {
 		t.Errorf("version %q not a sha256 pin", merged.Version)
 	}
 	// Provenance travels with the content.
-	if len(merged.Overlays) != 5 {
-		t.Fatalf("overlay provenance records = %d, want 5 (spans, rules v1+v2, conditions v1+v2)", len(merged.Overlays))
+	if len(merged.Overlays) != 7 {
+		t.Fatalf("overlay provenance records = %d, want 7 (spans, rules v1-v3, conditions v1-v3)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

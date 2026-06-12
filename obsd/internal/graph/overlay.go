@@ -112,11 +112,13 @@ type MemberCheck struct {
 	// On says WHERE the member's variable lives relative to the phenomenon's
 	// anchor (doc 07 §3.2): "anchor" (default) — on the evaluated entity itself;
 	// "neighbour" — on an entity one topology hop away along the phenomenon's
-	// declared traversal edge types. Neighbour checks are only legal on spanned
-	// (non-entity-local) phenomena; the matcher satisfies them across VALID edges
-	// only, degrades on suspect ones, and never counts evidence across an absent
-	// edge (the degrade-never-fabricate contract).
-	On   string `yaml:"on"`   // "" | anchor | neighbour
+	// declared traversal edge types; "two-hop" — two hops of propagation (the
+	// second-order walk, doc 07 M3: the traversal IS the detection path).
+	// Neighbour checks are only legal on spanned phenomena, two-hop only on
+	// second-order ones; the matcher satisfies them across VALID edges only,
+	// degrades when ANY hop of the path is suspect, and never counts evidence
+	// across an absent edge (the degrade-never-fabricate contract).
+	On   string `yaml:"on"`   // "" | anchor | neighbour | two-hop
 	Note string `yaml:"note"` // honesty caveat surfaced on the finding
 }
 
@@ -126,7 +128,7 @@ func (c *MemberCheck) OnAnchor() bool { return c.On == "" || c.On == "anchor" }
 var knownFacets = map[string]bool{"level": true, "slope": true, "ratio": true, "rate-guard": true}
 var knownExpects = map[string]bool{"rising": true, "falling": true, "crossed": true, "at-or-above": true, "breached": true}
 var knownMinStates = map[string]bool{"": true, "at-threshold": true, "above": true, "well-above": true}
-var knownOns = map[string]bool{"": true, "anchor": true, "neighbour": true}
+var knownOns = map[string]bool{"": true, "anchor": true, "neighbour": true, "two-hop": true}
 
 // overlayFile is the on-disk overlay shape. A file declares spans, rules, checks,
 // and anchors (the entity kind a spanned phenomenon's checks evaluate at).
@@ -220,14 +222,20 @@ func (g *Graph) finalizeOverlays() error {
 		if p.Anchor != "" && !spanned {
 			return fmt.Errorf("phenomenon %s: anchor %q declared but span is %q — anchors are for spanned phenomena only", id, p.Anchor, p.Span)
 		}
-		hasNeighbour := false
+		hasNeighbour, hasTwoHop := false, false
 		for _, c := range g.Checks[id] {
 			if !c.OnAnchor() {
 				hasNeighbour = true
 			}
+			if c.On == "two-hop" {
+				hasTwoHop = true
+			}
 		}
 		if hasNeighbour && !spanned {
 			return fmt.Errorf("phenomenon %s: neighbour-scoped check on a non-spanned phenomenon (span %q)", id, p.Span)
+		}
+		if hasTwoHop && p.Span != SpanSecondOrder {
+			return fmt.Errorf("phenomenon %s: two-hop check requires a second-order span, got %q (doc 02 §3.5 — the span bounds the walk)", id, p.Span)
 		}
 		if spanned && len(g.Checks[id]) > 0 && p.Anchor == "" {
 			return fmt.Errorf("phenomenon %s: spanned phenomenon with checks must declare an anchor (doc 07 §3.2 — evaluation site is authored, never inferred)", id)

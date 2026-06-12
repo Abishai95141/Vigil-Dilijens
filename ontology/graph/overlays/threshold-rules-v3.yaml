@@ -1,0 +1,48 @@
+# Structured threshold rules — authored overlay v3 (doc 02 §3.4, doc 04 §3.4).
+#
+# Phase-1 additions for second-order detection (07 M3) and cascades (07 M5):
+# the IO-pressure bar STORAGE_SATURATION's anchor needs, and the cgroup-OOM
+# event guard that closes the MEMORY_LEAK -> OOM_KILL_CGROUP authored relation
+# live. Same discipline as v1/v2: ontology defaults are FLAGGED, lower-trust
+# bars; released files are immutable — additions land as new files + release.
+overlay: threshold-rules-v3
+version: 3
+author: vigil-engineering
+status: proposed-v3 (ratified by commit review; 07 M3/M5 bars)
+
+rules:
+  - id: THR_NODE_IO_PSI_STALL
+    signal: SIG_node_pressure_psi_12_metrics_ba96070d
+    metric: node_pressure_io_waiting_seconds_total
+    kind: absolute
+    default: 0.10
+    direction: above
+    entity_scope: Node
+    window: 5m
+    rationale: >-
+      IO pressure-stall fraction (PHEN_STORAGE_SATURATION's authored required
+      T0+ "PSI waiting" member): the counter accumulates seconds tasks spent
+      runnable-but-waiting on IO, so its rate over the window is the fraction
+      of wall time the node's IO path was contended. No customer config
+      declares an IO-stall tolerance, so the bar is an ontology default
+      (flagged) mirroring the CPU PSI floor: 10% sustained some-stall.
+      Kernel-gated like CPU PSI (>=4.20); absent /proc/pressure leaves the
+      series unexposed — out-of-scope, stated.
+
+  - id: THR_CONTAINER_OOM_EVENTS
+    signal: SIG_oom_kill_counter_container_oom_events_total_b50528e4
+    metric: container_oom_events_total
+    kind: rate-of-change
+    default: 1
+    direction: above
+    entity_scope: Container
+    window: 15m
+    rationale: >-
+      Cgroup OOM-kill guard (PHEN_OOM_KILL_CGROUP's required T0+1s member:
+      "cAdvisor metric"). A kill is the event itself, not a tunable level, so
+      the guard is >=1 increment per window — an ontology default (flagged;
+      no customer config declares an OOM tolerance). Container-scoped
+      (cAdvisor memory.events oom_kill), discriminating cgroup OOM from host
+      OOM (PHEN_OOM_KILL_SYSTEM's node_vmstat lane). This bar is what lets
+      the authored MEMORY_LEAK -> OOM_KILL_CGROUP relation ("Eventual
+      outcome") be recognized as a live cascade (doc 07 §3.4).

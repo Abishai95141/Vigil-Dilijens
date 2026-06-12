@@ -1,0 +1,56 @@
+# Detection member-conditions — authored overlay v3 (doc 07 §3.1/§3.2/§3.4).
+#
+# Phase-1 additions for 07 M3 (second-order spans) and 07 M5 (cascades):
+#
+#   on: two-hop — the member's variable lives TWO topology hops from the
+#       anchor along the phenomenon's declared traversal edge types (the
+#       second-order walk; the traversal IS the detection path). The matcher
+#       satisfies two-hop checks across paths whose EVERY hop is valid in the
+#       evaluation window; a suspect hop degrades the match; an absent hop
+#       contributes nothing (degrade-never-fabricate). Only legal on
+#       second-order phenomena (the span bounds the walk, doc 02 §3.5).
+#
+# As ever: members with no check are UNOBSERVABLE on this signal set, stated
+# on the finding; this file binds existing KG members, it never invents one.
+overlay: detection-conditions-v3
+version: 3
+author: vigil-engineering
+status: proposed-v3 (second-order + cascade-closing checks for the cAdvisor + node-exporter signal set)
+
+anchors:
+  PHEN_STORAGE_SATURATION: Node
+  PHEN_OOM_KILL_CGROUP: Container
+
+checks:
+  # Storage saturation (second-order, runs-on + mounts: node -> pod -> PVC).
+  # The required T0 disk-IO member (node_disk_io_time_weighted, per-device
+  # series) has NO check yet — per-device sub-variables await the doc 02
+  # data_type normalization queue — so this phenomenon can only ever match
+  # DEGRADED on this signal set, with that gap named on every finding.
+  PHEN_STORAGE_SATURATION:
+    - signal: SIG_node_pressure_psi_12_metrics_ba96070d
+      metric: node_pressure_io_waiting_seconds_total
+      facet: level
+      expect: crossed
+      on: anchor
+      note: "node IO some-stall fraction >=10% (flagged default bar, THR_NODE_IO_PSI_STALL); the required per-device disk-IO member is unobservable until device sub-variables land"
+    - signal: SIG_kubelet_volume_stats_used_bytes_38fa9389
+      metric: kubelet_volume_stats_used_bytes
+      facet: level
+      expect: crossed
+      on: two-hop
+      note: "PVC fill >=85% of the declared request (THR_PVC_USED_VS_REQUESTED, config-sourced), two hops from the node: node -> pod (runs-on) -> PVC (mounts); volume stats ride the kubelet main endpoint (not yet ingested on this cluster — stated)"
+
+  # Cgroup OOM kill (first-order, runs-on; Container anchor — the victim).
+  # The kernel-log discriminator (dmesg "Memory cgroup out of memory") and the
+  # KSM-side restart/lastState members have no scrapable channel here —
+  # degraded, stated. This check closes the authored MEMORY_LEAK ->
+  # OOM_KILL_CGROUP relation (T0+terminal "Eventual outcome") for live
+  # cascade recognition (doc 07 §3.4).
+  PHEN_OOM_KILL_CGROUP:
+    - signal: SIG_oom_kill_counter_container_oom_events_total_b50528e4
+      metric: container_oom_events_total
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: ">=1 cgroup OOM kill in the window (THR_CONTAINER_OOM_EVENTS, flagged default — the event is the bar)"

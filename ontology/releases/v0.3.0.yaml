@@ -1,0 +1,28 @@
+# Graph release v0.3.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.3.0
+graph_version: "sha256:337eff7382755464ecae551c32fc1c1447f0cc80f12d5b978abafa2edcee16be"
+created: "2026-06-12"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+summary: >-
+  Second-order detection + cascade knowledge (doc 07 M3/M5): the 'on: two-hop'
+  member-check vocabulary; STORAGE_SATURATION conditions (Node anchor — IO PSI
+  stall on the anchor, PVC fill two hops away over runs-on + mounts; the
+  per-device disk-IO member stays unobservable pending sub-variable
+  normalization, stated); OOM_KILL_CGROUP conditions (Container anchor —
+  container_oom_events_total rate guard), closing the authored
+  MEMORY_LEAK -> OOM_KILL_CGROUP relation for live cascade recognition.
+  New bars: THR_NODE_IO_PSI_STALL (0.10 flagged), THR_CONTAINER_OOM_EVENTS
+  (>=1/15m flagged). Behavioural-class change: adds conditions and bars,
+  alters no prior member, span, rule, or release.
