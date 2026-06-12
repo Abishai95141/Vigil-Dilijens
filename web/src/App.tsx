@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Logo } from "./components/Brand";
 import { CoverageReport } from "./surfaces/CoverageReport";
+import { EarlyWarnings } from "./surfaces/EarlyWarnings";
 import { InsightFeed } from "./surfaces/InsightFeed";
 import { Timeline } from "./surfaces/Timeline";
 import { TopologyView } from "./surfaces/TopologyView";
@@ -12,10 +13,11 @@ import { UnexplainedSurface } from "./surfaces/UnexplainedSurface";
 // wearing its label (doc 10 §2). M2–M4 add the now/topology/anomaly views beside
 // the M1 coverage map; early warnings (PROJECTED) arrive in Phase 2.
 
-type Tab = "insights" | "topology" | "unexplained" | "timeline" | "coverage";
+type Tab = "insights" | "warnings" | "topology" | "unexplained" | "timeline" | "coverage";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "insights", label: "Insights" },
+  { id: "warnings", label: "Early warnings" },
   { id: "topology", label: "Topology" },
   { id: "unexplained", label: "Unexplained" },
   { id: "timeline", label: "Timeline" },
@@ -85,6 +87,7 @@ export default function App() {
         }}
       >
         {tab === "insights" && <InsightFeed />}
+        {tab === "warnings" && <EarlyWarnings />}
         {tab === "topology" && <TopologyView />}
         {tab === "unexplained" && <UnexplainedSurface />}
         {tab === "timeline" && <Timeline />}

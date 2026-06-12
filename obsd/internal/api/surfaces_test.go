@@ -111,7 +111,7 @@ func TestBuildTopology(t *testing.T) {
 	unexp := []unexplained.Finding{{Scope: nodeKey, Status: unexplained.StatusAging}}
 	selected := map[string][]string{podKey: {"PHEN_THROTTLING_CASCADE"}}
 
-	v := BuildTopology("cl", "v", at, inv, edges, budgets, findings, unexp, selected)
+	v := BuildTopology("cl", "v", at, inv, edges, budgets, findings, unexp, selected, map[string]bool{podKey: true})
 
 	if v.Summary.Nodes != 3 || v.Summary.Edges != 2 {
 		t.Errorf("nodes/edges wrong (dangling mounts edge must be excluded): %+v", v.Summary)

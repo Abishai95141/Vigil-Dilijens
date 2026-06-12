@@ -11,8 +11,9 @@ import { useApi } from "./useApi";
 // Entities as nodes (grouped by kind into deterministic columns — no physics, so
 // the layout is stable and testable), valid edges as solid links, suspect edges
 // visibly distinct (dashed). CURRENT-condition marks only: matched (teal ring)
-// and loud (amber dashed). Predictive marks are a SEPARATE visual language added
-// in M5/Phase 2 — there are none here, so "is" and "might" cannot be confused.
+// and loud (amber dashed); predictive marks (10 M5) are a SEPARATE visual
+// language — a violet DIAMOND beside the node, never the circle family — so
+// "is" and "might" cannot be confused at a glance.
 
 const KIND_ORDER = [
   "Node",
@@ -251,6 +252,16 @@ function NodeGlyph({
       <circle cx={14} cy={14} r={5} fill={markFill}>
         <title>{markKind}</title>
       </circle>
+      {n.warned && (
+        <polygon
+          points="170,6 176,14 170,22 164,14"
+          fill="var(--prov-projected-band)"
+          stroke="var(--prov-projected-on-dark, var(--prov-projected))"
+          strokeWidth={1.5}
+        >
+          <title>early warning (PROJECTED)</title>
+        </polygon>
+      )}
       <text
         x={26}
         y={18}
@@ -285,6 +296,7 @@ function Legend({ v }: { v: TopoData }) {
     >
       {item("matched", "matched (is)", v.summary.matched)}
       {item("loud", "loud / unexplained", v.summary.loud)}
+      {item("warned", "projected (might)", v.summary.warned)}
       {item("selected", "watched", v.summary.selected)}
       <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
         <span className="v-edge-line" data-status="valid" />
@@ -299,7 +311,8 @@ function Legend({ v }: { v: TopoData }) {
         </span>
       </span>
       <span className="v-faint" style={{ fontSize: "var(--text-tiny)" }}>
-        current marks only — predictive marks (PROJECTED) arrive in Phase 2.
+        "is" marks are circles; the "might" mark (PROJECTED) is the violet
+        diamond — separate visual languages, never confused.
       </span>
     </div>
   );

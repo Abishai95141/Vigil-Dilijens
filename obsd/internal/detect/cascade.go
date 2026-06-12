@@ -153,15 +153,7 @@ func (m *Matcher) Cascades(now time.Time, findings []Finding, tracker *CascadeTr
 	if len(findings) == 0 {
 		return nil
 	}
-	podKeyByUID := map[string]string{}
-	if topo != nil {
-		for _, src := range topo.Sources(identity.EdgeRunsOn) {
-			cei, err := identity.ParseKey(src)
-			if err == nil && cei.Kind == "Pod" {
-				podKeyByUID[cei.UID] = src
-			}
-		}
-	}
+	podKeyByUID := podKeyIndex(topo)
 	// Triggers visible to this tick: the tracker's window plus this tick's own
 	// findings (same-tick recognition; latest occurrence wins per key).
 	triggers := map[string]FindingRef{}
@@ -232,6 +224,33 @@ func (m *Matcher) Cascades(now time.Time, findings []Finding, tracker *CascadeTr
 		return a.Trigger.Phenomenon < b.Trigger.Phenomenon
 	})
 	return out
+}
+
+// podKeyIndex maps pod UID -> pod CEI key from the snapshot's runs-on sources
+// (the container→pod anchor resolution both cascades and blast radii need).
+func podKeyIndex(topo Topology) map[string]string {
+	out := map[string]string{}
+	if topo == nil {
+		return out
+	}
+	for _, src := range topo.Sources(identity.EdgeRunsOn) {
+		cei, err := identity.ParseKey(src)
+		if err == nil && cei.Kind == "Pod" {
+			out[cei.UID] = src
+		}
+	}
+	return out
+}
+
+// BlastRadiusFor derives the at-risk set for phenomenonID manifesting (or
+// PROJECTED to manifest, doc 09 M4) at anchorCEI: the same authored downstream
+// walk detection findings use — ONE implementation, so a warning's blast
+// radius can never disagree with a finding's. The result is AUTHORED
+// relationship made concrete on current topology, never a prediction about
+// the neighbours.
+func (m *Matcher) BlastRadiusFor(phenomenonID, anchorCEI string, selected map[string][]string, topo Topology, w identity.TimeWindow) []AtRisk {
+	f := Finding{Phenomenon: phenomenonID, EntityCEI: anchorCEI}
+	return m.blastRadius(&f, selected, topo, w, podKeyIndex(topo))
 }
 
 // blastRadius walks the finding's downstream relations across valid topology

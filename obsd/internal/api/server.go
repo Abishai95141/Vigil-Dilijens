@@ -26,6 +26,9 @@ type Providers struct {
 	Topology func() *TopologyView
 	// Timeline returns the composed anomaly timeline (doc 10 M4); may be nil.
 	Timeline func() (*TimelineView, error)
+	// Warnings returns the early-warning surface snapshot (doc 10 M5 / 09 M4);
+	// may be nil — the handler then serves the honest OFF state (gate rule).
+	Warnings func() *WarningsView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -118,6 +121,27 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		if v == nil {
 			v = &TopologyView{GeneratedAt: timeNowUTC(), Nodes: []TopoNode{}, Edges: []TopoEdge{}}
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/warnings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *WarningsView
+		if p.Warnings != nil {
+			v = p.Warnings()
+		}
+		if v == nil {
+			// Forecasting is not running: the lane states WHY it is dark
+			// (the gate rule) rather than implying a quiet cluster.
+			v = &WarningsView{
+				Class: "PROJECTED", GeneratedAt: timeNowUTC(),
+				Enabled: false, GateNote: gateNote,
+				Warnings: []WarningCard{}, Silences: []SilenceRow{},
+			}
 		}
 		writeJSON(w, v)
 	})

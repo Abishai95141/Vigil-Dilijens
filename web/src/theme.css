@@ -436,3 +436,38 @@ code,
   font-size: var(--text-tiny);
   color: var(--text-faint, var(--text-muted));
 }
+
+/* --- Early warnings (doc 10 M5) — the PROJECTED lane ----------------------- */
+
+.v-prov-card[data-prov="PROJECTED"] {
+  border-left: 3px solid var(--prov-projected-on-dark, var(--prov-projected));
+}
+
+.v-badge[data-conf="tight"] {
+  border-color: var(--prov-projected-border);
+  color: var(--prov-projected-text);
+}
+.v-badge[data-conf="moderate"] {
+  border-color: var(--prov-projected-border);
+  color: var(--prov-projected-text);
+  border-style: dashed;
+}
+.v-badge[data-conf="wide"] {
+  border-color: var(--border-soft);
+  color: var(--text-muted);
+  border-style: dotted;
+}
+
+.v-warn-band {
+  margin-top: var(--space-xs);
+}
+
+.v-topo-mark[data-kind="warned"] {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--prov-projected-on-dark, var(--prov-projected));
+  background: var(--prov-projected-band);
+  transform: rotate(45deg);
+  border-radius: 2px;
+  display: inline-block;
+}

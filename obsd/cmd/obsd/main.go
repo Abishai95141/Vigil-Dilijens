@@ -29,6 +29,7 @@ import (
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
@@ -292,6 +293,14 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var unexpView atomic.Pointer[vapi.UnexplainedView]
 	var insightsView atomic.Pointer[vapi.InsightsView]
 	var topoView atomic.Pointer[vapi.TopologyView]
+	// The early-warning lane (doc 10 M5 / 09 M4): dark unless forecast.enabled
+	// — the gate rule (no class is operator-visible before its backtest gate,
+	// doc 11 §3.5) is enforced by configuration, stated by the surface.
+	var warningsView atomic.Pointer[vapi.WarningsView]
+	var fcIn *atomic.Pointer[forecastInputs]
+	if p.Forecast.Enabled {
+		fcIn = new(atomic.Pointer[forecastInputs])
+	}
 
 	// The store gate: scrape cycles write under the write lock; evaluation ticks
 	// read under the read lock. Ticks therefore always observe whole scrape
@@ -308,6 +317,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			Unexplained: func() *vapi.UnexplainedView { return unexpView.Load() },
 			Insights:    func() *vapi.InsightsView { return insightsView.Load() },
 			Topology:    func() *vapi.TopologyView { return topoView.Load() },
+			Warnings:    func() *vapi.WarningsView { return warningsView.Load() },
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
@@ -325,13 +335,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				return vapi.BuildTimeline(time.Now().UTC(), fr, ur), nil
 			}
 		}
-		logger.Info("operator surfacing API enabled (doc 10 M1–M4)",
-			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline")
+		logger.Info("operator surfacing API enabled (doc 10 M1–M5)",
+			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
-		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets)
+		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets,
+		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView)
+	if p.Forecast.Enabled {
+		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView)
+	}
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -380,7 +394,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView]) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -509,7 +523,33 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 				insightsView.Store(vapi.BuildInsights(clusterID, graphVersion, graphRelease, now, findings, cascades))
 			}
 			if topoView != nil {
-				topoView.Store(vapi.BuildTopology(clusterID, graphVersion, now, active, topoSnap, strBudgets, findings, unexp, selected))
+				// Predictive marks (10 M5): the warned set from the latest
+				// forecast cycle, a SEPARATE visual language from current
+				// marks; lags the warm path by at most one tick.
+				warned := map[string]bool{}
+				if wv := warningsView.Load(); wv != nil {
+					for i := range wv.Warnings {
+						warned[wv.Warnings[i].EntityCEI] = true
+					}
+				}
+				topoView.Store(vapi.BuildTopology(clusterID, graphVersion, now, active, topoSnap, strBudgets, findings, unexp, selected, warned))
+			}
+			// Freeze the warm path's inputs (doc 09 M4): Tier-B targets under
+			// the budget (doc 06 M5) plus the context the blast-radius walk
+			// needs. The forecast loop only reads this snapshot — published
+			// here so its view of bindings/topology is exactly one tick's.
+			if fcIn != nil {
+				targets, _ := forecast.EligibleTargets(bd.Result, bnd.graph)
+				sel := selection.SelectTierB(targets, tierBBudget)
+				fcIn.Store(&forecastInputs{
+					targets:    selection.BudgetedTargets(sel),
+					unbudgeted: len(sel.Unbudgeted),
+					selected:   selected,
+					topo:       topo,
+					matcher:    bnd.matcher,
+					inventory:  active,
+					evalWindow: evalWindow,
+				})
 			}
 			if findingsStore != nil {
 				if err := findingsStore.UpsertFindings(now, findings); err != nil {

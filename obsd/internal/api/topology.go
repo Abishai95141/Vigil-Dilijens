@@ -35,6 +35,7 @@ type TopologySummary struct {
 	Matched      int `json:"matched"`  // nodes carrying a current phenomenon match
 	Loud         int `json:"loud"`     // nodes carrying an unexplained loud card
 	Selected     int `json:"selected"` // Tier-A nodes (selection earned them attention)
+	Warned       int `json:"warned"`   // nodes carrying a PROJECTED early warning (separate glyph family)
 }
 
 // TopoNode is one entity. Marks are MEASURED facts about the system's current
@@ -48,6 +49,7 @@ type TopoNode struct {
 	Matched   bool     `json:"matched"`   // a current phenomenon match (07) — "is"
 	Degraded  bool     `json:"degraded"`  // the match(es) here are degraded
 	Loud      bool     `json:"loud"`      // an unexplained loud card (08)
+	Warned    bool     `json:"warned"`    // an early-warning target (09) — "might", a SEPARATE visual language (10 M5)
 	Phenomena []string `json:"phenomena"` // matched phenomenon ids on this node
 }
 
@@ -72,7 +74,8 @@ const topoCap = 400
 // its budget is SUSPECT, mirroring EdgeStore.Status exactly.
 func BuildTopology(clusterID, graphVersion string, now time.Time,
 	inventory []identity.InstanceRecord, edgeSnap []identity.EdgeSnap, budgets map[string]time.Duration,
-	findings []detect.Finding, unexp []unexplained.Finding, selected map[string][]string) *TopologyView {
+	findings []detect.Finding, unexp []unexplained.Finding, selected map[string][]string,
+	warned map[string]bool) *TopologyView {
 
 	v := &TopologyView{
 		ClusterID: clusterID, GraphVersion: graphVersion, GeneratedAt: now.UTC(),
@@ -139,7 +142,7 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 		node := TopoNode{
 			CEIKey: key, Kind: r.rec.Kind, Namespace: r.rec.Namespace, Name: r.rec.Name,
 			Selected: len(selected[key]) > 0, Matched: len(phens) > 0,
-			Degraded: degraded[key], Loud: loud[key], Phenomena: phens,
+			Degraded: degraded[key], Loud: loud[key], Warned: warned[key], Phenomena: phens,
 		}
 		if node.Phenomena == nil {
 			node.Phenomena = []string{}
@@ -153,6 +156,9 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 		}
 		if node.Selected {
 			v.Summary.Selected++
+		}
+		if node.Warned {
+			v.Summary.Warned++
 		}
 	}
 	sort.Slice(v.Nodes, func(i, j int) bool { return v.Nodes[i].CEIKey < v.Nodes[j].CEIKey })

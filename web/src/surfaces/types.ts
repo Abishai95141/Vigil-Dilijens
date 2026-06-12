@@ -116,6 +116,7 @@ export interface TopologySummary {
   matched: number;
   loud: number;
   selected: number;
+  warned: number;
 }
 
 export interface TopoNode {
@@ -127,6 +128,7 @@ export interface TopoNode {
   matched: boolean;
   degraded: boolean;
   loud: boolean;
+  warned: boolean;
   phenomena: string[];
 }
 
@@ -231,4 +233,67 @@ export function shortMetric(m: string): string {
     .replace(/^node_/, "")
     .replace(/_total$/, "")
     .replace(/_bytes$/, "");
+}
+
+// --- Early warnings (doc 10 M5 / 09 M4) — mirrors obsd/internal/api/warnings.go
+
+export interface WarningsView {
+  class: string; // PROJECTED
+  generatedAt: string;
+  graphVersion: string;
+  graphRelease: string;
+  enabled: boolean;
+  gateNote: string;
+  warnings: WarningCard[];
+  silences: SilenceRow[];
+  unbudgeted: number;
+  clock: ClockHealthRow;
+}
+
+export interface WarningCard {
+  class: string;
+  isProjection: boolean;
+  entityCei: string;
+  namespace: string;
+  name: string;
+  kind: string;
+  metric: string;
+  seriesKind: string;
+  barValue: number;
+  barUnit: string;
+  barSource: string;
+  barFlagged: boolean;
+  direction: string;
+  basisAt: string;
+  crossAt: string;
+  earliestAt: string;
+  latestAt: string;
+  latestBeyondHorizon: boolean;
+  timeToCrossSeconds: number;
+  confidence: string; // tight | moderate | wide
+  precursorPhenomena: string[];
+  atRisk: AtRiskRow[];
+  contextPoints: number;
+  horizonSteps: number;
+  cadenceSeconds: number;
+  graphVersion: string;
+}
+
+export interface SilenceRow {
+  entityCei: string;
+  metric: string;
+  reason: string;
+}
+
+export interface ClockHealthRow {
+  ready: boolean;
+  statusCode: number;
+  degradedSince: string;
+}
+
+/** Render a duration in seconds as a short human span ("~13 min"). */
+export function shortSpan(seconds: number): string {
+  if (seconds < 90) return `${Math.round(seconds)} s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
+  return `${(seconds / 3600).toFixed(1)} h`;
 }
