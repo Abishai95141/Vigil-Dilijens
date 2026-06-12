@@ -99,7 +99,9 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 
 ## Phase 2 — Marquee forecasting
 
-- [ ] **09 M1** Clock interface + reference adapter (TimesFM 2.5); swap test with stub passes; conformance fixtures
+> Working plan, decision log, and validation findings: [`artifacts/phase2-plan.md`](phase2-plan.md).
+
+- [x] **09 M1** Clock interface + reference adapter — DONE, exit gate proven. **Model validated BEFORE building** (probe: PyPI `timesfm==2.0.1` ships the 2.5 class; checkpoint `google/timesfm-2.5-200m-pytorch` @ `1d952420` pinned per A15 — the two version lines are deliberately different, package 2.0.x = the SDK, model = 2.5; ~290ms/forecast CPU; flat-honest; band never collapses; quantile head = mean + deciles). clockd serves ForecastService over grpc.aio with a swappable `--clock stub|timesfm` (serving deps behind extras, base suite hermetic); TimesFM adapter REFUSES tail quantiles + covariates (never fabricates); Go client (`obsd/internal/clock`) validates wire shapes structurally (malformed refused), dials lazily, fails fast at the caller's deadline (non-gating), Health feeds the A13 panel. **Conformance = ONE fixture file** asserted by the Python suite (stub always, model opt-in), the hermetic Go bufconn suite, and the integration-tagged CROSS-LANGUAGE swap test — the same Go client + same fixtures against the python server passed with BOTH clocks (stub 2.1s, timesfm 5.9s): swapping the clock touches zero knowledge. Skill (trend continuation) deliberately split from contract (the zero-knowledge stub is HONEST by going flat, doc 09 §2). Commit ec2b924.
 - [ ] **09 M2** Eligibility funnel over Tier-B + projection against resolved bars; guardrails + silences
 - [ ] **09 M3** 🔒 Backtest calibration gate (band coverage + time-to-cross error per target class)
 - [ ] **09 M4** First warning class live — container working-set → OOM, blast radius attached
