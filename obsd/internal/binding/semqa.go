@@ -169,8 +169,15 @@ func validateOne(b *Binding, avail *AvailabilityReport, rule *graph.ThresholdRul
 	// EVALUATED one: a rule with a divisor metric evaluates a DERIVED ratio, so
 	// the raw numerator stream is range-checked only for sign, and the ratio
 	// bound applies to numerator/divisor — never to the raw counter (that exact
-	// confusion is a false-equivalence shape of its own).
+	// confusion is a false-equivalence shape of its own). The same discipline
+	// holds for a divisor-LESS counter under a ratio bar (e.g. a PSI stall-
+	// seconds counter whose evaluated quantity is its RATE, a fraction of wall
+	// time): the cumulative level is meaningless against the ratio bound, so the
+	// bound applies to the observed per-second rate instead (live evidence:
+	// node_pressure_cpu_waiting_seconds_total at ~1008s was range-FAILED against
+	// 1.5 before this distinction).
 	derived := rule != nil && rule.DivisorMetric != ""
+	rateEvaluated := !derived && expoType == "counter"
 	for _, p := range hist {
 		if p.Value < 0 {
 			return ValidationFailed, fmt.Sprintf("range: negative value %v", p.Value)
@@ -181,8 +188,19 @@ func validateOne(b *Binding, avail *AvailabilityReport, rule *graph.ThresholdRul
 		if b.Bar != nil && b.Bar.Unit == "bytes" && p.Value > bounds.MaxMemoryBytes {
 			return ValidationFailed, fmt.Sprintf("range: %v bytes exceeds plausible capacity %v", p.Value, bounds.MaxMemoryBytes)
 		}
-		if b.Bar != nil && b.Bar.Unit == "ratio" && p.Value > bounds.MaxRatio {
+		if b.Bar != nil && b.Bar.Unit == "ratio" && !rateEvaluated && p.Value > bounds.MaxRatio {
 			return ValidationFailed, fmt.Sprintf("range: ratio %v exceeds %v", p.Value, bounds.MaxRatio)
+		}
+	}
+	if rateEvaluated && b.Bar != nil && b.Bar.Unit == "ratio" && len(hist) >= 2 {
+		// The evaluated quantity is the rate: range-check Δvalue/Δt across the
+		// window (reset-tolerant: negative deltas are the counter-shape check's
+		// concern, skipped here).
+		first, last := hist[0], hist[len(hist)-1]
+		if dt := last.At.Sub(first.At).Seconds(); dt > 0 && last.Value >= first.Value {
+			if rate := (last.Value - first.Value) / dt; rate > bounds.MaxRatio {
+				return ValidationFailed, fmt.Sprintf("range: rate %.3f/s exceeds plausible ratio %v (a stall fraction cannot beat wall time)", rate, bounds.MaxRatio)
+			}
 		}
 	}
 	if derived {

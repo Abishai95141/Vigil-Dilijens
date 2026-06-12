@@ -221,3 +221,46 @@ func TestCompileAvailabilityGating(t *testing.T) {
 		t.Errorf("working-set binding should be unaffected: %+v", ws)
 	}
 }
+
+// Regression (Phase-1 live finding): a divisor-less COUNTER under a ratio bar
+// (PSI stall-seconds — the evaluated quantity is its RATE, a fraction of wall
+// time) must be range-checked on the observed rate, never on the cumulative
+// level. The live cluster's ~1000 stall-seconds was range-FAILED against 1.5
+// before this distinction, silently excluding the cascade's node-side member.
+func TestQARateEvaluatedRatioRangeUsesRate(t *testing.T) {
+	mkPSI := func() *Result {
+		return &Result{Bindings: []Binding{{
+			CEIKey: "i|cl||Node|w1|uid-n", Entity: "Node",
+			RuleID: "THR_NODE_CPU_PSI_STALL", Metric: "node_pressure_cpu_waiting_seconds_total",
+			State: StateBound, Validation: ValidationSuspect,
+			Bar: &ResolvedBar{Kind: "absolute", Source: SourceDefault, Flagged: true,
+				Value: 0.10, Unit: "ratio", Direction: "above", Window: "5m"},
+		}}}
+	}
+	key := "uid-n|node_pressure_cpu_waiting_seconds_total"
+
+	// Plausible: cumulative ~1000s rising 3s per 15s scrape (rate 0.2/s) ⇒ VERIFIED.
+	res := mkPSI()
+	ev := fixtureEvidence{
+		streams: map[string][]string{key: {"p1"}},
+		info:    map[string][2]string{"p1": {"Node", "counter"}},
+		history: map[string][]EvidencePoint{"p1": points(1000, 1003, 1006, 1009)},
+	}
+	ValidateBindings(res, nil, rulesFixture(t), ev, RangeBounds{})
+	if v := res.Bindings[0].Validation; v != ValidationVerified {
+		t.Errorf("plausible PSI counter under a ratio bar = %s (%q), want verified (the level is not the evaluated quantity)",
+			v, res.Bindings[0].Reason)
+	}
+
+	// Implausible RATE: +30 stall-seconds per 15s of wall time (rate 2.0) ⇒ FAILED.
+	res2 := mkPSI()
+	ev2 := fixtureEvidence{
+		streams: map[string][]string{key: {"p1"}},
+		info:    map[string][2]string{"p1": {"Node", "counter"}},
+		history: map[string][]EvidencePoint{"p1": points(1000, 1030, 1060, 1090)},
+	}
+	ValidateBindings(res2, nil, rulesFixture(t), ev2, RangeBounds{})
+	if v := res2.Bindings[0].Validation; v != ValidationFailed {
+		t.Errorf("a stall rate beating wall time = %s (%q), want failed", v, res2.Bindings[0].Reason)
+	}
+}
