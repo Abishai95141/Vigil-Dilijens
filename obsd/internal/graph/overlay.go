@@ -109,14 +109,27 @@ type MemberCheck struct {
 	// a trivial rise on an idle entity does not fire — only a rise that is material
 	// relative to the bar. Empty = no guard.
 	MinState string `yaml:"min_state"` // "" | at-threshold | above | well-above
-	Note     string `yaml:"note"`      // honesty caveat surfaced on the finding
+	// On says WHERE the member's variable lives relative to the phenomenon's
+	// anchor (doc 07 §3.2): "anchor" (default) — on the evaluated entity itself;
+	// "neighbour" — on an entity one topology hop away along the phenomenon's
+	// declared traversal edge types. Neighbour checks are only legal on spanned
+	// (non-entity-local) phenomena; the matcher satisfies them across VALID edges
+	// only, degrades on suspect ones, and never counts evidence across an absent
+	// edge (the degrade-never-fabricate contract).
+	On   string `yaml:"on"`   // "" | anchor | neighbour
+	Note string `yaml:"note"` // honesty caveat surfaced on the finding
 }
+
+// OnAnchor reports whether the check evaluates on the anchor entity itself.
+func (c *MemberCheck) OnAnchor() bool { return c.On == "" || c.On == "anchor" }
 
 var knownFacets = map[string]bool{"level": true, "slope": true, "ratio": true, "rate-guard": true}
 var knownExpects = map[string]bool{"rising": true, "falling": true, "crossed": true, "at-or-above": true, "breached": true}
 var knownMinStates = map[string]bool{"": true, "at-threshold": true, "above": true, "well-above": true}
+var knownOns = map[string]bool{"": true, "anchor": true, "neighbour": true}
 
-// overlayFile is the on-disk overlay shape. A file declares spans, rules, checks.
+// overlayFile is the on-disk overlay shape. A file declares spans, rules, checks,
+// and anchors (the entity kind a spanned phenomenon's checks evaluate at).
 type overlayFile struct {
 	Overlay string                   `yaml:"overlay"`
 	Version int                      `yaml:"version"`
@@ -125,6 +138,7 @@ type overlayFile struct {
 	Spans   map[string]spanDecl      `yaml:"spans"`
 	Rules   []ThresholdRule          `yaml:"rules"`
 	Checks  map[string][]MemberCheck `yaml:"checks"`
+	Anchors map[string]string        `yaml:"anchors"`
 }
 
 // OverlayInfo is the provenance record of one applied overlay (surfaced, per the
@@ -178,7 +192,48 @@ func LoadWithOverlays(kgPath, overlayDir string) (*Graph, error) {
 	if len(paths) > 0 {
 		g.Version = "sha256:" + hex.EncodeToString(hash.Sum(nil))
 	}
+	if err := g.finalizeOverlays(); err != nil {
+		return nil, err
+	}
 	return g, nil
+}
+
+// finalizeOverlays validates the constraints that CROSS overlay files (spans,
+// checks, and anchors may each arrive from a different file, in either merge
+// order, so per-file validation cannot see them together):
+//
+//   - a neighbour-scoped check requires a spanned (non-entity-local) phenomenon —
+//     "one hop away" is meaningless without declared traversal edges;
+//   - a spanned phenomenon WITH checks must declare its anchor (where the matcher
+//     evaluates it) — never inferred from where variables happen to live;
+//   - an anchor on an entity-local phenomenon is a contradiction (the check set
+//     already lives on the one entity).
+func (g *Graph) finalizeOverlays() error {
+	ids := make([]string, 0, len(g.Phenomena))
+	for id := range g.Phenomena {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		p := g.Phenomena[id]
+		spanned := p.HasSpan() && p.Span != SpanEntityLocal
+		if p.Anchor != "" && !spanned {
+			return fmt.Errorf("phenomenon %s: anchor %q declared but span is %q — anchors are for spanned phenomena only", id, p.Anchor, p.Span)
+		}
+		hasNeighbour := false
+		for _, c := range g.Checks[id] {
+			if !c.OnAnchor() {
+				hasNeighbour = true
+			}
+		}
+		if hasNeighbour && !spanned {
+			return fmt.Errorf("phenomenon %s: neighbour-scoped check on a non-spanned phenomenon (span %q)", id, p.Span)
+		}
+		if spanned && len(g.Checks[id]) > 0 && p.Anchor == "" {
+			return fmt.Errorf("phenomenon %s: spanned phenomenon with checks must declare an anchor (doc 07 §3.2 — evaluation site is authored, never inferred)", id)
+		}
+	}
+	return nil
 }
 
 func overlayPaths(dir string) ([]string, error) {
@@ -262,6 +317,29 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 	}
 	sort.Slice(g.Rules, func(i, j int) bool { return g.Rules[i].ID < g.Rules[j].ID })
 
+	// Anchors: the entity kind a spanned phenomenon's checks evaluate at (doc 07
+	// §3.2). Span/anchor coherence is validated in finalizeOverlays — span and
+	// anchor may arrive from DIFFERENT overlay files in either merge order.
+	anchorIDs := make([]string, 0, len(f.Anchors))
+	for id := range f.Anchors {
+		anchorIDs = append(anchorIDs, id)
+	}
+	sort.Strings(anchorIDs)
+	for _, id := range anchorIDs {
+		kind := f.Anchors[id]
+		p, ok := g.Phenomena[id]
+		if !ok {
+			return fmt.Errorf("anchor for unknown phenomenon %q", id)
+		}
+		if !knownEntityScopes[kind] {
+			return fmt.Errorf("phenomenon %s: unknown anchor kind %q (Container|Pod|Node|PVC)", id, kind)
+		}
+		if p.Anchor != "" && p.Anchor != kind {
+			return fmt.Errorf("phenomenon %s: anchor conflict (%q already declared, overlay says %q)", id, p.Anchor, kind)
+		}
+		p.Anchor = kind
+	}
+
 	// Detection member-checks: validate and attach (doc 07 §3.1). Each check must
 	// reference a known phenomenon and one of ITS member signals — a check for a
 	// non-member would be detection knowledge with no authored basis.
@@ -319,6 +397,9 @@ func (g *Graph) validateCheck(p *Phenomenon, c *MemberCheck) error {
 	}
 	if c.MinState != "" && c.Facet != "slope" {
 		return fmt.Errorf("min_state %q is only meaningful on a slope facet; facet %q would silently ignore it", c.MinState, c.Facet)
+	}
+	if !knownOns[c.On] {
+		return fmt.Errorf("unknown on %q (anchor|neighbour)", c.On)
 	}
 	if strings.TrimSpace(c.Metric) == "" {
 		return fmt.Errorf("missing metric")

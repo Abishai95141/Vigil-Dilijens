@@ -1,0 +1,24 @@
+# Graph release v0.2.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.2.0
+graph_version: "sha256:76fc6dc3f30b3c94a533a87c99aba0c092ecbcf1f1e0e2217087f84142fb43d7"
+created: "2026-06-12"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+summary: >-
+  Phase-1 entry knowledge (doc 07 M2): first-order detection conditions with
+  authored anchors and neighbour-scoped member checks for THROTTLING_CASCADE
+  (Container anchor; node PSI corroboration one runs-on hop away),
+  EVICTION_MEMORY, CONNTRACK_EXHAUSTION and OOM_KILL_SYSTEM (Node anchors);
+  plus the node-side bars they need (THR_NODE_CPU_PSI_STALL absolute-default
+  0.10 flagged, THR_NODE_OOM_KILL_BURST rate-of-change >=1/15m flagged).
+  Behavioural-class change: adds detection conditions, alters no v0.1.0
+  member, span, or rule.

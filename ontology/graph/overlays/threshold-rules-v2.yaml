@@ -1,0 +1,45 @@
+# Structured threshold rules — authored overlay v2 (doc 02 §3.4, doc 04 §3.4).
+#
+# Phase-1 additions: the node-side bars first-order (doc 07 M2) phenomena need.
+# Same discipline as v1: config-relative wherever the customer declares a limit;
+# ontology defaults are FLAGGED, lower-trust bars (doc 12 high-rigor content).
+# v1 rules are immutable history — additions land as a new overlay file and a
+# new graph release (doc 12 §3.1), never as edits to a released file.
+overlay: threshold-rules-v2
+version: 2
+author: vigil-engineering
+status: proposed-v2 (ratified by commit review; first-order node-side bars)
+
+rules:
+  - id: THR_NODE_CPU_PSI_STALL
+    signal: SIG_node_pressure_psi_12_metrics_ba96070d
+    metric: node_pressure_cpu_waiting_seconds_total
+    kind: absolute
+    default: 0.10
+    direction: above
+    entity_scope: Node
+    window: 5m
+    rationale: >-
+      CPU pressure-stall fraction (PHEN_THROTTLING_CASCADE's authored T0+ PSI
+      member): the counter accumulates seconds tasks spent runnable-but-waiting,
+      so its rate over the window is the fraction of wall time the node's
+      runqueue was contended. No customer config declares a PSI tolerance, so
+      the bar is an ontology default (flagged): 10% sustained some-stall is the
+      conventional contention floor. Kernel-gated: PSI needs >=4.20; absent
+      /proc/pressure simply leaves the series unexposed (out-of-scope, stated).
+
+  - id: THR_NODE_OOM_KILL_BURST
+    signal: SIG_node_vmstat_family_30_metrics_005633c0
+    metric: node_vmstat_oom_kill
+    kind: rate-of-change
+    default: 1
+    direction: above
+    entity_scope: Node
+    window: 15m
+    rationale: >-
+      System OOM-kill guard (PHEN_OOM_KILL_SYSTEM's required T0: "Increments").
+      Any kernel OOM kill inside the window is the event itself, not a tunable
+      level, so the guard is >=1 increment per window — an ontology default
+      (flagged) because no customer config declares an OOM tolerance. The
+      counter is host-scoped (vmstat), discriminating system OOM from cgroup
+      OOM (PHEN_OOM_KILL_CGROUP's memory.events lane).

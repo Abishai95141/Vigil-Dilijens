@@ -65,8 +65,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 8 {
-		t.Fatalf("rules = %d, want 8", len(g.Rules))
+	if len(g.Rules) != 10 {
+		t.Fatalf("rules = %d, want 10 (8 v1 + 2 v2)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -117,8 +117,8 @@ func TestOverlayVersionPinning(t *testing.T) {
 		t.Errorf("version %q not a sha256 pin", merged.Version)
 	}
 	// Provenance travels with the content.
-	if len(merged.Overlays) != 3 {
-		t.Fatalf("overlay provenance records = %d, want 3 (spans, rules, detection-conditions)", len(merged.Overlays))
+	if len(merged.Overlays) != 5 {
+		t.Fatalf("overlay provenance records = %d, want 5 (spans, rules v1+v2, conditions v1+v2)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")
@@ -220,6 +220,108 @@ rules:
 			err = g.applyOverlay("test.yaml", []byte(c.body))
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Errorf("want error containing %q, got %v", c.wantErr, err)
+			}
+		})
+	}
+}
+
+// The v2 first-order authoring (doc 07 M2): anchors + neighbour-scoped checks
+// land on the merged graph with the declared shape.
+func TestFirstOrderConditionsAuthored(t *testing.T) {
+	g := loadKGWithOverlays(t)
+	cases := map[string]struct {
+		anchor string
+		checks int
+	}{
+		"PHEN_THROTTLING_CASCADE":   {"Container", 2},
+		"PHEN_EVICTION_MEMORY":      {"Node", 1},
+		"PHEN_CONNTRACK_EXHAUSTION": {"Node", 2},
+		"PHEN_OOM_KILL_SYSTEM":      {"Node", 1},
+	}
+	for id, want := range cases {
+		p := g.Phenomena[id]
+		if p.Anchor != want.anchor {
+			t.Errorf("%s anchor = %q, want %q", id, p.Anchor, want.anchor)
+		}
+		if got := len(g.ChecksFor(id)); got != want.checks {
+			t.Errorf("%s checks = %d, want %d", id, got, want.checks)
+		}
+	}
+	// The cascade's PSI member is neighbour-scoped; its ratio member is anchor-scoped.
+	for _, c := range g.ChecksFor("PHEN_THROTTLING_CASCADE") {
+		switch c.Metric {
+		case "node_pressure_cpu_waiting_seconds_total":
+			if c.OnAnchor() {
+				t.Error("PSI check must be neighbour-scoped")
+			}
+		case "container_cpu_cfs_throttled_periods_total":
+			if !c.OnAnchor() {
+				t.Error("throttle-ratio check must be anchor-scoped")
+			}
+		}
+	}
+}
+
+// Cross-overlay coherence (finalizeOverlays): span/anchor/neighbour constraints
+// hold across files in either merge order.
+func TestFinalizeOverlayRejections(t *testing.T) {
+	raw, err := os.ReadFile(kgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, body, want string }{
+		{"anchor on entity-local", `
+overlay: t
+author: a
+spans:
+  PHEN_MEMORY_LEAK: {span: entity-local, rationale: r}
+anchors:
+  PHEN_MEMORY_LEAK: Container
+`, "anchors are for spanned phenomena"},
+		{"neighbour check on entity-local", `
+overlay: t
+author: a
+spans:
+  PHEN_MEMORY_LEAK: {span: entity-local, rationale: r}
+checks:
+  PHEN_MEMORY_LEAK:
+    - {signal: SIG_container_memory_family_14_metrics_529498d3, metric: m, facet: level, expect: crossed, on: neighbour}
+`, "neighbour-scoped check on a non-spanned"},
+		{"spanned checks without anchor", `
+overlay: t
+author: a
+spans:
+  PHEN_OOM_KILL_SYSTEM: {span: first-order, traversal_edge_types: [runs-on], rationale: r}
+checks:
+  PHEN_OOM_KILL_SYSTEM:
+    - {signal: SIG_node_vmstat_family_30_metrics_005633c0, metric: m, facet: rate-guard, expect: breached}
+`, "must declare an anchor"},
+		{"unknown anchor kind", `
+overlay: t
+author: a
+anchors:
+  PHEN_OOM_KILL_SYSTEM: Galaxy
+`, "unknown anchor kind"},
+		{"unknown on", `
+overlay: t
+author: a
+checks:
+  PHEN_MEMORY_LEAK:
+    - {signal: SIG_container_memory_family_14_metrics_529498d3, metric: m, facet: level, expect: crossed, on: elsewhere}
+`, "unknown on"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g, err := Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = g.applyOverlay("test.yaml", []byte(c.body))
+			if err == nil {
+				err = g.finalizeOverlays()
+			}
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("want error containing %q, got %v", c.want, err)
 			}
 		})
 	}

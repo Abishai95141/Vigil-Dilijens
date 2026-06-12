@@ -124,6 +124,12 @@ type Phenomenon struct {
 	Span               string   `json:"span"`
 	TraversalEdgeTypes []string `json:"traversal_edge_types"`
 
+	// Anchor is the entity kind a spanned (first/second-order) phenomenon is
+	// evaluated AT (doc 07 §3.2: "the entity plus direct neighbours") — authored
+	// in the detection-conditions overlay, never inferred. Empty for entity-local
+	// phenomena (the anchor is wherever the variables live).
+	Anchor string `json:"-"`
+
 	// Derived (not from JSON):
 	InlineMembers []InlineMember `json:"-"`
 	Members       []Member       `json:"-"` // from participates_in edges

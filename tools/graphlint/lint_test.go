@@ -114,8 +114,8 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOverlays: %v", err)
 	}
-	if len(ovls) != 3 {
-		t.Fatalf("overlays = %d, want 3 (spans, threshold rules, detection-conditions)", len(ovls))
+	if len(ovls) != 5 {
+		t.Fatalf("overlays = %d, want 5 (spans, rules v1+v2, conditions v1+v2)", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {
@@ -128,8 +128,8 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 38 {
 		t.Errorf("merged spans = with %d / missing %d, want 38/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
 	}
-	if g.ThresholdRulesStructured != 8 {
-		t.Errorf("structured rules = %d, want 8", g.ThresholdRulesStructured)
+	if g.ThresholdRulesStructured != 10 {
+		t.Errorf("structured rules = %d, want 10 (8 v1 + 2 v2)", g.ThresholdRulesStructured)
 	}
 	if g.hasGaps() {
 		t.Error("no gaps should remain with overlays applied (-strict must pass)")

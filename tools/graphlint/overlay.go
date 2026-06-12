@@ -39,14 +39,29 @@ type ovRule struct {
 	Rationale   string   `yaml:"rationale"`
 }
 
+// ovCheck mirrors the runtime loader's MemberCheck (doc 07 §3.1): the authored
+// bridge from a phenomenon member to a fingerprint facet, with the 07 M2
+// fields (on: anchor|neighbour).
+type ovCheck struct {
+	Signal   string `yaml:"signal"`
+	Metric   string `yaml:"metric"`
+	Facet    string `yaml:"facet"`
+	Expect   string `yaml:"expect"`
+	MinState string `yaml:"min_state"`
+	On       string `yaml:"on"`
+	Note     string `yaml:"note"`
+}
+
 type overlayDoc struct {
 	path    string
-	Overlay string            `yaml:"overlay"`
-	Version int               `yaml:"version"`
-	Author  string            `yaml:"author"`
-	Status  string            `yaml:"status"`
-	Spans   map[string]ovSpan `yaml:"spans"`
-	Rules   []ovRule          `yaml:"rules"`
+	Overlay string               `yaml:"overlay"`
+	Version int                  `yaml:"version"`
+	Author  string               `yaml:"author"`
+	Status  string               `yaml:"status"`
+	Spans   map[string]ovSpan    `yaml:"spans"`
+	Rules   []ovRule             `yaml:"rules"`
+	Checks  map[string][]ovCheck `yaml:"checks"`
+	Anchors map[string]string    `yaml:"anchors"`
 }
 
 var (
@@ -55,6 +70,10 @@ var (
 	ovKindVocab      = map[string]bool{"config-relative": true, "absolute": true, "rate-of-change": true, "co-occurrence": true}
 	ovDirectionVocab = map[string]bool{"above": true, "below": true}
 	ovScopeVocab     = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true}
+	ovFacetVocab     = map[string]bool{"level": true, "slope": true, "ratio": true, "rate-guard": true}
+	ovExpectVocab    = map[string]bool{"rising": true, "falling": true, "crossed": true, "at-or-above": true, "breached": true}
+	ovMinStateVocab  = map[string]bool{"": true, "at-threshold": true, "above": true, "well-above": true}
+	ovOnVocab        = map[string]bool{"": true, "anchor": true, "neighbour": true}
 	ovPathVocab      = map[string]bool{
 		"container.resources.limits.memory":   true,
 		"container.resources.limits.cpu":      true,
@@ -112,8 +131,27 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 	for _, n := range doc.Nodes {
 		nodeType[n.ID] = n.Type
 	}
+	// participates_in membership (signal -> phenomenon), for check referential
+	// integrity: a check may only bind an ALREADY-AUTHORED member (doc 07 §3.1).
+	memberOf := map[string]map[string]bool{} // phen -> signal -> member
+	for _, e := range doc.Edges {
+		if e.Type == "participates_in" {
+			if memberOf[e.Dst] == nil {
+				memberOf[e.Dst] = map[string]bool{}
+			}
+			memberOf[e.Dst][e.Src] = true
+		}
+	}
+
 	var errs []string
 	seenRule := map[string]string{}
+	// Cross-overlay state for the finalize checks (span/anchor/neighbour
+	// coherence — spans, checks, and anchors may arrive from different files).
+	spanOf := map[string]string{}             // phen -> declared span (across all overlays)
+	anchorOf := map[string]string{}           // phen -> declared anchor
+	hasChecks := map[string]bool{}            // phen -> any check authored
+	hasNeighbourCheck := map[string]bool{}    // phen -> any neighbour-scoped check
+	seenCheck := map[string]map[string]bool{} // phen -> signal -> dup guard
 	for _, o := range ovls {
 		at := filepath.Base(o.path)
 		if strings.TrimSpace(o.Overlay) == "" {
@@ -134,6 +172,10 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 			} else if typ != "CorrelationGroup" {
 				errs = append(errs, fmt.Sprintf("%s: span target %q is a %s, not a CorrelationGroup", at, id, typ))
 			}
+			if prev, dup := spanOf[id]; dup && prev != s.Span {
+				errs = append(errs, fmt.Sprintf("%s: %s: span conflict across overlays (%q vs %q)", at, id, prev, s.Span))
+			}
+			spanOf[id] = s.Span
 			if !ovSpanVocab[s.Span] {
 				errs = append(errs, fmt.Sprintf("%s: %s: invalid span %q", at, id, s.Span))
 			}
@@ -200,6 +242,110 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 					errs = append(errs, fmt.Sprintf("%s: %s: %s rule must not carry config_path", at, r.ID, r.Kind))
 				}
 			}
+		}
+
+		// Anchors (doc 07 §3.2): a known phenomenon + a known entity kind; the
+		// span/anchor coherence check runs after every overlay merged (below).
+		anchorIDs := make([]string, 0, len(o.Anchors))
+		for id := range o.Anchors {
+			anchorIDs = append(anchorIDs, id)
+		}
+		sort.Strings(anchorIDs)
+		for _, id := range anchorIDs {
+			kind := o.Anchors[id]
+			if typ := nodeType[id]; typ == "" {
+				errs = append(errs, fmt.Sprintf("%s: anchor for unknown phenomenon %q", at, id))
+			} else if typ != "CorrelationGroup" {
+				errs = append(errs, fmt.Sprintf("%s: anchor target %q is a %s, not a CorrelationGroup", at, id, typ))
+			}
+			if !ovScopeVocab[kind] {
+				errs = append(errs, fmt.Sprintf("%s: %s: unknown anchor kind %q", at, id, kind))
+			}
+			if prev, dup := anchorOf[id]; dup && prev != kind {
+				errs = append(errs, fmt.Sprintf("%s: %s: anchor conflict across overlays (%q vs %q)", at, id, prev, kind))
+			}
+			anchorOf[id] = kind
+		}
+
+		// Member checks (doc 07 §3.1): referential (phenomenon + member signal),
+		// vocabulary, one check per (phenomenon, signal) across ALL overlays.
+		checkIDs := make([]string, 0, len(o.Checks))
+		for id := range o.Checks {
+			checkIDs = append(checkIDs, id)
+		}
+		sort.Strings(checkIDs)
+		for _, phen := range checkIDs {
+			if typ := nodeType[phen]; typ == "" {
+				errs = append(errs, fmt.Sprintf("%s: checks for unknown phenomenon %q", at, phen))
+				continue
+			} else if typ != "CorrelationGroup" {
+				errs = append(errs, fmt.Sprintf("%s: check target %q is a %s, not a CorrelationGroup", at, phen, typ))
+				continue
+			}
+			for i, c := range o.Checks[phen] {
+				hasChecks[phen] = true
+				if nodeType[c.Signal] != "Signal" {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: unknown signal %q", at, phen, i, c.Signal))
+				} else if !memberOf[phen][c.Signal] {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: signal %q is not a member (a check cannot bind an undeclared member)", at, phen, i, c.Signal))
+				}
+				if strings.TrimSpace(c.Metric) == "" {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: missing metric", at, phen, i))
+				}
+				if !ovFacetVocab[c.Facet] {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: unknown facet %q", at, phen, i, c.Facet))
+				}
+				if !ovExpectVocab[c.Expect] {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: unknown expect %q", at, phen, i, c.Expect))
+				}
+				if !ovMinStateVocab[c.MinState] {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: unknown min_state %q", at, phen, i, c.MinState))
+				}
+				if c.MinState != "" && c.Facet != "slope" {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: min_state is only meaningful on a slope facet", at, phen, i))
+				}
+				if !ovOnVocab[c.On] {
+					errs = append(errs, fmt.Sprintf("%s: %s check %d: unknown on %q (anchor|neighbour)", at, phen, i, c.On))
+				}
+				if c.On == "neighbour" {
+					hasNeighbourCheck[phen] = true
+				}
+				if seenCheck[phen] == nil {
+					seenCheck[phen] = map[string]bool{}
+				}
+				if seenCheck[phen][c.Signal] {
+					errs = append(errs, fmt.Sprintf("%s: %s: duplicate check for signal %q", at, phen, c.Signal))
+				}
+				seenCheck[phen][c.Signal] = true
+			}
+		}
+	}
+
+	// Cross-overlay coherence (mirrors the runtime loader's finalizeOverlays):
+	// span, anchor, and checks may each come from a different file.
+	finalIDs := make([]string, 0, len(hasChecks)+len(anchorOf))
+	seenFinal := map[string]bool{}
+	for id := range hasChecks {
+		finalIDs = append(finalIDs, id)
+		seenFinal[id] = true
+	}
+	for id := range anchorOf {
+		if !seenFinal[id] {
+			finalIDs = append(finalIDs, id)
+		}
+	}
+	sort.Strings(finalIDs)
+	for _, id := range finalIDs {
+		span := spanOf[id]
+		spanned := span != "" && span != "entity-local"
+		if anchorOf[id] != "" && !spanned {
+			errs = append(errs, fmt.Sprintf("%s: anchor %q declared but span is %q — anchors are for spanned phenomena only", id, anchorOf[id], span))
+		}
+		if hasNeighbourCheck[id] && !spanned {
+			errs = append(errs, fmt.Sprintf("%s: neighbour-scoped check on a non-spanned phenomenon (span %q)", id, span))
+		}
+		if spanned && hasChecks[id] && anchorOf[id] == "" {
+			errs = append(errs, fmt.Sprintf("%s: spanned phenomenon with checks must declare an anchor (doc 07 §3.2)", id))
 		}
 	}
 	return errs
