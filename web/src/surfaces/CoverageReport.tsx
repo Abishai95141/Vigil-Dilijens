@@ -102,6 +102,7 @@ function Header({ view }: { view: CoverageView }) {
         }}
       >
         cluster {view.clusterId.slice(0, 8)}… · graph{" "}
+        {view.graphRelease ? `${view.graphRelease} · ` : "unreleased · "}
         {view.graphVersion.slice(7, 19)}… ·{" "}
         {new Date(view.generatedAt).toLocaleTimeString()}
       </div>

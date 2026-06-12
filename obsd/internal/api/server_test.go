@@ -15,7 +15,7 @@ import (
 var at = time.Date(2026, 6, 12, 9, 0, 0, 0, time.UTC)
 
 func TestCoverageUnavailableIsHonest(t *testing.T) {
-	v := BuildCoverage("cl", "sha256:abc", at, nil, nil, nil)
+	v := BuildCoverage("cl", "sha256:abc", "v0.1.0", at, nil, nil, nil)
 	if v.Available {
 		t.Error("nil binding result must yield an unavailable (not all-zero) view")
 	}
@@ -48,7 +48,7 @@ func TestCoverageComposes(t *testing.T) {
 	sel := &selection.Result{TierACount: 16, NoneByReason: map[selection.Reason]int{selection.ReasonNoEvaluableVariable: 12}}
 	sel.Records = make([]selection.Record, 28)
 
-	v := BuildCoverage("cl", "sha256:abc", at, res, obs, sel)
+	v := BuildCoverage("cl", "sha256:abc", "v0.1.0", at, res, obs, sel)
 	if !v.Available || v.Summary.Entities != 28 || v.Summary.TierA != 16 {
 		t.Errorf("summary wrong: %+v", v.Summary)
 	}
@@ -72,7 +72,7 @@ func TestEndpointsServeJSON(t *testing.T) {
 	defer st.Close()
 	mux := http.NewServeMux()
 	Register(mux, Providers{
-		Coverage: func() *CoverageView { return BuildCoverage("cl", "v", at, nil, nil, nil) },
+		Coverage: func() *CoverageView { return BuildCoverage("cl", "v", "", at, nil, nil, nil) },
 		Findings: func(limit int) ([]store.FindingRow, error) { return st.ActiveFindings(limit) },
 	})
 

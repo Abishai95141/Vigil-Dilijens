@@ -61,6 +61,14 @@ lint:
         echo "gofmt needs these files:"; echo "${unformatted}"; exit 1
     fi
     cd proto && buf lint
+    cd "{{justfile_directory()}}"
+    # Graph release immutability (doc 12 M1): the committed release must still
+    # describe the actual ontology. Editing the graph without cutting a new
+    # release fails here (and in release_test.go).
+    latest="$(ls ontology/releases/*.yaml 2>/dev/null | sort | tail -1)"
+    if [ -n "${latest}" ]; then
+        go run ./tools/graphlint -release "${latest}"
+    fi
     echo "lint OK"
 
 # Optional heavier linters, go-installed on demand (pure Go, no CGO, cross-platform).
@@ -80,6 +88,11 @@ gen:
 # gap report (doc 02 M3 / doc 14 A14). Add --strict to fail on gaps.
 graphlint *ARGS:
     go run ./tools/graphlint {{ARGS}}
+
+# Print the content-hash pin for the current ontology (base + overlays) — paste it
+# into a new ontology/releases/vX.Y.Z.yaml to cut a release (doc 12 M1).
+graph-version:
+    @go run ./tools/graphlint -print-version
 
 # Fail if generated code is stale relative to the protos (CI guard).
 gen-check:

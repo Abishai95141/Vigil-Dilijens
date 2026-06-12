@@ -4,13 +4,31 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
+
+// liveClientset builds a clientset from the default kubeconfig / in-cluster
+// config WITHOUT importing internal/kube — kube imports binding which imports
+// identity, so importing it from this in-package test would form an import cycle.
+// Mirrors kube.NewClientset's resolution rules.
+func liveClientset() (kubernetes.Interface, error) {
+	if cfg, err := rest.InClusterConfig(); err == nil {
+		return kubernetes.NewForConfig(cfg)
+	}
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load default kubeconfig: %w", err)
+	}
+	return kubernetes.NewForConfig(cfg)
+}
 
 // TestIdentityAgainstLiveCluster runs the identity watcher against a real cluster
 // (the kind dev cluster on the Linux box) and asserts it discovers a correctly-
@@ -19,7 +37,7 @@ import (
 //
 //	just up && go test -tags=integration ./obsd/internal/identity/ -run LiveCluster -v
 func TestIdentityAgainstLiveCluster(t *testing.T) {
-	client, err := kube.NewClientset("") // default kubeconfig / in-cluster
+	client, err := liveClientset() // default kubeconfig / in-cluster
 	if err != nil {
 		t.Fatalf("kube client: %v", err)
 	}

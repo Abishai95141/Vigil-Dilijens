@@ -5,6 +5,7 @@
 export interface CoverageView {
   clusterId: string;
   graphVersion: string;
+  graphRelease: string;
   generatedAt: string;
   available: boolean;
   summary: CoverageSummary;

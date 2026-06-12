@@ -15,6 +15,7 @@ import (
 type CoverageView struct {
 	ClusterID    string           `json:"clusterId"`
 	GraphVersion string           `json:"graphVersion"`
+	GraphRelease string           `json:"graphRelease"` // human release name (e.g. "v0.1.0"); "" = unreleased dev build
 	GeneratedAt  time.Time        `json:"generatedAt"`
 	Available    bool             `json:"available"` // false => binding not yet compiled (honest empty state)
 	Summary      CoverageSummary  `json:"summary"`
@@ -85,15 +86,17 @@ func unavailableCoverage(clusterID, graphVersion string, now time.Time) *Coverag
 
 // BuildCoverage composes the view from the runtime's current state. Pure given
 // its inputs; cmd/obsd snapshots it each tick.
-func BuildCoverage(clusterID, graphVersion string, now time.Time,
+func BuildCoverage(clusterID, graphVersion, graphRelease string, now time.Time,
 	res *binding.Result, obs *binding.ObservabilityReport, sel *selection.Result) *CoverageView {
 
 	if res == nil {
-		return unavailableCoverage(clusterID, graphVersion, now)
+		v := unavailableCoverage(clusterID, graphVersion, now)
+		v.GraphRelease = graphRelease
+		return v
 	}
 	cov := res.Coverage
 	v := &CoverageView{
-		ClusterID: clusterID, GraphVersion: graphVersion, GeneratedAt: now.UTC(),
+		ClusterID: clusterID, GraphVersion: graphVersion, GraphRelease: graphRelease, GeneratedAt: now.UTC(),
 		Available: true,
 		Summary: CoverageSummary{
 			Resolvability: cov.Resolvability, ConfigBound: cov.ConfigBound,

@@ -1,0 +1,34 @@
+# Vigil ontology — immutable release manifest (doc 12 §3.1).
+#
+# The graph ships as immutable, semantically-versioned releases. NOTHING edits a
+# released graph; change means a new release. This manifest declares the exact
+# content-hash the release must equal — verified by graphlint -release and by
+# obsd/internal/graph/release_test.go, so any drift between a released graph and
+# what is loaded is caught loudly. Every bound graph, finding, and harness result
+# pins this version (04/07/11).
+#
+# To cut the next release: edit the ontology, run `just graph-version` to get the
+# new pin, copy this file to v0.2.0.yaml, and update release/graph_version/created
+# /summary. The old manifest stays — releases are append-only history.
+
+release: v0.1.0
+graph_version: "sha256:3c26469fd971acde1ea328f0580dd31e1d0373121515d2828a2289892ad1657f"
+created: 2026-06-12
+author: vigil-engineering
+
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - spans-v1.yaml             # 38 phenomena: span + traversal edges (17 entity-local / 16 first-order / 5 second-order)
+  - threshold-rules-v1.yaml   # 8 structured threshold rules: config-relative limits + flagged defaults
+  - detect-conditions-v1.yaml # entity-local member -> fingerprint checks, with the min_state materiality guard
+
+summary: >
+  First reference-graph release. The 842-node Kubernetes signal KG (842 nodes /
+  3759 edges / 589 signals) plus the three authored overlays that make detection
+  possible: spans (02 M2-author), structured threshold rules (04), and the
+  entity-local detection conditions (07 M1). This is the knowledge state the
+  Phase-0b runtime — binding, observation, entity-local detection, the replay
+  substrate, and the Coverage Report surface — was built and live-verified
+  against. Pinned through binding (Result.GraphVersion), findings
+  (Finding.GraphVersion), and replay bundles (manifest graph_version, mismatch
+  refused).

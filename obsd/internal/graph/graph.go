@@ -181,6 +181,7 @@ type Edge struct {
 // Graph is the loaded ontology release.
 type Graph struct {
 	Version string // content hash of the release ("sha256:...") — the pin (doc 12 §3.1)
+	Release string // human release name (e.g. "v0.1.0") when loaded via a release manifest; "" for an unversioned dev load
 	Meta    map[string]any
 	Stats   map[string]any
 

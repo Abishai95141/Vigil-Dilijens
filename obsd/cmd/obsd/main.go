@@ -64,6 +64,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		healthAddr  = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
 		ontology    = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
 		overlays    = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
+		releases    = fs.String("releases", "ontology/releases", "graph release manifests (doc 12 M1); the loaded graph self-identifies its release by hash")
 		storeDir    = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
 		dbPath      = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
 		apiEnabled  = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
@@ -111,9 +112,18 @@ func run(args []string, stdout, stderr *os.File) error {
 			logger.Warn("binding disabled: ontology release not loadable (identity is unaffected)", "path", *ontology, "err", err)
 		} else {
 			ontologyGraph = g
-			logger.Info("ontology release loaded",
-				"version", g.Version[:sha256PreviewLen], "nodes", g.NodeCount(), "edges", len(g.Edges),
-				"threshold_rules", len(g.Rules), "overlays", len(g.Overlays))
+			// Self-identify the release (doc 12 M1): match the loaded content hash
+			// against committed manifests. An unmatched hash is an UNRELEASED dev
+			// build — stated, never silently presented as a release.
+			g.Release = graph.IdentifyRelease(g, *releases)
+			if g.Release == "" {
+				logger.Warn("ontology is an UNRELEASED dev build — no release manifest matches its hash (cut one with `just graph-version`, doc 12 M1)",
+					"version", g.Version[:sha256PreviewLen])
+			} else {
+				logger.Info("ontology release loaded",
+					"release", g.Release, "version", g.Version[:sha256PreviewLen], "nodes", g.NodeCount(),
+					"edges", len(g.Edges), "threshold_rules", len(g.Rules), "overlays", len(g.Overlays))
+			}
 		}
 	}
 
@@ -241,9 +251,10 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// Surfacing back end (doc 10): the SQLite findings store (A7) and the
 	// published Coverage Report snapshot the API serves. Both are OFF the
 	// deterministic path — a surfacing failure never perturbs detection/replay.
-	graphVersion := ""
+	graphVersion, graphRelease := "", ""
 	if ontologyGraph != nil {
 		graphVersion = ontologyGraph.Version
+		graphRelease = ontologyGraph.Release
 	}
 	var findingsStore *fstore.Store
 	if apiEnabled {
@@ -256,7 +267,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		}
 	}
 	var coverage atomic.Pointer[vapi.CoverageView]
-	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, time.Now(), nil, nil, nil))
+	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
 
 	// The store gate: scrape cycles write under the write lock; evaluation ticks
 	// read under the read lock. Ticks therefore always observe whole scrape
@@ -277,7 +288,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		logger.Info("operator surfacing API enabled (doc 10 M1)", "routes", "/api/coverage /api/findings")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
-	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, p.Observation.EvaluationTick.Duration(),
+	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
 		capture, &coverage, findingsStore)
 
@@ -328,7 +339,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], findingsStore *fstore.Store) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], findingsStore *fstore.Store) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -404,7 +415,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// serves, and persist the findings feed (A7). Off the deterministic
 			// path — failures are logged, never allowed to perturb the tick.
 			if coverage != nil {
-				coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, now, bd.Result, bnd.lastObs, selResult))
+				coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, now, bd.Result, bnd.lastObs, selResult))
 			}
 			if findingsStore != nil {
 				if err := findingsStore.UpsertFindings(now, findings); err != nil {

@@ -10,12 +10,35 @@ func main() {
 	schema := flag.String("schema", "ontology/schema/kg.schema.json", "path to the KG JSON Schema")
 	overlays := flag.String("overlays", "ontology/graph/overlays", "directory of authored overlays (spans, threshold rules); empty disables")
 	strict := flag.Bool("strict", false, "treat authoring gaps (e.g. phenomena without a span) as failures")
+	base := flag.String("base", "ontology/graph/k8s_signal_kg.json", "base KG file (for -print-version / -release)")
+	printVersion := flag.Bool("print-version", false, "print the content-hash pin for base+overlays and exit (for cutting a release, doc 12 M1)")
+	release := flag.String("release", "", "verify a release manifest still matches the graph (immutability, doc 12 M1); non-zero exit on drift")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "graphlint — validate the ontology KG + authored overlays and report the authoring gap (doc 02 M3 / doc 14 A14)")
-		fmt.Fprintln(os.Stderr, "usage: graphlint [-schema PATH] [-overlays DIR] [-strict] [PATH ...]   (default PATH: ontology/graph)")
+		fmt.Fprintln(os.Stderr, "graphlint — validate the ontology KG + authored overlays, report the authoring gap, and verify graph releases (doc 02 M3 / 12 M1 / doc 14 A14)")
+		fmt.Fprintln(os.Stderr, "usage: graphlint [-schema PATH] [-overlays DIR] [-strict] [-print-version] [-release MANIFEST] [PATH ...]   (default PATH: ontology/graph)")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	// Release-engineering modes run standalone and exit.
+	if *printVersion {
+		v, err := computeGraphVersion(*base, *overlays)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "graphlint:", err)
+			os.Exit(2)
+		}
+		fmt.Println(v)
+		return
+	}
+	if *release != "" {
+		r, err := verifyRelease(*release, *base, *overlays)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL  release %s\n      %v\n", *release, err)
+			os.Exit(1)
+		}
+		fmt.Printf("PASS  release %s — graph matches %s\n", r.Name, r.GraphVersion)
+		return
+	}
 
 	roots := flag.Args()
 	if len(roots) == 0 {
