@@ -1,6 +1,12 @@
 package identity
 
-import "k8s.io/apimachinery/pkg/labels"
+import (
+	"sort"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+)
 
 // The Watcher is the join audit's independent control-plane TruthSource (doc 03 §6):
 // it answers from the raw informer listers — the actual cluster state — NOT from the
@@ -58,6 +64,30 @@ func (w *Watcher) ListNodes() []EntityRef {
 	for _, n := range nodes {
 		out = append(out, EntityRef{Name: n.Name, UID: string(n.UID)})
 	}
+	return out
+}
+
+// NodesRunning returns the node names currently hosting a RUNNING pod whose
+// name starts with namePrefix — scrape-target discovery for per-node exporters
+// (doc 04 §3.1: tool presence is DETECTED from the cluster, never configured;
+// an undeployed exporter therefore produces zero fetch attempts and zero error
+// noise). Sorted for deterministic fetch order.
+func (w *Watcher) NodesRunning(namePrefix string) []string {
+	pods, err := w.podLister.List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	set := map[string]bool{}
+	for _, p := range pods {
+		if strings.HasPrefix(p.Name, namePrefix) && p.Status.Phase == corev1.PodRunning && p.Spec.NodeName != "" {
+			set[p.Spec.NodeName] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for n := range set {
+		out = append(out, n)
+	}
+	sort.Strings(out)
 	return out
 }
 

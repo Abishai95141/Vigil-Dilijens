@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -347,7 +348,10 @@ func (s *EdgeStore) NodeLiveness(nodeKey string, at time.Time) EdgeStatus {
 // Neighbours returns the traversable neighbours of `fromKey` along an edge type,
 // honouring the validity-intersection contract over the window. Absent (non-valid)
 // edges are omitted; suspect ones are included with their result so callers
-// (selection 06, detection 07) can degrade accordingly.
+// (selection 06, detection 07) can degrade accordingly. Sorted by target key —
+// neighbour order must be canonical or replayed walks would not be byte-identical
+// (byFrom holds assertion order, which differs between a live store and one
+// rebuilt from a snapshot).
 func (s *EdgeStore) Neighbours(typ EdgeType, fromKey string, w TimeWindow) []Neighbour {
 	s.mu.RLock()
 	candidates := make([]*EdgeAssertion, 0)
@@ -365,6 +369,52 @@ func (s *EdgeStore) Neighbours(typ EdgeType, fromKey string, w TimeWindow) []Nei
 			out = append(out, Neighbour{To: e.To, Result: r})
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].To.Key() < out[j].To.Key() })
+	return out
+}
+
+// NeighboursInto is the reverse walk: the traversable SOURCES of edges pointing
+// at `toKey` (e.g. the pods whose runs-on edges land on a node — the node-anchored
+// first-order walk of doc 07 §3.2). Same validity contract, same canonical order.
+func (s *EdgeStore) NeighboursInto(typ EdgeType, toKey string, w TimeWindow) []Neighbour {
+	s.mu.RLock()
+	candidates := make([]*EdgeAssertion, 0)
+	for _, e := range s.byTo[toKey] {
+		if e.Type == typ {
+			candidates = append(candidates, e)
+		}
+	}
+	s.mu.RUnlock()
+
+	out := make([]Neighbour, 0, len(candidates))
+	for _, e := range candidates {
+		r := s.Traverse(typ, e.From.Key(), toKey, w)
+		if r != TraversalAbsent {
+			out = append(out, Neighbour{To: e.From, Result: r})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].To.Key() < out[j].To.Key() })
+	return out
+}
+
+// Sources returns the distinct source keys holding at least one resident
+// assertion of the given type, sorted. Residency only — validity is the
+// traversal's judgement, per window. Used to enumerate walk origins (e.g. every
+// pod with a runs-on edge, for container→pod containment resolution).
+func (s *EdgeStore) Sources(typ EdgeType) []string {
+	s.mu.RLock()
+	set := map[string]bool{}
+	for _, e := range s.edges {
+		if e.Type == typ {
+			set[e.From.Key()] = true
+		}
+	}
+	s.mu.RUnlock()
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 
