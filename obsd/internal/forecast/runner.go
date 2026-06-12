@@ -35,6 +35,28 @@ type CycleInput struct {
 	Cadence      time.Duration // wall-clock per forecast step (the scrape interval)
 	GraphVersion string
 	P            params.ForecastParams
+	// Trace records the raw clock trajectories per invocation — the backtest
+	// substrate (11 M5: band coverage needs the quantile VALUES, not just the
+	// crossing times). Off by default; the live path never pays for it.
+	Trace bool
+}
+
+// InvocationTrace is one clock invocation's raw material for backtesting:
+// what went in (target, basis), what came out (trajectories), and how the
+// pipeline judged it (candidate or silence reason).
+type InvocationTrace struct {
+	EntityCEI     string      `json:"entityCei"`
+	Metric        string      `json:"metric"`
+	StreamUID     string      `json:"streamUid"` // the (uid, metric) join key into the Parquet export
+	BasisAt       time.Time   `json:"basisAt"`
+	ContextPoints int         `json:"contextPoints"`
+	BarValue      float64     `json:"barValue"`
+	Direction     string      `json:"direction"`
+	Quantiles     []float64   `json:"quantiles"`
+	Point         []float64   `json:"point"`
+	Bands         [][]float64 `json:"bands"` // [level][step], request order
+	Silence       string      `json:"silence,omitempty"`
+	Candidate     *Candidate  `json:"candidate,omitempty"`
 }
 
 // CycleResult is one cycle's honest accounting: candidates, every silence
@@ -43,8 +65,9 @@ type CycleInput struct {
 type CycleResult struct {
 	Candidates  []Candidate
 	Silences    []Silence
-	Degraded    bool // the clock errored/timed out at least once this cycle
-	Invocations int  // clock calls actually made (≤ budget by construction)
+	Degraded    bool              // the clock errored/timed out at least once this cycle
+	Invocations int               // clock calls actually made (≤ budget by construction)
+	Traces      []InvocationTrace // populated only when CycleInput.Trace
 }
 
 // RunCycle runs the per-target pipeline (doc 09 §3.3, v1: fetch → dynamics
@@ -114,6 +137,16 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 		}
 		basis := samples[len(samples)-1].At
 		cand, reason := Project(t, fc, basis, in.Now, in.Cadence, len(series), in.GraphVersion, in.P)
+		if in.Trace {
+			tr := InvocationTrace{
+				EntityCEI: t.CEIKey, Metric: t.Metric, StreamUID: t.StreamUID, BasisAt: basis.UTC(),
+				ContextPoints: len(series), BarValue: t.BarValue, Direction: t.Direction,
+				Quantiles: append([]float64{}, in.P.Quantiles...),
+				Point:     fc.Point, Bands: fc.Quantiles,
+				Silence: reason, Candidate: cand,
+			}
+			res.Traces = append(res.Traces, tr)
+		}
 		if cand == nil {
 			silence(t, reason)
 			continue

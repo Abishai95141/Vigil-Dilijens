@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,9 +11,11 @@ import (
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
@@ -33,6 +36,33 @@ type Options struct {
 	// EvaluationMode loudly; evaluation output must never be presented as
 	// verification.
 	Evaluate *observe.FPParams
+
+	// Forecast switches on the forecast-evaluation pass (doc 11 §3.1 "time-
+	// shiftable" / 11 M5 backtests): at every recorded tick the REAL funnel,
+	// budget, and runner re-run against the reconstructed reader "as of" that
+	// instant, tracing raw trajectories. PROJECTED output is never part of the
+	// digest — this pass verifies nothing about determinism and says so.
+	Forecast *ForecastEval
+}
+
+// ForecastEval configures the forecast-evaluation pass.
+type ForecastEval struct {
+	Clock  forecast.ClockCaller  // the clock to drive (stub or model — the swap contract)
+	Params params.ForecastParams // the EXPLICIT evaluation regime (never implied from the manifest)
+	Budget int                   // Tier-B ceiling per tick (doc 06 M5)
+	Events func(TickForecast)    // sink for per-tick events (the backtest substrate)
+}
+
+// TickForecast is one tick's forecast-evaluation output: every invocation's
+// raw trajectories + verdicts, plus the non-invocation silences.
+type TickForecast struct {
+	EvalNow    time.Time                  `json:"evalNow"`
+	BarsEpoch  int                        `json:"barsEpoch"`
+	Cadence    time.Duration              `json:"cadence"`
+	Traces     []forecast.InvocationTrace `json:"traces"`
+	Silences   []forecast.Silence         `json:"silences"`
+	Unbudgeted int                        `json:"unbudgeted"`
+	Degraded   bool                       `json:"degraded"`
 }
 
 // TickOutcome is one replayed tick's verdict.
@@ -210,10 +240,14 @@ func Run(opts Options) (*Report, error) {
 }
 
 // barsEpoch is one cached resolved-bar set plus the Tier-A selection derived
-// from it (selection is a pure function of bars + graph, doc 06).
+// from it (selection is a pure function of bars + graph, doc 06), and — when
+// the forecast pass runs — the budgeted Tier-B targets (also pure of bars +
+// graph + ceiling).
 type barsEpoch struct {
-	res      *binding.Result
-	selected map[string][]string
+	res        *binding.Result
+	selected   map[string][]string
+	tierB      []forecast.Target
+	unbudgeted int
 }
 
 // evalTick re-runs one recorded evaluation tick: materialize fingerprints from
@@ -248,6 +282,12 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 			// drop fingerprints that would have produced no findings —
 			// pre-selection bundles replay identically.)
 			ep = &barsEpoch{res: res, selected: selection.TierASet(res, opts.Graph)}
+			if opts.Forecast != nil {
+				targets, _ := forecast.EligibleTargets(res, opts.Graph)
+				sel := selection.SelectTierB(targets, opts.Forecast.Budget)
+				ep.tierB = selection.BudgetedTargets(sel)
+				ep.unbudgeted = len(sel.Unbudgeted)
+			}
 			bars[rec.BarsEpoch] = ep
 		}
 		fps = observe.Materialize(ep.res, rules, reader, regime, rec.EvalNow)
@@ -280,6 +320,24 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		// Unexplained channel (doc 08): loud-but-unmatched routing, after
 		// detection so the coverage check sees this tick's matches.
 		unexp = unexpTracker.Route(rec.EvalNow, fps, findings)
+
+		// Forecast-evaluation pass (doc 11 §3.1 time-shift / M5 backtests):
+		// the REAL pipeline "as of" this tick over the reconstructed reader.
+		// PROJECTED output — never digest-bearing, never a verification claim.
+		if opts.Forecast != nil {
+			cyc := forecast.RunCycle(context.Background(), opts.Forecast.Clock, forecast.CycleInput{
+				Now: rec.EvalNow, Targets: ep.tierB, Reader: reader,
+				Cadence: m.ScrapeInterval, GraphVersion: m.GraphVersion,
+				P: opts.Forecast.Params, Trace: true,
+			})
+			if opts.Forecast.Events != nil {
+				opts.Forecast.Events(TickForecast{
+					EvalNow: rec.EvalNow, BarsEpoch: rec.BarsEpoch, Cadence: m.ScrapeInterval,
+					Traces: cyc.Traces, Silences: cyc.Silences,
+					Unbudgeted: ep.unbudgeted, Degraded: cyc.Degraded,
+				})
+			}
+		}
 	}
 	digest, canonical, err := Digest(rec.EvalNow, fps, findings, cascades, unexp)
 	if err != nil {

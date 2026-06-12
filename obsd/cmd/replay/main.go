@@ -16,11 +16,14 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/clock"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay/export"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
@@ -51,6 +54,16 @@ func run(args []string, out *os.File) error {
 		evalMinComp = fs.Float64("eval-min-completeness", -1, "override degraded-surfacing completeness floor (with -eval)")
 		evalWellAb  = fs.Float64("eval-well-above", -1, "override well-above factor (with -eval)")
 		evalCascade = fs.Duration("eval-cascade-window", -1, "override cascade pairing window (with -eval)")
+
+		// Forecast-evaluation pass (doc 11 M5 backtests / 09 M3): re-run the
+		// REAL forecast pipeline "as of" every recorded tick against a live
+		// clock, writing raw trajectories + verdicts as JSONL — the backtest
+		// substrate. PROJECTED output: never digest-bearing, verifies nothing.
+		fcMode    = fs.Bool("forecast", false, "FORECAST-EVALUATION pass: run the forecast pipeline at every tick; verifies nothing")
+		fcClockd  = fs.String("forecast-clockd", "127.0.0.1:50051", "clockd target for the forecast pass")
+		fcOut     = fs.String("forecast-out", "", "JSONL file for per-tick forecast events (required with -forecast)")
+		fcHorizon = fs.Int("forecast-horizon", 0, "override forecast.horizon_steps for the pass (0 = params default)")
+		fcBudget  = fs.Int("forecast-budget", 0, "override Tier-B ceiling for the pass (0 = params default)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -93,6 +106,40 @@ func run(args []string, out *os.File) error {
 		opts.Evaluate = &regime
 	}
 
+	var fcFile *os.File
+	if *fcMode {
+		if *fcOut == "" {
+			return fmt.Errorf("-forecast requires -forecast-out")
+		}
+		p, err := params.Default()
+		if err != nil {
+			return err
+		}
+		regime := p.Forecast
+		if *fcHorizon > 0 {
+			regime.HorizonSteps = *fcHorizon
+		}
+		budget := p.Selection.TierBBudgetPerCycle
+		if *fcBudget > 0 {
+			budget = *fcBudget
+		}
+		cl, err := clock.New(*fcClockd)
+		if err != nil {
+			return err
+		}
+		defer cl.Close()
+		fcFile, err = os.Create(*fcOut)
+		if err != nil {
+			return err
+		}
+		defer fcFile.Close()
+		enc := json.NewEncoder(fcFile)
+		opts.Forecast = &replay.ForecastEval{
+			Clock: cl, Params: regime, Budget: budget,
+			Events: func(tf replay.TickForecast) { _ = enc.Encode(tf) },
+		}
+	}
+
 	rep, err := replay.Run(opts)
 	if err != nil {
 		return err
@@ -109,6 +156,10 @@ func run(args []string, out *os.File) error {
 	}
 	if rep.EvaluationMode {
 		fmt.Fprintln(out, "  MODE: EVALUATION (overridden sensitivity) — findings re-derived, NOTHING VERIFIED")
+	}
+	if *fcMode {
+		fmt.Fprintf(out, "  FORECAST PASS: pipeline re-ran at every tick against clockd=%s — PROJECTED output, events -> %s (verifies nothing)\n",
+			*fcClockd, *fcOut)
 	}
 	if !*quiet {
 		for _, tk := range rep.Ticks {
