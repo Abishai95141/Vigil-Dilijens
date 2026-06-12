@@ -92,6 +92,7 @@ func Run(opts Options) (*Report, error) {
 	// silently different semantics (zero watermark = everything stale) and the
 	// failure would masquerade as a determinism violation. Refuse instead.
 	if m.FPParams.ScrapeInterval <= 0 || m.FPParams.RateWindow <= 0 || m.FPParams.Watermark <= 0 ||
+		m.FPParams.CooccurrenceWindow <= 0 ||
 		m.FPParams.Band < 0 || m.FPParams.Band >= 1 || m.FPParams.WellAboveFactor <= 0 ||
 		m.FPParams.MinCompleteness < 0 || m.FPParams.MinCompleteness >= 1 || m.FPParams.CascadeWindow < 0 {
 		return nil, fmt.Errorf("replay: manifest parameter set implausible (%+v) — refusing to replay with different semantics", m.FPParams)
@@ -124,6 +125,7 @@ func Run(opts Options) (*Report, error) {
 	if opts.Evaluate != nil {
 		e := *opts.Evaluate
 		if e.ScrapeInterval <= 0 || e.RateWindow <= 0 || e.Watermark <= 0 ||
+			e.CooccurrenceWindow <= 0 ||
 			e.Band < 0 || e.Band >= 1 || e.WellAboveFactor <= 0 ||
 			e.MinCompleteness < 0 || e.MinCompleteness >= 1 || e.CascadeWindow < 0 {
 			return nil, fmt.Errorf("replay: evaluation parameter set implausible (%+v)", e)

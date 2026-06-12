@@ -81,3 +81,48 @@ func TestUpsertAndReadUnexplained(t *testing.T) {
 		t.Errorf("a distinct loud signature is a distinct row: %d", len(rows))
 	}
 }
+
+// Same-tick rows share one last_seen; the ORDER BY tiebreak (scope, signature)
+// must make the read-back order total, and the fixed-width sqlTime format must
+// keep lexicographic == chronological (RFC3339Nano trims trailing zeros, which
+// breaks that: "…00Z" sorts after "…00.5Z").
+func TestUnexplainedReadbackOrderTotal(t *testing.T) {
+	s, err := Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := time.Date(2026, 6, 12, 12, 0, 0, 0, time.UTC) // zero fraction on purpose
+	cards := []unexplained.Finding{
+		card("i|cl|shop|Pod|b|uid-b", "m2", at),
+		card("i|cl|shop|Pod|a|uid-a", "m1", at),
+		card("i|cl|shop|Pod|c|uid-c", "m1", at.Add(500*time.Millisecond)), // fractional, NEWER
+	}
+	if err := s.UpsertUnexplained(at, cards); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ActiveUnexplained(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("want 3 rows, got %d", len(rows))
+	}
+	if rows[0].Scope != "i|cl|shop|Pod|c|uid-c" {
+		t.Errorf("the chronologically newest row must come first (fixed-width ordering): %+v", rows[0])
+	}
+	if rows[1].Scope != "i|cl|shop|Pod|a|uid-a" || rows[2].Scope != "i|cl|shop|Pod|b|uid-b" {
+		t.Errorf("same-stamp rows must read back in total (scope) order: %s, %s", rows[1].Scope, rows[2].Scope)
+	}
+	if !rows[0].LastSeen.Equal(at.Add(500 * time.Millisecond)) {
+		t.Errorf("fixed-width stamp must round-trip: %v", rows[0].LastSeen)
+	}
+}
+
+func card(scope, metric string, seen time.Time) unexplained.Finding {
+	return unexplained.Finding{
+		Scope: scope, Namespace: "shop", Name: "x", Kind: "Pod", Status: unexplained.StatusNew,
+		LoudStates: []unexplained.LoudState{{Metric: metric, Kind: unexplained.LoudBarCrossing, State: "above"}},
+		FirstSeen:  seen, LastSeen: seen, Occurrences: 1, GraphVersion: "v",
+	}
+}

@@ -97,11 +97,14 @@ func Register(mux *http.ServeMux, p Providers) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if p.Insights == nil || p.Insights() == nil {
-			writeJSON(w, &InsightsView{GeneratedAt: timeNowUTC(), Findings: []InsightCard{}, Cascades: []CascadeCard{}})
-			return
+		var v *InsightsView
+		if p.Insights != nil {
+			v = p.Insights()
 		}
-		writeJSON(w, p.Insights())
+		if v == nil {
+			v = &InsightsView{GeneratedAt: timeNowUTC(), Findings: []InsightCard{}, Cascades: []CascadeCard{}}
+		}
+		writeJSON(w, v)
 	})
 
 	mux.HandleFunc("/api/topology", func(w http.ResponseWriter, r *http.Request) {
@@ -109,11 +112,14 @@ func Register(mux *http.ServeMux, p Providers) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if p.Topology == nil || p.Topology() == nil {
-			writeJSON(w, &TopologyView{GeneratedAt: timeNowUTC(), Nodes: []TopoNode{}, Edges: []TopoEdge{}})
-			return
+		var v *TopologyView
+		if p.Topology != nil {
+			v = p.Topology()
 		}
-		writeJSON(w, p.Topology())
+		if v == nil {
+			v = &TopologyView{GeneratedAt: timeNowUTC(), Nodes: []TopoNode{}, Edges: []TopoEdge{}}
+		}
+		writeJSON(w, v)
 	})
 
 	mux.HandleFunc("/api/timeline", func(w http.ResponseWriter, r *http.Request) {

@@ -141,6 +141,14 @@ func (t *Tracker) Route(now time.Time, fps []observe.Fingerprint, findings []det
 	var out []Finding
 	handled := map[string]bool{}
 
+	// This window's would-be cards, indexed by scope (one per scope by
+	// construction: fingerprints are per-entity, so each scope yields at most one
+	// uncovered set) — the set-drift reconciliation below needs the scope view.
+	curByScope := map[string]*card{}
+	for _, c := range currentByKey {
+		curByScope[c.scope] = c
+	}
+
 	// Reconcile existing open cards first (so aging keeps the original FirstSeen).
 	openKeys := make([]string, 0, len(t.open))
 	for k := range t.open {
@@ -159,8 +167,34 @@ func (t *Tracker) Route(now time.Time, fps []observe.Fingerprint, findings []det
 			handled[k] = true
 			continue
 		}
-		// The card's key left the uncovered-loud set. Distinguish supersede vs resolve:
-		// is the entity STILL loud on all the card's metrics, but now covered?
+		// The card's key left the uncovered-loud set. Three honest outcomes:
+		//
+		//  1. The uncovered set DRIFTED but overlaps the card's (a state became
+		//     covered, or a new loud state joined): the same entity is still
+		//     unexplained on an overlapping signal set — ONE aging card continues
+		//     under the new key with its history preserved (doc 08 §3.4:
+		//     persistence collapses into one card, never a stream). Closing it as
+		//     "superseded-by-match" here would claim coverage that does not exist.
+		//  2. Every card metric is still loud and now covered: superseded, with
+		//     the covering phenomenon(s) NAMED — by a single covering match when
+		//     one exists, else by the set of matches whose union covers it.
+		//  3. The loudness cleared: resolved.
+		delete(t.open, k)
+		cur := curByScope[c.scope]
+		nk := ""
+		if cur != nil {
+			nk = cardKey(cur.scope, cur.metrics)
+		}
+		if cur != nil && !handled[nk] && intersects(c.metrics, cur.metrics) {
+			cur.firstSeen = c.firstSeen
+			cur.lastSeen = now
+			cur.occurs = c.occurs + 1
+			t.open[nk] = cur
+			handled[nk] = true
+			out = append(out, cur.finding(StatusAging, t.graphVersion, "", t.matchCheck(cur, false, "")))
+			t.recordRecurrence(cur)
+			continue
+		}
 		stillLoud := true
 		for _, m := range c.metrics {
 			if !loudAll[c.scope][m] {
@@ -170,12 +204,11 @@ func (t *Tracker) Route(now time.Time, fps []observe.Fingerprint, findings []det
 		}
 		c.lastSeen = now
 		if stillLoud {
-			by := coveringPhenomenon(findings, c.scope, c.metrics)
+			by := coveringPhenomena(findings, c.scope, c.metrics)
 			out = append(out, c.finding(StatusSuperseded, t.graphVersion, by, t.matchCheck(c, true, by)))
 		} else {
 			out = append(out, c.finding(StatusResolved, t.graphVersion, "", "loud states resolved (no longer at/over their bar or guard)"))
 		}
-		delete(t.open, k)
 	}
 
 	// New cards: uncovered-loud keys with no open card.
@@ -266,6 +299,63 @@ func coveredMetrics(findings []detect.Finding) map[string]map[string]bool {
 		}
 	}
 	return covered
+}
+
+// intersects reports whether two sorted metric sets share at least one element.
+func intersects(a, b []string) bool {
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		switch {
+		case a[i] == b[j]:
+			return true
+		case a[i] < b[j]:
+			i++
+		default:
+			j++
+		}
+	}
+	return false
+}
+
+// coveringPhenomena names the authored match(es) that cover ALL the card's
+// metrics on the scope entity: a single covering phenomenon when one exists
+// (canonical smallest id), else the sorted set of matches whose UNION covers it
+// — the honest answer to "what covered this", never an empty id. Returns ""
+// only when the metrics are not in fact all covered (callers reach this only
+// when they are).
+func coveringPhenomena(findings []detect.Finding, scope string, metrics []string) string {
+	if single := coveringPhenomenon(findings, scope, metrics); single != "" {
+		return single
+	}
+	contrib := map[string]bool{}
+	got := map[string]bool{}
+	for _, f := range findings {
+		hit := false
+		for _, ev := range f.Members {
+			if (ev.Neighbour == "" && f.EntityCEI == scope) || ev.Neighbour == scope {
+				for _, m := range metrics {
+					if ev.Metric == m {
+						got[m] = true
+						hit = true
+					}
+				}
+			}
+		}
+		if hit {
+			contrib[f.Phenomenon] = true
+		}
+	}
+	for _, m := range metrics {
+		if !got[m] {
+			return ""
+		}
+	}
+	ids := make([]string, 0, len(contrib))
+	for id := range contrib {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ", ")
 }
 
 // coveringPhenomenon returns the id of a finding whose met members cover ALL the

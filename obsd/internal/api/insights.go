@@ -133,16 +133,12 @@ func BuildInsights(clusterID, graphVersion, graphRelease string, now time.Time,
 			Namespace: f.Namespace, Name: f.Name, Kind: f.Kind, Span: spanLabel(f.Span),
 			Quality: string(f.Quality), Completeness: f.Completeness,
 			RequiredMet: f.RequiredMet, RequiredTotal: f.RequiredTotal,
-			Members:      make([]MemberRow, 0, len(f.Members)),
-			Unobservable: f.Unobservable,
-			SuspectEdges: f.SuspectEdges,
+			Members: make([]MemberRow, 0, len(f.Members)),
+			// Copied, never aliased: the view outlives this tick's findings slice
+			// (published via atomic pointer, read by API handlers later).
+			Unobservable: append([]string{}, f.Unobservable...),
+			SuspectEdges: append([]string{}, f.SuspectEdges...),
 			GraphVersion: f.GraphVersion,
-		}
-		if card.Unobservable == nil {
-			card.Unobservable = []string{}
-		}
-		if card.SuspectEdges == nil {
-			card.SuspectEdges = []string{}
 		}
 		for _, m := range f.Members {
 			card.Members = append(card.Members, MemberRow{

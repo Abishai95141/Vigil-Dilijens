@@ -284,12 +284,19 @@ func (m *Matcher) blastRadius(f *Finding, selected map[string][]string, topo Top
 }
 
 // related reports how two entities are topologically related right now:
-// "same-entity" (equal keys, or equal topology anchors — e.g. two container
-// findings on one pod), or the edge type of a valid/suspect edge one hop
-// between their topology anchors. Absent topology relates nothing beyond
-// same-entity (degrade-never-fabricate applies to stories too).
+// "same-entity" (equal keys, equal topology anchors, or containers of the same
+// pod — containment is identity, not a hop, so it holds even when the pod's
+// runs-on edge is absent from the snapshot), or the edge type of a valid edge
+// one hop between their topology anchors. A SUSPECT hop still relates them —
+// the edge-validity contract (doc 07 §3.2) makes suspect usable-but-NAMED — so
+// the relation carries the suspicion marker rather than passing as clean.
+// Absent topology relates nothing beyond identity (degrade-never-fabricate
+// applies to stories too).
 func related(aKey, bKey string, topo Topology, w identity.TimeWindow, podKeyByUID map[string]string) (string, bool) {
 	if aKey == bKey {
+		return "same-entity", true
+	}
+	if ua, ub := containerPodUID(aKey), containerPodUID(bKey); ua != "" && ua == ub {
 		return "same-entity", true
 	}
 	ta, tb := topoAnchor(aKey, podKeyByUID), topoAnchor(bKey, podKeyByUID)
@@ -300,11 +307,13 @@ func related(aKey, bKey string, topo Topology, w identity.TimeWindow, podKeyByUI
 		return "", false
 	}
 	for _, typ := range []identity.EdgeType{identity.EdgeRunsOn, identity.EdgeMounts, identity.EdgeSelects} {
-		if r := topo.Traverse(typ, ta, tb, w); r != identity.TraversalAbsent {
+		r1 := topo.Traverse(typ, ta, tb, w)
+		r2 := topo.Traverse(typ, tb, ta, w)
+		if r1 == identity.TraversalValid || r2 == identity.TraversalValid {
 			return string(typ), true
 		}
-		if r := topo.Traverse(typ, tb, ta, w); r != identity.TraversalAbsent {
-			return string(typ), true
+		if r1 == identity.TraversalSuspect || r2 == identity.TraversalSuspect {
+			return string(typ) + " (suspect)", true
 		}
 	}
 	return "", false

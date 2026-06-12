@@ -47,7 +47,7 @@ func renderFindings(w io.Writer, findings []detect.Finding, obs *binding.Observa
 		fmt.Fprintf(w, "\n  ▸ %s  [%s match · %s · completeness %.0f%%]\n", f.Label, f.Quality, span, f.Completeness*100)
 		fmt.Fprintf(w, "    entity: %s (%s)\n", ent, f.Kind)
 		fmt.Fprintf(w, "    required: %d met of %d (%d unobservable here); supporting: %d/%d\n",
-			f.RequiredMet, f.RequiredTotal, f.RequiredUnobserved, f.SupportingMet, f.SupportingObservble)
+			f.RequiredMet, f.RequiredTotal, f.RequiredUnobserved, f.SupportingMet, f.SupportingObservable)
 		for _, mem := range f.Members {
 			barProv := "config"
 			if mem.BarFlagged {

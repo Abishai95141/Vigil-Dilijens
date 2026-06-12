@@ -16,6 +16,12 @@ type Store struct {
 	db *sql.DB
 }
 
+// sqlTime is the fixed-width timestamp format for TEXT columns: unlike
+// RFC3339Nano (which trims trailing zeros), every value is the same width, so
+// SQL's lexicographic ORDER BY is exactly chronological ("…00Z" would otherwise
+// sort after "…00.5Z"). RFC3339Nano still parses it on the way out.
+const sqlTime = "2006-01-02T15:04:05.000000000Z07:00"
+
 // FindingRow is one persisted finding as the surfaces read it back.
 type FindingRow struct {
 	Phenomenon         string    `json:"phenomenon"`
@@ -92,7 +98,7 @@ func (s *Store) UpsertFindings(evalAt time.Time, fs []detect.Finding) error {
 	if len(fs) == 0 {
 		return nil
 	}
-	at := evalAt.UTC().Format(time.RFC3339Nano)
+	at := evalAt.UTC().Format(sqlTime)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
@@ -139,7 +145,7 @@ func (s *Store) ActiveFindings(limit int) ([]FindingRow, error) {
 SELECT phenomenon, label, entity_cei, namespace, name, kind, quality, completeness,
   required_total, required_met, required_unobserved, graph_version,
   members_json, unobservable_json, first_seen, last_seen
-FROM findings ORDER BY last_seen DESC LIMIT ?`, limit)
+FROM findings ORDER BY last_seen DESC, entity_cei, phenomenon LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: query: %w", err)
 	}

@@ -44,7 +44,8 @@ export function UnexplainedSurface() {
           <div className="v-card">
             <p className="v-muted">
               No loud-but-unmatched activity right now. Everything currently
-              loud is explained by a curated pattern.
+              loud is covered by a curated pattern (authored knowledge, not
+              inference).
             </p>
           </div>
         ) : (

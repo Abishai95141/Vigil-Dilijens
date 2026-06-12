@@ -304,3 +304,57 @@ func TestSupportingGapNamed(t *testing.T) {
 		t.Errorf("quality stays keyed to required coverage: %s", f.Quality)
 	}
 }
+
+// --- relation honesty (pre-Phase-2 audit) ---------------------------------------
+
+// A SUSPECT hop still relates two entities (the edge-validity contract makes
+// suspect usable-but-NAMED, doc 07 §3.2) — so the story must carry the
+// suspicion marker rather than passing as a clean relation.
+func TestCascadeSuspectHopNamed(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	tracker := NewCascadeTracker(10 * time.Minute)
+
+	// runs-on confirmed 10 minutes ago against a 90s budget: SUSPECT, not absent.
+	topo := identity.NewEdgeStore(func() time.Time { return evalAt },
+		map[identity.EdgeType]time.Duration{identity.EdgeRunsOn: 90 * time.Second}, 24*time.Hour)
+	topo.Assert(identity.EdgeRunsOn, mustCEI(t, csPodKey), mustCEI(t, csNodeKey), evalAt.Add(-10*time.Minute))
+
+	t1 := evalAt.Add(-2 * time.Minute)
+	trigger := Finding{Phenomenon: "PHEN_MEMORY_LEAK", EntityCEI: csPodKey, EvaluatedAt: t1, Quality: QualityDegraded}
+	tracker.Observe(t1, []Finding{trigger})
+	down := Finding{Phenomenon: "PHEN_OOM_KILL_CGROUP", EntityCEI: csNodeKey, EvaluatedAt: evalAt, Quality: QualityDegraded}
+
+	cs := m.Cascades(evalAt, []Finding{down}, tracker, topo, w)
+	c := findCascade(cs, "PHEN_MEMORY_LEAK", "PHEN_OOM_KILL_CGROUP")
+	if c == nil {
+		t.Fatalf("a suspect hop still relates (usable-but-named): %+v", cs)
+	}
+	if c.Related != "runs-on (suspect)" {
+		t.Errorf("the suspicion must be NAMED on the relation, got %q", c.Related)
+	}
+}
+
+// Two containers of the same pod are related by IDENTITY (containment is not a
+// hop): the relation holds even when the pod has no runs-on edge in the
+// snapshot — an absent edge must not erase what the keys themselves prove.
+func TestSamePodContainmentWithoutEdge(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	tracker := NewCascadeTracker(10 * time.Minute)
+	empty := identity.NewEdgeStore(func() time.Time { return evalAt },
+		map[identity.EdgeType]time.Duration{}, 24*time.Hour)
+
+	ca := "i|cl|shop|Container|web-a/app|uid-a/app"
+	cb := "i|cl|shop|Container|web-a/sidecar|uid-a/sidecar"
+	t1 := evalAt.Add(-1 * time.Minute)
+	tracker.Observe(t1, []Finding{{Phenomenon: "PHEN_MEMORY_LEAK", EntityCEI: ca, EvaluatedAt: t1, Quality: QualityFull}})
+	down := Finding{Phenomenon: "PHEN_OOM_KILL_CGROUP", EntityCEI: cb, EvaluatedAt: evalAt, Quality: QualityDegraded}
+
+	cs := m.Cascades(evalAt, []Finding{down}, tracker, empty, w)
+	c := findCascade(cs, "PHEN_MEMORY_LEAK", "PHEN_OOM_KILL_CGROUP")
+	if c == nil {
+		t.Fatalf("same-pod containers must relate as same-entity without topology: %+v", cs)
+	}
+	if c.Related != "same-entity" {
+		t.Errorf("containment is identity, got %q", c.Related)
+	}
+}

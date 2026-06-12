@@ -292,3 +292,104 @@ func TestCandidateReports(t *testing.T) {
 		t.Errorf("candidate must aggregate distinct entities + windows: %+v", c)
 	}
 }
+
+// --- set-drift reconciliation (pre-Phase-2 audit) -------------------------------
+
+// twoLoudFP is a per-entity fingerprint with two loud thresholded metrics.
+func twoLoudFP(a, b string) observe.Fingerprint {
+	return observe.Fingerprint{
+		CEIKey: podKey, Namespace: "shop", Name: "web-a", Kind: "Container", EvaluatedAt: t0,
+		Thresholds: []observe.VariableThreshold{
+			{RuleID: "R1", Metric: a, State: observe.StateAbove, BarSource: "config", Deriv: observe.DerivationRef{SampleAt: t0}},
+			{RuleID: "R2", Metric: b, State: observe.StateWellAbove, BarSource: "config", Deriv: observe.DerivationRef{SampleAt: t0}},
+		},
+	}
+}
+
+// When part of a card's uncovered set becomes covered, the SAME unexplained
+// condition continues as ONE aging card with its history preserved (doc 08
+// §3.4) — never a false "superseded-by-match" with an empty phenomenon id, and
+// never an occurrence reset.
+func TestSetDriftNarrowingMigratesOneAgingCard(t *testing.T) {
+	tr := NewTracker("v")
+	fp := twoLoudFP("metric_a", "metric_b")
+
+	out := tr.Route(t0, []observe.Fingerprint{fp}, nil)
+	if len(out) != 1 || out[0].Status != StatusNew || len(out[0].LoudStates) != 2 {
+		t.Fatalf("window 1 must open one NEW card over both metrics: %+v", out)
+	}
+
+	// Window 2: metric_a becomes covered by a match; metric_b stays uncovered.
+	match := detect.Finding{Phenomenon: "PHEN_A", EntityCEI: podKey,
+		Members: []detect.MemberEvidence{{Metric: "metric_a", Met: true}}}
+	out = tr.Route(t0.Add(15*time.Second), []observe.Fingerprint{fp}, []detect.Finding{match})
+	if len(out) != 1 {
+		t.Fatalf("set drift must yield exactly ONE card (no supersede + new pair): %+v", out)
+	}
+	got := out[0]
+	if got.Status != StatusAging {
+		t.Errorf("the drifted card must AGE, not close: %+v", got)
+	}
+	if got.Occurrences != 2 || !got.FirstSeen.Equal(t0) {
+		t.Errorf("history must be preserved across the drift (occurrences=2, firstSeen=t0): %+v", got)
+	}
+	if len(got.LoudStates) != 1 || got.LoudStates[0].Metric != "metric_b" {
+		t.Errorf("the migrated card must carry only the uncovered remainder: %+v", got.LoudStates)
+	}
+	if got.SupersededBy != "" {
+		t.Errorf("a drifted card is not superseded: %+v", got)
+	}
+
+	// Window 3: metric_b also covered (both still loud) — NOW it supersedes,
+	// with the covering phenomenon named.
+	matchB := detect.Finding{Phenomenon: "PHEN_B", EntityCEI: podKey,
+		Members: []detect.MemberEvidence{{Metric: "metric_b", Met: true}}}
+	out = tr.Route(t0.Add(30*time.Second), []observe.Fingerprint{fp}, []detect.Finding{match, matchB})
+	if len(out) != 1 || out[0].Status != StatusSuperseded || out[0].SupersededBy != "PHEN_B" {
+		t.Fatalf("full coverage of the remainder must supersede with the coverer NAMED: %+v", out)
+	}
+}
+
+// The uncovered set GROWING (a new loud state joins) is the same drift: one
+// aging card under the wider key, history preserved.
+func TestSetDriftGrowthMigratesOneAgingCard(t *testing.T) {
+	tr := NewTracker("v")
+	one := crossedFP(podKey, "shop", "web-a", "Container", "metric_b", observe.StateAbove, false)
+
+	out := tr.Route(t0, []observe.Fingerprint{one}, nil)
+	if len(out) != 1 || out[0].Status != StatusNew {
+		t.Fatalf("window 1 must open one NEW card: %+v", out)
+	}
+	out = tr.Route(t0.Add(15*time.Second), []observe.Fingerprint{twoLoudFP("metric_a", "metric_b")}, nil)
+	if len(out) != 1 {
+		t.Fatalf("growth drift must yield exactly ONE card: %+v", out)
+	}
+	got := out[0]
+	if got.Status != StatusAging || got.Occurrences != 2 || !got.FirstSeen.Equal(t0) || len(got.LoudStates) != 2 {
+		t.Errorf("the widened card must AGE with history preserved: %+v", got)
+	}
+}
+
+// When no single match covers the whole card but the UNION of several does
+// (every metric still loud), the supersede names ALL contributors — never an
+// empty phenomenon id in an emitted string.
+func TestUnionSupersedeNamesAllCoverers(t *testing.T) {
+	tr := NewTracker("v")
+	fp := twoLoudFP("metric_a", "metric_b")
+	tr.Route(t0, []observe.Fingerprint{fp}, nil)
+
+	matchA := detect.Finding{Phenomenon: "PHEN_A", EntityCEI: podKey,
+		Members: []detect.MemberEvidence{{Metric: "metric_a", Met: true}}}
+	matchB := detect.Finding{Phenomenon: "PHEN_B", EntityCEI: podKey,
+		Members: []detect.MemberEvidence{{Metric: "metric_b", Met: true}}}
+	out := tr.Route(t0.Add(15*time.Second), []observe.Fingerprint{fp}, []detect.Finding{matchA, matchB})
+	if len(out) != 1 || out[0].Status != StatusSuperseded {
+		t.Fatalf("union coverage of all loud states must supersede: %+v", out)
+	}
+	if out[0].SupersededBy != "PHEN_A, PHEN_B" {
+		t.Errorf("the union of coverers must be NAMED, sorted: %q", out[0].SupersededBy)
+	}
+	if strings.Contains(out[0].MatchCheck, "match  ") {
+		t.Errorf("no emitted string may carry an empty phenomenon id: %q", out[0].MatchCheck)
+	}
+}

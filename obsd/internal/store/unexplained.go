@@ -76,10 +76,10 @@ ON CONFLICT(scope, signature, graph_version) DO UPDATE SET
 	for _, c := range cards {
 		metrics := metricsOf(c.LoudStates)
 		sig := strings.Join(metrics, ",")
-		first := c.FirstSeen.UTC().Format(time.RFC3339Nano)
-		last := c.LastSeen.UTC().Format(time.RFC3339Nano)
-		if last == "" || c.LastSeen.IsZero() {
-			last = at.UTC().Format(time.RFC3339Nano)
+		first := c.FirstSeen.UTC().Format(sqlTime)
+		last := c.LastSeen.UTC().Format(sqlTime)
+		if c.LastSeen.IsZero() {
+			last = at.UTC().Format(sqlTime)
 		}
 		if _, err := stmt.Exec(c.Scope, sig, c.GraphVersion, c.Namespace, c.Name, c.Kind,
 			sig, string(c.Status), c.SupersededBy, c.Occurrences, first, last); err != nil {
@@ -100,7 +100,7 @@ func (s *Store) ActiveUnexplained(limit int) ([]UnexplainedRow, error) {
 	}
 	rows, err := s.db.Query(`
 SELECT scope, namespace, name, kind, metrics, status, superseded_by, occurrences, first_seen, last_seen
-FROM unexplained ORDER BY last_seen DESC LIMIT ?`, limit)
+FROM unexplained ORDER BY last_seen DESC, scope, signature LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("store: query unexplained: %w", err)
 	}

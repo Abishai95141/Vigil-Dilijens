@@ -86,11 +86,11 @@ type Finding struct {
 	Quality      MatchQuality
 	Completeness float64 // observable-required-met / total-required (doc 07 §8)
 
-	RequiredTotal       int
-	RequiredMet         int
-	RequiredUnobserved  int
-	SupportingMet       int
-	SupportingObservble int
+	RequiredTotal        int
+	RequiredMet          int
+	RequiredUnobserved   int
+	SupportingMet        int
+	SupportingObservable int
 
 	Members      []MemberEvidence // the evidence trail (required + observed supporting)
 	Unobservable []string         // required members that could not be checked here
@@ -342,7 +342,7 @@ func (m *Matcher) evalPhenomenon(p *graph.Phenomenon, fp observe.Fingerprint) (F
 			// unobservable supporting member is a NAMED gap (M4) — previously it
 			// was silently counted as observable.
 			if ev.Observable {
-				f.SupportingObservble++
+				f.SupportingObservable++
 				if ev.Met {
 					f.SupportingMet++
 					f.Members = append(f.Members, ev)
@@ -590,7 +590,7 @@ func (m *Matcher) evalSpanned(p *graph.Phenomenon, fp observe.Fingerprint, index
 					f.Unobservable = append(f.Unobservable, unobservableLabel(mem, ev.Metric, note))
 				}
 			} else if ev.Observable {
-				f.SupportingObservble++
+				f.SupportingObservable++
 				if ev.Met {
 					f.SupportingMet++
 					f.Members = append(f.Members, ev)
@@ -666,7 +666,7 @@ func (m *Matcher) evalSpanned(p *graph.Phenomenon, fp observe.Fingerprint, index
 			if required {
 				f.RequiredMet++
 			} else {
-				f.SupportingObservble++
+				f.SupportingObservable++
 				f.SupportingMet++
 			}
 		case observable:
@@ -675,7 +675,7 @@ func (m *Matcher) evalSpanned(p *graph.Phenomenon, fp observe.Fingerprint, index
 			if required {
 				return Finding{}, false
 			}
-			f.SupportingObservble++
+			f.SupportingObservable++
 		default:
 			// No traversable entity at this hop carries a fresh variable for this
 			// member — unobservable ACROSS THE SPAN, with the topology reason stated.

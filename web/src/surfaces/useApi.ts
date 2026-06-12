@@ -11,18 +11,22 @@ export function useApi<T>(path: string, pollMs = 15_000) {
 
   useEffect(() => {
     let alive = true;
+    // Monotonic sequence so a slow poll landing AFTER a newer one can never
+    // overwrite fresher data with stale (out-of-order fetch completion).
+    let seq = 0;
     const load = async () => {
+      const mySeq = ++seq;
       try {
         const res = await fetch(path);
         if (!res.ok) throw new Error(`${path}: ${res.status}`);
         const json = (await res.json()) as T;
-        if (alive) {
+        if (alive && mySeq === seq) {
           setData(json);
           setError(null);
           setLoaded(true);
         }
       } catch (e) {
-        if (alive) {
+        if (alive && mySeq === seq) {
           setError(e instanceof Error ? e.message : "request failed");
           setLoaded(true);
         }

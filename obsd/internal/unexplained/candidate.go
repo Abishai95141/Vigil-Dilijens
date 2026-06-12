@@ -93,7 +93,11 @@ func (t *Tracker) Candidates(minWindows, minEntities int) []CandidateReport {
 		if out[i].Windows != out[j].Windows {
 			return out[i].Windows > out[j].Windows
 		}
-		return strings.Join(out[i].Metrics, ",") < strings.Join(out[j].Metrics, ",")
+		mi, mj := strings.Join(out[i].Metrics, ","), strings.Join(out[j].Metrics, ",")
+		if mi != mj {
+			return mi < mj
+		}
+		return out[i].EntityKind < out[j].EntityKind // total order: same signature on two kinds
 	})
 	return out
 }
