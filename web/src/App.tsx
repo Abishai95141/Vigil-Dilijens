@@ -1,10 +1,29 @@
+import { useState } from "react";
 import { Logo } from "./components/Brand";
 import { CoverageReport } from "./surfaces/CoverageReport";
+import { InsightFeed } from "./surfaces/InsightFeed";
+import { Timeline } from "./surfaces/Timeline";
+import { TopologyView } from "./surfaces/TopologyView";
+import { UnexplainedSurface } from "./surfaces/UnexplainedSurface";
 
 // The Vigil operator shell (doc 10). One frame: a quiet header carrying the mark,
-// and the active surface below. The first (and, in 0b, only) surface is the
-// Coverage Report — the honest map shown before any finding.
+// a tab strip across the surfaces, and the active surface below. The surfaces are
+// the join — the only place the three provenance classes meet, each still
+// wearing its label (doc 10 §2). M2–M4 add the now/topology/anomaly views beside
+// the M1 coverage map; early warnings (PROJECTED) arrive in Phase 2.
+
+type Tab = "insights" | "topology" | "unexplained" | "timeline" | "coverage";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "insights", label: "Insights" },
+  { id: "topology", label: "Topology" },
+  { id: "unexplained", label: "Unexplained" },
+  { id: "timeline", label: "Timeline" },
+  { id: "coverage", label: "Coverage" },
+];
+
 export default function App() {
+  const [tab, setTab] = useState<Tab>("insights");
   return (
     <div
       style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}
@@ -13,7 +32,7 @@ export default function App() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "var(--space-sm)",
+          gap: "var(--space-md)",
           padding: "var(--space-sm) var(--page-pad)",
           borderBottom: "var(--border-hairline)",
           background: "var(--surface-1)",
@@ -22,21 +41,39 @@ export default function App() {
           zIndex: 10,
         }}
       >
-        <Logo size={28} />
-        <span
+        <div
           style={{
-            fontFamily: "var(--font-heading)",
-            fontWeight: "var(--weight-bold)",
-            fontSize: "var(--text-h3)",
-            color: "var(--text-strong)",
-            letterSpacing: "var(--tracking-tight)",
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-sm)",
           }}
         >
-          Vigil
-        </span>
-        <span className="v-overline" style={{ marginLeft: "var(--space-xs)" }}>
-          Coverage
-        </span>
+          <Logo size={28} />
+          <span
+            style={{
+              fontFamily: "var(--font-heading)",
+              fontWeight: "var(--weight-bold)",
+              fontSize: "var(--text-h3)",
+              color: "var(--text-strong)",
+              letterSpacing: "var(--tracking-tight)",
+            }}
+          >
+            Vigil
+          </span>
+        </div>
+        <nav className="v-tabs" style={{ marginLeft: "var(--space-md)" }}>
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className="v-tab"
+              data-active={tab === t.id}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
       </header>
       <main
         style={{
@@ -47,7 +84,11 @@ export default function App() {
           padding: "var(--page-pad)",
         }}
       >
-        <CoverageReport />
+        {tab === "insights" && <InsightFeed />}
+        {tab === "topology" && <TopologyView />}
+        {tab === "unexplained" && <UnexplainedSurface />}
+        {tab === "timeline" && <Timeline />}
+        {tab === "coverage" && <CoverageReport />}
       </main>
     </div>
   );

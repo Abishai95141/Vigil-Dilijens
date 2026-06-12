@@ -253,3 +253,186 @@ code,
     animation: none !important;
   }
 }
+
+/* --- Operator surfaces (doc 10 M2–M4) ---------------------------------------
+   Per-surface visual identity so an operator classifies a finding's epistemic
+   strength at a glance (doc 10 §3.1). Current-condition marks and (future)
+   predictive marks are separate visual languages by construction. */
+
+/* Quality + status badges */
+.v-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-tight);
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.v-badge[data-q="full"] {
+  color: var(--prov-measured-text);
+  background: var(--prov-measured-tint);
+  border-color: var(--prov-measured-border);
+}
+.v-badge[data-q="degraded"] {
+  color: var(--rung-at-threshold);
+  background: color-mix(in srgb, var(--rung-at-threshold) 12%, transparent);
+  border-color: color-mix(in srgb, var(--rung-at-threshold) 36%, transparent);
+}
+.v-badge[data-span] {
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-color: var(--border-soft);
+}
+
+/* The authored note, attributed — gold, dotted, never fused with the measurement */
+.v-authored-note {
+  display: block;
+  margin-top: 2px;
+  padding-left: var(--space-sm);
+  border-left: 2px dotted var(--prov-authored-on-dark, var(--prov-authored));
+  color: var(--prov-authored-text, var(--prov-authored));
+  font-style: italic;
+  font-size: var(--text-small);
+}
+
+/* Evidence rows */
+.v-evi {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-xs) var(--space-sm);
+  align-items: baseline;
+  padding: var(--space-xs) 0;
+  border-top: var(--border-hairline);
+}
+.v-evi:first-child {
+  border-top: none;
+}
+.v-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+
+/* Topology marks */
+.v-topo-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  font-size: var(--text-small);
+}
+.v-topo-node[data-matched="true"] {
+  border-color: var(--prov-measured-on-dark, var(--prov-measured));
+  box-shadow: 0 0 0 1px var(--prov-measured-on-dark, var(--prov-measured));
+}
+.v-topo-node[data-loud="true"] {
+  border-style: dashed;
+  border-color: var(--rung-at-threshold);
+}
+.v-topo-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.v-topo-mark[data-kind="matched"] {
+  background: var(--prov-measured-on-dark, var(--prov-measured));
+}
+.v-topo-mark[data-kind="loud"] {
+  background: var(--rung-at-threshold);
+}
+.v-topo-mark[data-kind="selected"] {
+  background: var(--brand-azure);
+}
+.v-topo-mark[data-kind="quiet"] {
+  background: var(--border-strong, var(--border-soft));
+}
+
+/* Edge validity */
+.v-edge-line {
+  display: inline-block;
+  width: 28px;
+  height: 0;
+  vertical-align: middle;
+}
+.v-edge-line[data-status="valid"] {
+  border-top: 2px solid var(--prov-measured-on-dark, var(--prov-measured));
+}
+.v-edge-line[data-status="suspect"] {
+  border-top: 2px dashed var(--rung-at-threshold);
+}
+.v-edge-line[data-status="retracted"] {
+  border-top: 2px dotted var(--text-faint, var(--text-muted));
+}
+
+/* Timeline lanes */
+.v-tl-lane {
+  position: relative;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: var(--border-hairline);
+  overflow: hidden;
+}
+.v-tl-span {
+  position: absolute;
+  top: 4px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  min-width: 3px;
+}
+.v-tl-span[data-surface="insight"] {
+  background: var(--prov-measured-tint);
+  border: 1px solid var(--prov-measured-border);
+}
+.v-tl-span[data-surface="unexplained"] {
+  background: color-mix(in srgb, var(--rung-at-threshold) 16%, transparent);
+  border: 1px dashed var(--rung-at-threshold);
+}
+.v-tl-projected-empty {
+  height: 28px;
+  border: 1px dashed var(--prov-projected-border, var(--border-soft));
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-sm);
+  color: var(--prov-projected-text, var(--text-muted));
+  font-size: var(--text-tiny);
+  font-style: italic;
+}
+
+/* Tab nav */
+.v-tabs {
+  display: flex;
+  gap: var(--space-xs);
+}
+.v-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--text-muted);
+  font-family: var(--font-heading);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+.v-tab[data-active="true"] {
+  color: var(--text-strong);
+  border-bottom-color: var(--brand-azure);
+}
+.v-tab-count {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--text-tiny);
+  color: var(--text-faint, var(--text-muted));
+}
