@@ -216,13 +216,19 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			if err != nil {
 				return fmt.Errorf("replay capture: %w", err)
 			}
+			stringBudgets := make(map[string]time.Duration, len(p.Identity.EdgeBudgets))
+			for k, v := range p.Identity.EdgeBudgets {
+				stringBudgets[k] = v.Duration()
+			}
 			if err := c.WriteManifest(replay.Manifest{
 				CreatedAt: time.Now().UTC(), ClusterID: clusterID,
 				GraphVersion: ontologyGraph.Version, ParamsVersion: p.Version, Profile: p.Profile,
 				FPParams: fpParams, ScrapeInterval: p.Scrape.Interval.Duration(),
 				HotRingCapacity: qss.HotCapacity(), ObsdVersion: version.Version,
-				Contents: []string{"readings (qss segments, arrival-ordered)", "resolved bars per epoch", "evaluation ticks with digests"},
-				Absent:   []string{"topology log (lands with 07 M2 traversal)", "time-shifted evaluation (lands with harness suites)"},
+				EdgeBudgets: stringBudgets,
+				Contents: []string{"readings (qss segments, arrival-ordered)", "resolved bars per epoch",
+					"topology snapshot per tick (edges with validity, doc 07 M2)", "evaluation ticks with digests"},
+				Absent: []string{"time-shifted evaluation (lands with harness suites)"},
 			}); err != nil {
 				return fmt.Errorf("replay capture: %w", err)
 			}
@@ -290,7 +296,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
-		capture, &coverage, findingsStore)
+		capture, &coverage, findingsStore, budgets)
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -339,7 +345,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], findingsStore *fstore.Store) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -389,6 +395,24 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		var findings []detect.Finding
 		barsEpoch := 0
 		barsOK := true
+		// Topology snapshot (doc 07 M2/§3.7): ONE canonical snapshot per tick
+		// drives evaluation AND the capture record. The matcher walks a store
+		// REBUILT from the snapshot — never the live store, which informers keep
+		// mutating — so recorded == evaluated by construction.
+		topoSnap := edges.Snapshot()
+		var topo detect.Topology
+		var selTopo selection.Topology
+		topoOK := true
+		if ts, terr := identity.NewEdgeStoreFromSnapshot(topoSnap, budgets); terr != nil {
+			// Cannot happen for a store's own snapshot; if it ever does, the tick
+			// is honestly un-walkable: entity-local only, capture suppressed
+			// (recording a topology the evaluation did not use would be a lie).
+			logger.Error("topology snapshot rebuild failed; first-order matching skipped this tick", "err", terr)
+			topoOK = false
+		} else {
+			topo, selTopo = ts, ts
+		}
+		evalWindow := identity.TimeWindow{Start: now.Add(-bnd.fpParams.CooccurrenceWindow), End: now}
 		// NOTE: compile holds the gate's read side through its discovery-time kube
 		// List calls (it must: binding QA reads live stream evidence under the same
 		// gate). A scrape cycle's ingest can therefore wait on a re-bind tick for
@@ -397,19 +421,20 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		// both the rings and the capture log.
 		if bd := bnd.compile(ctx, active, now); bd != nil {
 			renderBinding(out, bd, boutiqueNamespace)
-			// Monitoring selection (doc 06 M1): gates 1–2 + reason codes. The
+			// Monitoring selection (doc 06 M1+M2): gates 1–2 + reason codes, plus
+			// neighbourhood closure over the same snapshot detection walks. The
 			// deterministic Tier-A core feeds detection; the full records (incl.
-			// the none-list) are the audit surface.
+			// the none-list and closure gaps) are the audit surface.
 			selected := selection.TierASet(bd.Result, bnd.graph)
-			selResult := selection.Select(active, bd.Result, bnd.graph, bd.Stale, now, "evaluation-tick")
+			selResult := selection.Select(active, bd.Result, bnd.graph, bd.Stale, now, "evaluation-tick", selTopo, evalWindow)
 			renderSelection(out, selResult)
 			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
 			// now" — re-materialized each tick against fresh samples.
 			fps = bnd.fingerprints(now)
 			renderFingerprints(out, fps, boutiqueNamespace)
-			// Entity-local phenomenon matches (doc 07 M1) over the SELECTED
-			// fingerprints (doc 06 provides the Tier-A set to detection).
-			findings = bnd.detectFindings(fps, selected)
+			// Phenomenon matches (doc 07 M1 entity-local + M2 first-order) over the
+			// SELECTED fingerprints (doc 06 provides the Tier-A set to detection).
+			findings = bnd.detectFindings(fps, selected, topo, evalWindow)
 			renderFindings(out, findings)
 			// Surfacing (doc 10 M1): publish the Coverage Report snapshot the API
 			// serves, and persist the findings feed (A7). Off the deterministic
@@ -454,11 +479,11 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 				fmt.Fprintf(out, " CAPTURE FAILED — replay bundle incomplete: %v\n\n", werr)
 				return
 			}
-			if !barsOK {
+			if !barsOK || !topoOK {
 				return
 			}
 			if err := capture.Tick(replay.TickRecord{
-				EvalNow: now, BarsEpoch: barsEpoch, Digest: digest,
+				EvalNow: now, BarsEpoch: barsEpoch, Topology: topoSnap, Digest: digest,
 				Fingerprints: len(fps), Findings: len(findings),
 			}); err != nil {
 				logger.Error("replay capture: tick write failed", "err", err)
@@ -501,10 +526,18 @@ func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in
 			names = append(names, n.Name)
 		}
 		payloads := observe.FetchCAdvisor(ctx, f, names)
+		// node-exporter lane (doc 14 §3.2 row 3): scraped only on nodes where the
+		// exporter is detected RUNNING — presence is read from the cluster, never
+		// configured, so an undeployed exporter produces no fetch noise.
+		neNodes := watcher.NodesRunning("node-exporter")
+		if len(neNodes) > 0 {
+			payloads = append(payloads, observe.FetchNodeExporter(ctx, f, neNodes)...)
+		}
 		gate.Lock()
 		sum := in.IngestPayloads(payloads)
 		gate.Unlock()
-		logger.Info("observation ingest (cAdvisor)", "summary", sum.String(), "streams", in.Hot().Streams())
+		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d", len(names), len(neNodes)),
+			"summary", sum.String(), "streams", in.Hot().Streams())
 	}
 	if waitForSync(ctx, watcher, every) {
 		cycle()

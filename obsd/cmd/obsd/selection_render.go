@@ -49,5 +49,34 @@ func renderSelection(w io.Writer, r *selection.Result) {
 	if named > 0 {
 		fmt.Fprintln(w)
 	}
+
+	// Neighbourhood closure (doc 06 M2): the span-expanded watch set + every
+	// recorded gap. Absences are coverage facts, never silent.
+	nbrs, suspect := 0, 0
+	for _, rec := range r.Records {
+		for _, n := range rec.Neighbourhood {
+			nbrs++
+			if n.Result == "suspect" {
+				suspect++
+			}
+		}
+	}
+	if nbrs > 0 || len(r.ClosureGaps) > 0 {
+		fmt.Fprintf(w, "   neighbourhood closure (06 M2): %d neighbour ref(s) pulled into the watch set", nbrs)
+		if suspect > 0 {
+			fmt.Fprintf(w, " (%d over suspect edges)", suspect)
+		}
+		if len(r.ClosureGaps) > 0 {
+			fmt.Fprintf(w, " · %d gap(s)", len(r.ClosureGaps))
+		}
+		fmt.Fprintln(w)
+		for i, gap := range r.ClosureGaps {
+			if i == 4 {
+				fmt.Fprintf(w, "     … %d more gaps\n", len(r.ClosureGaps)-4)
+				break
+			}
+			fmt.Fprintf(w, "     gap: %s · %s — %s\n", ceiHuman(gap.EntityCEI), gap.Phenomenon, gap.Reason)
+		}
+	}
 	fmt.Fprintf(w, "   tier B (forecasting): structurally present, EMPTY until Phase 2 (09 funnel + budget) · graph %.19s…\n\n", r.GraphVersion)
 }

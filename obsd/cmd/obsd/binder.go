@@ -44,28 +44,24 @@ type binder struct {
 	matcher *detect.Matcher // entity-local phenomenon matcher (doc 07 M1), built once
 }
 
-// detectFindings runs the entity-local matcher (doc 07 M1) over the live
-// fingerprints of SELECTED entities (the Tier-A set, doc 06 §3.3 — selection
-// provides the watch list to detection). selected is the deterministic
-// selection.TierASet; nil means selection is unavailable, in which case
-// detection runs unfiltered (selection never gates detection into silence —
-// its absence widens attention, never narrows it). Stateless; the matcher is
-// built once from the (static) graph.
-func (b *binder) detectFindings(fps []observe.Fingerprint, selected map[string][]string) []detect.Finding {
+// detectFindings runs the matcher (doc 07 M1+M2) over the live fingerprints of
+// SELECTED entities (the Tier-A set, doc 06 §3.3 — selection provides the
+// watch list to detection): entity-local phenomena everywhere, first-order
+// phenomena at their authored anchors walking topo under the validity
+// contract. selected is the deterministic selection.TierASet; nil means
+// selection is unavailable, in which case detection runs unfiltered (selection
+// never gates detection into silence — its absence widens attention, never
+// narrows it). topo is the per-tick SNAPSHOT-rebuilt store (the same snapshot
+// the capture records — recorded == evaluated by construction); nil skips
+// first-order matching, stated.
+func (b *binder) detectFindings(fps []observe.Fingerprint, selected map[string][]string, topo detect.Topology, w identity.TimeWindow) []detect.Finding {
 	if b == nil || b.graph == nil {
 		return nil
 	}
 	if b.matcher == nil {
 		b.matcher = detect.NewMatcher(b.graph)
 	}
-	var out []detect.Finding
-	for _, fp := range fps {
-		if selected != nil && len(selected[fp.CEIKey]) == 0 {
-			continue
-		}
-		out = append(out, b.matcher.MatchFingerprint(fp)...)
-	}
-	return out
+	return b.matcher.Match(fps, selected, topo, w)
 }
 
 // fingerprints materializes per-entity fingerprints (doc 05 M3) from the latest
