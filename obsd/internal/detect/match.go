@@ -52,12 +52,14 @@ type MemberEvidence struct {
 	BarFlagged bool   // the bar this state was computed against is a flagged ontology default
 	Note       string // AUTHORED member note (the only "why", attributed)
 
-	// Neighbour evidence (first-order members only; empty for anchor members):
-	// the CEI whose fingerprint satisfied the check, the edge type crossed, and
-	// the traversal verdict for that edge over the evaluation window.
+	// Span evidence (first/second-order members only; empty for anchor
+	// members): the CEI whose fingerprint satisfied the check, the edge types
+	// crossed to reach it (joined "→" for two-hop paths), how many hops, and
+	// the path's WORST traversal verdict over the evaluation window.
 	Neighbour  string
-	Via        string // edge type ("" = on the anchor itself)
-	EdgeResult string // valid | suspect
+	Via        string // edge type(s) crossed ("" = on the anchor itself)
+	Hop        int    // 1 = direct neighbour, 2 = second-order (0 = anchor)
+	EdgeResult string // valid | suspect (the worst hop on the path)
 }
 
 // EdgeStep is one traversed edge in a finding's span instantiation (doc 07 §3.8:
@@ -93,25 +95,34 @@ type Finding struct {
 	Members      []MemberEvidence // the evidence trail (required + observed supporting)
 	Unobservable []string         // required members that could not be checked here
 
-	// Span instantiation (doc 07 §3.8) — first-order findings only.
-	Span         string     // entity-local | first-order
+	// Span instantiation (doc 07 §3.8) — spanned findings only.
+	Span         string     // entity-local | first-order | second-order
 	SpanPath     []EdgeStep // every edge evidence actually crossed, with verdicts
 	SuspectEdges []string   // edges whose staleness degrades this match (§3.2)
+
+	// Blast radius (doc 07 §3.4): the entities the graph's downstream relations
+	// put at risk, made concrete on the current topology — an AUTHORED
+	// relationship walked over MEASURED edges, never a model's prediction.
+	BlastRadius []AtRisk
 }
 
 // Matcher evaluates phenomena against fingerprints: entity-local everywhere a
-// fingerprint exists (M1), first-order at authored anchors with one-hop walks
-// under the validity contract (M2). Stateless and deterministic: same
-// fingerprints + same graph version + same topology snapshot => same findings.
+// fingerprint exists (M1), first- and second-order at authored anchors with
+// one- and two-hop walks under the validity contract (M2/M3). Stateless and
+// deterministic: same fingerprints + same graph version + same topology
+// snapshot => same findings.
 type Matcher struct {
-	g          *graph.Graph
-	checkBySig map[string]map[string]*graph.MemberCheck // phen -> signal -> check
-	entityLoc  []*graph.Phenomenon                      // entity-local phenomena, sorted by id
-	firstOrder []*graph.Phenomenon                      // first-order phenomena WITH checks, sorted by id
-	secondSkip int                                      // second-order phenomena with checks — skipped, stated (M3)
+	g           *graph.Graph
+	checkBySig  map[string]map[string]*graph.MemberCheck // phen -> signal -> check
+	entityLoc   []*graph.Phenomenon                      // entity-local phenomena, sorted by id
+	spanned     []*graph.Phenomenon                      // first/second-order phenomena WITH checks, sorted by id
+	firstOrder  int                                      // census: spanned with depth 1
+	secondOrder int                                      // census: spanned with depth 2
+	downstream  map[string][]downstreamRef               // phen -> declared downstream phenomena (07 M5)
 }
 
-// NewMatcher indexes the graph's phenomena and their authored checks.
+// NewMatcher indexes the graph's phenomena, their authored checks, and the
+// trigger→downstream relation map (doc 07 §3.4).
 func NewMatcher(g *graph.Graph) *Matcher {
 	m := &Matcher{g: g, checkBySig: map[string]map[string]*graph.MemberCheck{}}
 	for id, p := range g.Phenomena {
@@ -123,19 +134,21 @@ func NewMatcher(g *graph.Graph) *Matcher {
 		case graph.SpanEntityLocal:
 			m.entityLoc = append(m.entityLoc, p)
 			m.checkBySig[id] = bySig
-		case graph.SpanFirstOrder:
+		case graph.SpanFirstOrder, graph.SpanSecondOrder:
 			if len(bySig) > 0 { // a spanned phenomenon without checks has nothing to evaluate
-				m.firstOrder = append(m.firstOrder, p)
+				m.spanned = append(m.spanned, p)
 				m.checkBySig[id] = bySig
-			}
-		case graph.SpanSecondOrder:
-			if len(bySig) > 0 {
-				m.secondSkip++ // M3 — counted so the gap is stated, never silent
+				if p.Span == graph.SpanFirstOrder {
+					m.firstOrder++
+				} else {
+					m.secondOrder++
+				}
 			}
 		}
 	}
 	sort.Slice(m.entityLoc, func(i, j int) bool { return m.entityLoc[i].ID < m.entityLoc[j].ID })
-	sort.Slice(m.firstOrder, func(i, j int) bool { return m.firstOrder[i].ID < m.firstOrder[j].ID })
+	sort.Slice(m.spanned, func(i, j int) bool { return m.spanned[i].ID < m.spanned[j].ID })
+	m.downstream = resolveDownstream(g)
 	return m
 }
 
@@ -143,20 +156,23 @@ func NewMatcher(g *graph.Graph) *Matcher {
 func (m *Matcher) EntityLocalCount() int { return len(m.entityLoc) }
 
 // FirstOrderCount is how many first-order phenomena carry evaluable checks.
-func (m *Matcher) FirstOrderCount() int { return len(m.firstOrder) }
+func (m *Matcher) FirstOrderCount() int { return m.firstOrder }
 
-// SecondOrderSkipped is how many second-order phenomena have checks the matcher
-// cannot yet evaluate (doc 07 M3) — surfaced, never silently dropped.
-func (m *Matcher) SecondOrderSkipped() int { return m.secondSkip }
+// SecondOrderCount is how many second-order phenomena carry evaluable checks
+// (doc 07 M3 — the two-hop walk evaluates them at their authored anchor).
+func (m *Matcher) SecondOrderCount() int { return m.secondOrder }
 
-// Match is the full per-tick evaluation (doc 07 M1+M2): entity-local phenomena
-// on every selected fingerprint, first-order phenomena at their authored
-// anchors with one-hop walks over topo. selected filters ANCHOR entities only
-// (nil = no filter — selection's absence widens attention, never narrows it);
-// neighbour fingerprints contribute evidence regardless of their own tier (the
-// 06 M2 closure puts them in the watch set). topo == nil states a topology-less
-// evaluation: first-order phenomena are then skipped entirely (the pre-M2
-// regime, kept for replaying bundles captured before topology was recorded).
+// Match is the full per-tick evaluation (doc 07 M1+M2+M3): entity-local
+// phenomena on every selected fingerprint, spanned phenomena at their authored
+// anchors with one- or two-hop walks over topo. selected filters ANCHOR
+// entities only (nil = no filter — selection's absence widens attention, never
+// narrows it); neighbour fingerprints contribute evidence regardless of their
+// own tier (the 06 M2 closure puts them in the watch set). topo == nil states
+// a topology-less evaluation: spanned phenomena are then skipped entirely (the
+// pre-M2 regime, kept for replaying bundles captured before topology was
+// recorded). Each finding additionally carries its blast radius (doc 07 §3.4):
+// the entities the graph's downstream relations put at risk, made concrete on
+// the current topology — authored relationship, never a prediction.
 func (m *Matcher) Match(fps []observe.Fingerprint, selected map[string][]string, topo Topology, w identity.TimeWindow) []Finding {
 	index := make(map[string]*observe.Fingerprint, len(fps))
 	for i := range fps {
@@ -189,11 +205,11 @@ func (m *Matcher) Match(fps []observe.Fingerprint, selected map[string][]string,
 		if topo == nil {
 			continue
 		}
-		for _, p := range m.firstOrder {
+		for _, p := range m.spanned {
 			if fp.Kind != p.Anchor {
-				continue // first-order phenomena are evaluated at their authored anchor only
+				continue // spanned phenomena are evaluated at their authored anchor only
 			}
-			if f, ok := m.evalFirstOrder(p, fp, index, topo, w, podKeyByUID); ok {
+			if f, ok := m.evalSpanned(p, fp, index, topo, w, podKeyByUID); ok {
 				out = append(out, f)
 			}
 		}
@@ -207,6 +223,14 @@ func (m *Matcher) Match(fps []observe.Fingerprint, selected map[string][]string,
 		}
 		return out[i].Phenomenon < out[j].Phenomenon
 	})
+	// Blast radius (07 M5): per finding, the downstream-relation walk made
+	// concrete — needs selection (participation) and topology; absent either,
+	// no radius is invented.
+	if selected != nil && topo != nil {
+		for i := range out {
+			out[i].BlastRadius = m.blastRadius(&out[i], selected, topo, w, podKeyByUID)
+		}
+	}
 	return out
 }
 
@@ -325,29 +349,133 @@ func (m *Matcher) evalPhenomenon(p *graph.Phenomenon, fp observe.Fingerprint) (F
 	return f, true
 }
 
-// neighbourHit is one neighbour fingerprint that satisfied a member check.
+// neighbourHit is one reachable fingerprint that satisfied a span-scoped
+// member check, with the best path that reached it.
 type neighbourHit struct {
 	key     string
-	via     string
-	result  identity.Traversal
+	path    []EdgeStep
+	worst   identity.Traversal
 	state   string
 	at      time.Time
 	flagged bool
 }
 
-// evalFirstOrder evaluates one first-order phenomenon at its anchor fingerprint
-// (doc 07 §3.2). Anchor members evaluate on fp itself; neighbour members on the
-// fingerprints of entities one hop away along the phenomenon's DECLARED edge
-// types, under the validity contract:
+// reach is one entity reachable from the anchor's walk origin: the BEST path
+// to it (all-valid preferred over any-suspect, then the lexically smallest
+// path signature — deterministic) and the path's worst traversal verdict.
+type reach struct {
+	key   string
+	path  []EdgeStep
+	worst identity.Traversal
+}
+
+func pathSig(path []EdgeStep) string {
+	var b strings.Builder
+	for _, s := range path {
+		b.WriteString(s.Type)
+		b.WriteByte(0x1f)
+		b.WriteString(s.From)
+		b.WriteByte(0x1f)
+		b.WriteString(s.To)
+		b.WriteByte(0x1e)
+	}
+	return b.String()
+}
+
+// betterReach prefers the path with the stronger worst-verdict (valid beats
+// suspect); ties break on the lexically smaller path signature.
+func betterReach(a, b reach) bool {
+	if a.worst != b.worst {
+		return a.worst > b.worst
+	}
+	return pathSig(a.path) < pathSig(b.path)
+}
+
+// buildReach computes the hop-1 and (depth==2) hop-2 reach sets from walkFrom
+// along the phenomenon's declared edge types, both directions, under the
+// validity contract. Each entity appears once, with its best path; entities on
+// an earlier hop (or the origin) are never re-listed on a later one. Absent
+// edges contribute nothing by construction (Neighbours omits them).
+func buildReach(p *graph.Phenomenon, walkFrom string, topo Topology, w identity.TimeWindow, depth int) (hop1, hop2 []reach) {
+	if walkFrom == "" {
+		return nil, nil
+	}
+	both := func(typ string, from string) []identity.Neighbour {
+		et := identity.EdgeType(typ)
+		merged := append(topo.Neighbours(et, from, w), topo.NeighboursInto(et, from, w)...)
+		sort.Slice(merged, func(i, j int) bool { return merged[i].To.Key() < merged[j].To.Key() })
+		return merged
+	}
+
+	best1 := map[string]reach{}
+	for _, typ := range p.TraversalEdgeTypes {
+		for _, n := range both(typ, walkFrom) {
+			k := n.To.Key()
+			if k == walkFrom {
+				continue
+			}
+			r := reach{key: k, path: []EdgeStep{{Type: typ, From: walkFrom, To: k, Result: n.Result.String()}}, worst: n.Result}
+			if prev, seen := best1[k]; !seen || betterReach(r, prev) {
+				best1[k] = r
+			}
+		}
+	}
+	hop1 = sortedReaches(best1)
+
+	if depth >= 2 {
+		best2 := map[string]reach{}
+		for _, r1 := range hop1 {
+			for _, typ := range p.TraversalEdgeTypes {
+				for _, n := range both(typ, r1.key) {
+					k := n.To.Key()
+					if k == walkFrom {
+						continue
+					}
+					if _, atHop1 := best1[k]; atHop1 {
+						continue // already reachable in one hop — not a two-hop entity
+					}
+					worst := r1.worst
+					if n.Result < worst {
+						worst = n.Result
+					}
+					path := append(append([]EdgeStep(nil), r1.path...), EdgeStep{Type: typ, From: r1.key, To: k, Result: n.Result.String()})
+					r := reach{key: k, path: path, worst: worst}
+					if prev, seen := best2[k]; !seen || betterReach(r, prev) {
+						best2[k] = r
+					}
+				}
+			}
+		}
+		hop2 = sortedReaches(best2)
+	}
+	return hop1, hop2
+}
+
+func sortedReaches(m map[string]reach) []reach {
+	out := make([]reach, 0, len(m))
+	for _, r := range m {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
+	return out
+}
+
+// evalSpanned evaluates one spanned (first- or second-order) phenomenon at its
+// anchor fingerprint (doc 07 §3.2/M3). Anchor members evaluate on fp itself;
+// neighbour members on the fingerprints of entities one hop away; two-hop
+// members two hops away (the second-order walk — the traversal IS the
+// detection path). All hops follow only the phenomenon's DECLARED edge types,
+// under the validity contract:
 //
-//   - absent edge (or validity outside the window): the neighbour's evidence is
-//     NOT a co-occurrence — it never contributes (degrade-never-fabricate);
-//   - suspect edge: evidence counts but the match is DEGRADED, the edge named;
-//   - valid edge: supports a full match.
+//   - an absent edge ANYWHERE on the path: the evidence is NOT a co-occurrence
+//     — it never contributes (degrade-never-fabricate);
+//   - a suspect edge anywhere on the path: evidence counts but the match is
+//     DEGRADED and the edge is named;
+//   - an all-valid path supports a full match.
 //
 // Container anchors walk from their containing pod (containment is identity,
 // not a hop — the spans overlay's addressing principle).
-func (m *Matcher) evalFirstOrder(p *graph.Phenomenon, fp observe.Fingerprint, index map[string]*observe.Fingerprint, topo Topology, w identity.TimeWindow, podKeyByUID map[string]string) (Finding, bool) {
+func (m *Matcher) evalSpanned(p *graph.Phenomenon, fp observe.Fingerprint, index map[string]*observe.Fingerprint, topo Topology, w identity.TimeWindow, podKeyByUID map[string]string) (Finding, bool) {
 	bySig := m.checkBySig[p.ID]
 	f := Finding{
 		Phenomenon: p.ID, Label: p.Label, GraphVersion: m.g.Version,
@@ -374,21 +502,11 @@ func (m *Matcher) evalFirstOrder(p *graph.Phenomenon, fp observe.Fingerprint, in
 			}
 		}
 	}
-	// Lazy neighbour resolution per declared edge type, both directions, sorted.
-	nbrCache := map[string][]identity.Neighbour{}
-	neighboursFor := func(typ string) []identity.Neighbour {
-		if walkFrom == "" {
-			return nil
-		}
-		if got, ok := nbrCache[typ]; ok {
-			return got
-		}
-		et := identity.EdgeType(typ)
-		merged := append(topo.Neighbours(et, walkFrom, w), topo.NeighboursInto(et, walkFrom, w)...)
-		sort.Slice(merged, func(i, j int) bool { return merged[i].To.Key() < merged[j].To.Key() })
-		nbrCache[typ] = merged
-		return merged
+	depth := 1
+	if p.Span == graph.SpanSecondOrder {
+		depth = 2
 	}
+	hop1, hop2 := buildReach(p, walkFrom, topo, w, depth)
 
 	members := append([]graph.Member(nil), p.Members...)
 	sort.SliceStable(members, func(i, j int) bool {
@@ -454,28 +572,30 @@ func (m *Matcher) evalFirstOrder(p *graph.Phenomenon, fp observe.Fingerprint, in
 			continue
 		}
 
-		// Neighbour-scoped member: evaluate on every traversable neighbour's
-		// fingerprint along the declared edge types. Absent edges contributed
-		// nothing already (Neighbours omits them).
+		// Span-scoped member: evaluate on every reachable entity's fingerprint
+		// at the check's declared hop. Absent edges contributed nothing already
+		// (the reach sets only hold traversable paths).
+		targets := hop1
+		if check.On == "two-hop" {
+			targets = hop2
+		}
 		var hits []neighbourHit
 		observable := false
-		for _, typ := range p.TraversalEdgeTypes {
-			for _, n := range neighboursFor(typ) {
-				nfp, ok := index[n.To.Key()]
-				if !ok {
-					continue // neighbour has no fingerprint — coverage gap, handled below
-				}
-				met, state, fresh, at := satisfies(check, *nfp)
-				if !fresh {
-					continue
-				}
-				observable = true
-				if met {
-					hits = append(hits, neighbourHit{
-						key: n.To.Key(), via: typ, result: n.Result,
-						state: state, at: at, flagged: barFlagged(check, *nfp),
-					})
-				}
+		for _, r := range targets {
+			nfp, ok := index[r.key]
+			if !ok {
+				continue // reachable entity has no fingerprint — coverage gap, handled below
+			}
+			met, state, fresh, at := satisfies(check, *nfp)
+			if !fresh {
+				continue
+			}
+			observable = true
+			if met {
+				hits = append(hits, neighbourHit{
+					key: r.key, path: r.path, worst: r.worst,
+					state: state, at: at, flagged: barFlagged(check, *nfp),
+				})
 			}
 		}
 
@@ -486,25 +606,31 @@ func (m *Matcher) evalFirstOrder(p *graph.Phenomenon, fp observe.Fingerprint, in
 		case len(hits) > 0:
 			anyValid := false
 			for _, h := range hits {
-				if h.result == identity.TraversalValid {
+				if h.worst == identity.TraversalValid {
 					anyValid = true
 				}
 			}
 			for _, h := range hits {
+				via := make([]string, 0, len(h.path))
+				for _, s := range h.path {
+					via = append(via, s.Type)
+				}
 				f.Members = append(f.Members, MemberEvidence{
 					SignalID: mem.SignalID, Metric: check.Metric, Role: mem.Role,
 					Temporal: mem.TemporalOrder, Observable: true, Met: true,
 					State: h.state, SampleAt: h.at, BarFlagged: h.flagged, Note: note,
-					Neighbour: h.key, Via: h.via, EdgeResult: h.result.String(),
+					Neighbour: h.key, Via: strings.Join(via, "→"), Hop: len(h.path),
+					EdgeResult: h.worst.String(),
 				})
-				step := EdgeStep{Type: h.via, From: walkFrom, To: h.key, Result: h.result.String()}
-				sk := step.Type + "\x1f" + step.From + "\x1f" + step.To
-				if !seenSteps[sk] {
-					seenSteps[sk] = true
-					f.SpanPath = append(f.SpanPath, step)
-				}
-				if h.result == identity.TraversalSuspect && !anyValid {
-					f.SuspectEdges = append(f.SuspectEdges, fmt.Sprintf("%s %s -> %s (confirmation stale)", h.via, walkFrom, h.key))
+				for _, s := range h.path {
+					sk := s.Type + "\x1f" + s.From + "\x1f" + s.To
+					if !seenSteps[sk] {
+						seenSteps[sk] = true
+						f.SpanPath = append(f.SpanPath, s)
+					}
+					if s.Result == identity.TraversalSuspect.String() && !anyValid {
+						f.SuspectEdges = append(f.SuspectEdges, fmt.Sprintf("%s %s -> %s (confirmation stale)", s.Type, s.From, s.To))
+					}
 				}
 			}
 			if required {
@@ -514,18 +640,21 @@ func (m *Matcher) evalFirstOrder(p *graph.Phenomenon, fp observe.Fingerprint, in
 				f.SupportingMet++
 			}
 		case observable:
-			// At least one reachable neighbour evaluates this member and it is NOT
+			// At least one reachable entity evaluates this member and it is NOT
 			// happening there: for a required member the conjunction fails.
 			if required {
 				return Finding{}, false
 			}
 			f.SupportingObservble++
 		default:
-			// No traversable neighbour carries a fresh variable for this member —
-			// unobservable ACROSS THE SPAN, with the topology reason stated.
+			// No traversable entity at this hop carries a fresh variable for this
+			// member — unobservable ACROSS THE SPAN, with the topology reason stated.
 			if required {
 				f.RequiredUnobserved++
 				reason := "no traversable neighbour with this variable in window"
+				if check.On == "two-hop" {
+					reason = "no traversable two-hop entity with this variable in window"
+				}
 				if walkNote != "" {
 					reason = walkNote
 				}
@@ -534,11 +663,11 @@ func (m *Matcher) evalFirstOrder(p *graph.Phenomenon, fp observe.Fingerprint, in
 		}
 	}
 
-	// The anchor must carry positive required evidence of its own: a first-order
+	// The anchor must carry positive required evidence of its own: a spanned
 	// phenomenon is ABOUT its anchor ("the entity plus direct neighbours", doc 07
-	// §3.2), so neighbour members corroborate — they never alone constitute the
-	// match. Without this rule, EVERY container on a pressured node lights up
-	// "throttling cascade (degraded)" on the node's PSI alone — observed live
+	// §3.2), so span-scoped members corroborate — they never alone constitute
+	// the match. Without this rule, EVERY container on a pressured node lights
+	// up "throttling cascade (degraded)" on the node's PSI alone — observed live
 	// (cpu-hog and coredns containers, whose unthrottled/limit-less anchors had
 	// no ratio evidence at all): alert-fatigue noise and a claim about an anchor
 	// with zero anchor evidence.
@@ -550,7 +679,7 @@ func (m *Matcher) evalFirstOrder(p *graph.Phenomenon, fp observe.Fingerprint, in
 	}
 	sort.Strings(f.SuspectEdges)
 	// Quality (doc 07 §3.2/§3.3): incomplete coverage degrades; so does ANY
-	// member whose only support crossed a suspect edge.
+	// member whose only support crossed a suspect path.
 	if f.RequiredUnobserved == 0 && len(f.SuspectEdges) == 0 {
 		f.Quality = QualityFull
 	} else {

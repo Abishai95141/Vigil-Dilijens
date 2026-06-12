@@ -292,15 +292,16 @@ func TestSnapshotRoundTripIdenticalFindings(t *testing.T) {
 	}
 }
 
-// The matcher's first-order census: v0.2.0 authors checks for exactly four
-// first-order phenomena; second-order ones with checks would be counted-skipped.
-func TestFirstOrderCensus(t *testing.T) {
+// The matcher's spanned census: v0.2.0 authored checks for four first-order
+// phenomena; v0.3.0 adds OOM_KILL_CGROUP (first-order) and STORAGE_SATURATION
+// (second-order, evaluated by the two-hop walk — never skipped).
+func TestSpannedCensus(t *testing.T) {
 	m := NewMatcher(loadGraph(t))
-	if m.FirstOrderCount() != 4 {
-		t.Errorf("first-order phenomena with checks = %d, want 4", m.FirstOrderCount())
+	if m.FirstOrderCount() != 5 {
+		t.Errorf("first-order phenomena with checks = %d, want 5", m.FirstOrderCount())
 	}
-	if m.SecondOrderSkipped() != 0 {
-		t.Errorf("second-order skipped = %d, want 0 (none authored yet)", m.SecondOrderSkipped())
+	if m.SecondOrderCount() != 1 {
+		t.Errorf("second-order phenomena with checks = %d, want 1 (STORAGE_SATURATION)", m.SecondOrderCount())
 	}
 }
 

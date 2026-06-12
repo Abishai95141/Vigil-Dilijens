@@ -1,0 +1,30 @@
+# TEST-ONLY overlay (never shipped): exercises the noisy-neighbour SHAPE of
+# doc 07 §3.2 / M3 — anchor pod A → node → sibling pod B, two runs-on hops —
+# against the REAL KG's members (a check may only bind an authored member; the
+# metrics are synthetic fixture variables, like every golden fingerprint).
+overlay: test-noisy-neighbour
+version: 1
+author: vigil-test
+status: test fixture (detect golden tests only)
+
+spans:
+  PHEN_CNI_FAILURE:
+    span: second-order
+    traversal_edge_types: [runs-on]
+    rationale: test fixture — mirrors spans-v1's declaration for the A → node → B walk
+
+anchors:
+  PHEN_CNI_FAILURE: Pod
+
+checks:
+  PHEN_CNI_FAILURE:
+    - signal: SIG_container_stdout_stderr_logs_c47d6285
+      metric: test_sandbox_failures
+      facet: rate-guard
+      expect: breached
+      on: anchor
+    - signal: SIG_containerd_family_30_metrics_3f815079
+      metric: test_cni_drops
+      facet: rate-guard
+      expect: breached
+      on: two-hop
