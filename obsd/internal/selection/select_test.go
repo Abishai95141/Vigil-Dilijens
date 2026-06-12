@@ -66,7 +66,7 @@ func TestFunnelVerdicts(t *testing.T) {
 		{CEI: svc, Kind: "Service", Namespace: "shop", Name: "web"},
 	}
 
-	r := Select(inv, res, g, selAt, "test")
+	r := Select(inv, res, g, false, selAt, "test")
 	if len(r.Records) != 4 {
 		t.Fatalf("every inventory entity gets a record: got %d, want 4", len(r.Records))
 	}
@@ -127,7 +127,7 @@ func TestValidationFailedExcluded(t *testing.T) {
 	if len(set) != 0 {
 		t.Errorf("a QA-failed binding must not earn Tier A: %v", set)
 	}
-	r := Select([]identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}, res, g, selAt, "test")
+	r := Select([]identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}, res, g, false, selAt, "test")
 	if r.Records[0].Reason != ReasonNoEvaluableVariable {
 		t.Errorf("reason = %s, want no-evaluable-variable", r.Records[0].Reason)
 	}
@@ -143,8 +143,8 @@ func TestSelectDeterministic(t *testing.T) {
 		boundBinding(pod.Key(), "THR_CONTAINER_CPU_THROTTLE_RATIO", "container_cpu_cfs_throttled_periods_total"),
 	}}
 	inv := []identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}
-	a := Select(inv, res, g, selAt, "test")
-	b := Select(inv, res, g, selAt, "test")
+	a := Select(inv, res, g, false, selAt, "test")
+	b := Select(inv, res, g, false, selAt, "test")
 	if !reflect.DeepEqual(a, b) {
 		t.Error("Select is not deterministic")
 	}
@@ -160,8 +160,68 @@ func TestSelectDeterministic(t *testing.T) {
 func TestSelectWithoutBindingOrGraph(t *testing.T) {
 	pod := cei("shop", "Pod", "web-a", "uid-a")
 	inv := []identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}
-	r := Select(inv, nil, nil, selAt, "test")
+	r := Select(inv, nil, nil, false, selAt, "test")
 	if r.TierACount != 0 || r.Records[0].Tier != TierNone {
 		t.Errorf("no bindings -> nothing selected: %+v", r.Records[0])
+	}
+}
+
+// Stale bound graph + fresh inventory (adversarial finding): an entity the
+// bindings have never seen gets the truthful bindings-stale reason, never a
+// false structural-entity claim about its kind.
+func TestStaleBindingsReason(t *testing.T) {
+	g := loadGraph(t)
+	podA := cei("shop", "Pod", "web-a", "uid-a")
+	podNew := cei("shop", "Pod", "web-new", "uid-new") // created after the last successful compile
+	res := &binding.Result{Bindings: []binding.Binding{
+		boundBinding(podA.Key(), "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT", "container_memory_working_set_bytes"),
+	}}
+	inv := []identity.InstanceRecord{
+		{CEI: podA, Kind: "Pod", Namespace: "shop", Name: "web-a"},
+		{CEI: podNew, Kind: "Pod", Namespace: "shop", Name: "web-new"},
+	}
+	r := Select(inv, res, g, true, selAt, "test")
+	for _, rec := range r.Records {
+		switch rec.Name {
+		case "web-a":
+			if rec.Tier != TierA {
+				t.Errorf("web-a present in the stale bindings keeps its truthful verdict: %+v", rec)
+			}
+		case "web-new":
+			if rec.Reason != ReasonBindingsStale {
+				t.Errorf("binding-unseen entity under stale bindings = bindings-stale, got %s", rec.Reason)
+			}
+		}
+	}
+	// Without staleness the same absence means a structural kind.
+	r2 := Select(inv, res, g, false, selAt, "test")
+	for _, rec := range r2.Records {
+		if rec.Name == "web-new" && rec.Reason != ReasonStructuralEntity {
+			t.Errorf("fresh bindings + no rows = structural-entity, got %s", rec.Reason)
+		}
+	}
+}
+
+// The funnel provably covers everything the matcher can fire on: an entity
+// whose bound METRIC backs an authored phenomenon check participates even when
+// its binding rides a rule whose signal is not a member of that phenomenon.
+func TestMetricJoinCoversMatcher(t *testing.T) {
+	g := loadGraph(t)
+	pod := cei("shop", "Pod", "web-a", "uid-a")
+	// A rule id the graph does not know (no signal join possible), but the
+	// metric is consulted by PHEN_MEMORY_LEAK's authored check.
+	res := &binding.Result{Bindings: []binding.Binding{
+		boundBinding(pod.Key(), "THR_SOME_FOREIGN_RULE", "container_memory_working_set_bytes"),
+	}}
+	set := TierASet(res, g)
+	phens := set[pod.Key()]
+	found := false
+	for _, p := range phens {
+		if p == "PHEN_MEMORY_LEAK" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("check-metric join must earn participation: %v", phens)
 	}
 }

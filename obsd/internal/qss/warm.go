@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -52,6 +53,16 @@ const (
 	FrameDef    byte = 0x01
 	FrameSample byte = 0x02
 	FrameTick   byte = 0x03
+	// FrameRunStart marks a process-run boundary: written once per store open,
+	// in the first segment the run touches. Live evaluation restarts with EMPTY
+	// rings; replay must reset its reconstructed state at the same point or it
+	// would evaluate pre-restart samples live evaluation never saw.
+	FrameRunStart byte = 0x04
+
+	// Reader/writer frame-size bounds (enforced symmetrically: the writer
+	// refuses what the reader would reject as corrupt).
+	maxDefPayload  = 1 << 20
+	maxTickPayload = 1 << 24
 
 	sealedExt = ".vseg"
 	activeExt = ".active"
@@ -97,8 +108,13 @@ type WarmStore struct {
 	closed   bool  // set by Close; later appends are refused, never silently re-opened
 	err      error // latched first write error; appends after it are refused loudly
 
-	stop chan struct{}
-	done chan struct{}
+	// runStartPending: the next segment this run opens must begin with a
+	// run-start frame (process-restart boundary for replay).
+	runStartPending bool
+
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 
 	// Recovered reports crash recovery performed at open: segments sealed from a
 	// leftover .active file and bytes truncated from a torn tail. Stated, never silent.
@@ -118,7 +134,11 @@ func OpenWarm(dir string, cfg WarmConfig) (*WarmStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("warm: %w", err)
 	}
-	w := &WarmStore{dir: dir, cfg: cfg, idx: map[string]uint32{}, stop: make(chan struct{}), done: make(chan struct{})}
+	w := &WarmStore{
+		dir: dir, cfg: cfg, idx: map[string]uint32{},
+		runStartPending: true,
+		stop:            make(chan struct{}), done: make(chan struct{}),
+	}
 	if err := w.recoverActive(); err != nil {
 		return nil, err
 	}
@@ -134,6 +154,13 @@ func (w *WarmStore) recoverActive() error {
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), activeExt) {
+			continue
+		}
+		// Only files this store wrote (seg-<startMs>.active) are recovered. A
+		// foreign .active file is left untouched — recovery must never delete or
+		// rename data it cannot prove is its own.
+		start, perr := segStartFromName(e.Name())
+		if perr != nil {
 			continue
 		}
 		path := filepath.Join(w.dir, e.Name())
@@ -159,16 +186,12 @@ func (w *WarmStore) recoverActive() error {
 				return fmt.Errorf("warm: %w", err)
 			}
 		}
-		start, perr := segStartFromName(e.Name())
-		if perr != nil {
-			return fmt.Errorf("warm: recover %s: %w", e.Name(), perr)
-		}
 		end := lastRecv
 		if end.Before(start) {
 			end = start
 		}
-		if err := os.Rename(path, filepath.Join(w.dir, sealedName(start, end))); err != nil {
-			return fmt.Errorf("warm: %w", err)
+		if err := sealRename(path, filepath.Join(w.dir, sealedName(start, end))); err != nil {
+			return err
 		}
 		w.Recovered.Segments++
 	}
@@ -193,6 +216,11 @@ func (w *WarmStore) Append(def StreamDef, recv time.Time, s Sample) error {
 		payload, err := json.Marshal(def)
 		if err != nil {
 			return w.latch(fmt.Errorf("warm: marshal def: %w", err))
+		}
+		if len(payload) > maxDefPayload {
+			// Enforced symmetrically with the reader: never write a frame the
+			// reader would reject as corrupt.
+			return w.latch(fmt.Errorf("warm: stream def %q exceeds the frame bound (%d bytes)", def.ID, len(payload)))
 		}
 		buf := make([]byte, 0, 9+len(payload)+4)
 		buf = append(buf, FrameDef)
@@ -229,6 +257,9 @@ func (w *WarmStore) Tick(recv time.Time, payload []byte) error {
 	defer w.mu.Unlock()
 	if err := w.ensureSegment(recv); err != nil {
 		return err
+	}
+	if len(payload) > maxTickPayload {
+		return w.latch(fmt.Errorf("warm: tick payload exceeds the frame bound (%d bytes)", len(payload)))
 	}
 	buf := make([]byte, 0, 13+len(payload)+4)
 	buf = append(buf, FrameTick)
@@ -280,6 +311,18 @@ func (w *WarmStore) ensureSegment(recv time.Time) error {
 	if _, err := w.w.WriteString(warmMagic); err != nil {
 		return w.latch(fmt.Errorf("warm: write header: %w", err))
 	}
+	if w.runStartPending {
+		// The run boundary: replay resets its reconstructed rings here, mirroring
+		// the empty rings this process started with.
+		buf := make([]byte, 0, 13)
+		buf = append(buf, FrameRunStart)
+		buf = binary.LittleEndian.AppendUint64(buf, uint64(recv.UTC().UnixNano()))
+		buf = binary.LittleEndian.AppendUint32(buf, crc32.Checksum(buf, castagnoli))
+		if _, err := w.w.Write(buf); err != nil {
+			return w.latch(fmt.Errorf("warm: write run-start: %w", err))
+		}
+		w.runStartPending = false
+	}
 	return nil
 }
 
@@ -303,12 +346,31 @@ func (w *WarmStore) sealLocked() error {
 	if end.Before(w.segStart) {
 		end = w.segStart
 	}
-	if err := os.Rename(name, filepath.Join(w.dir, sealedName(w.segStart, end))); err != nil {
-		return w.latch(fmt.Errorf("warm: seal: %w", err))
+	if err := sealRename(name, filepath.Join(w.dir, sealedName(w.segStart, end))); err != nil {
+		return w.latch(err)
 	}
 	w.f, w.w = nil, nil
 	w.dirty = false
 	w.applyRetention(end)
+	return nil
+}
+
+// sealRename moves a segment to its immutable sealed name, REFUSING to replace
+// an existing sealed segment ("sealed segments are immutable" is the warm
+// tier's whole guarantee — a same-(start,end) collision after a restart into
+// the same window must fail loudly, never silently destroy recorded readings).
+// link(2) fails with EEXIST instead of replacing, atomically, on macOS/Linux.
+func sealRename(old, dst string) error {
+	if err := os.Link(old, dst); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("warm: sealed segment %s already exists; refusing to clobber it (unsealed data left at %s)",
+				filepath.Base(dst), filepath.Base(old))
+		}
+		return fmt.Errorf("warm: seal: %w", err)
+	}
+	if err := os.Remove(old); err != nil {
+		return fmt.Errorf("warm: seal: %w", err)
+	}
 	return nil
 }
 
@@ -349,12 +411,18 @@ func (w *WarmStore) Sync() error {
 }
 
 // Close seals the active segment and stops the background syncer. Appends after
-// Close are refused (never a silent re-open).
+// Close are refused (never a silent re-open). Idempotent: a second Close is a
+// no-op, never a panic.
 func (w *WarmStore) Close() error {
-	close(w.stop)
+	w.closeOnce.Do(func() {
+		close(w.stop)
+	})
 	<-w.done
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return w.err
+	}
 	w.closed = true
 	return w.sealLocked()
 }
@@ -443,7 +511,19 @@ func ListSegments(dir string) ([]SegmentFile, error) {
 			out = append(out, SegmentFile{Path: filepath.Join(dir, name), Start: start})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+	// Total order: two sealed segments CAN share a start (a crash-recovered seal
+	// plus a post-restart seal in the same 2h window); arrival order between them
+	// is end-then-path, never the non-stable sort's whim.
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if !a.Start.Equal(b.Start) {
+			return a.Start.Before(b.Start)
+		}
+		if !a.End.Equal(b.End) {
+			return a.End.Before(b.End)
+		}
+		return a.Path < b.Path
+	})
 	return out, nil
 }
 
@@ -513,20 +593,38 @@ func scanValid(path string) (validBytes int64, lastRecv time.Time, err error) {
 }
 
 // readFrame decodes one frame, verifying its CRC. Returns io.EOF cleanly at end
-// of stream; any other error means a torn or corrupt frame.
+// of stream; any other error means a torn or corrupt frame — a transient I/O
+// error must NOT read as a clean end (a silently shortened sealed segment would
+// replay confidently over missing data).
 func readFrame(r *bufio.Reader) (Frame, int64, error) {
 	t, err := r.ReadByte()
 	if err != nil {
-		return Frame{}, 0, io.EOF
+		if errors.Is(err, io.EOF) {
+			return Frame{}, 0, io.EOF
+		}
+		return Frame{}, 0, fmt.Errorf("read frame type: %w", err)
 	}
 	switch t {
+	case FrameRunStart:
+		rest := make([]byte, 12)
+		if _, err := io.ReadFull(r, rest); err != nil {
+			return Frame{}, 0, fmt.Errorf("torn run-start frame: %w", err)
+		}
+		whole := append([]byte{t}, rest[:8]...)
+		if crc32.Checksum(whole, castagnoli) != binary.LittleEndian.Uint32(rest[8:12]) {
+			return Frame{}, 0, errors.New("run-start frame: crc mismatch")
+		}
+		return Frame{
+			Kind: FrameRunStart,
+			Recv: time.Unix(0, int64(binary.LittleEndian.Uint64(rest[0:8]))).UTC(),
+		}, 13, nil
 	case FrameDef:
 		head := make([]byte, 8)
 		if _, err := io.ReadFull(r, head); err != nil {
 			return Frame{}, 0, fmt.Errorf("torn def frame: %w", err)
 		}
 		n := binary.LittleEndian.Uint32(head[4:8])
-		if n > 1<<20 {
+		if n > maxDefPayload {
 			return Frame{}, 0, errors.New("def frame: implausible length (corrupt)")
 		}
 		rest := make([]byte, int(n)+4)
@@ -567,7 +665,7 @@ func readFrame(r *bufio.Reader) (Frame, int64, error) {
 			return Frame{}, 0, fmt.Errorf("torn tick frame: %w", err)
 		}
 		n := binary.LittleEndian.Uint32(head[8:12])
-		if n > 1<<24 {
+		if n > maxTickPayload {
 			return Frame{}, 0, errors.New("tick frame: implausible length (corrupt)")
 		}
 		rest := make([]byte, int(n)+4)

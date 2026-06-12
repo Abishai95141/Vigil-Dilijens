@@ -67,23 +67,23 @@ func TestWarmRoundTrip(t *testing.T) {
 	for _, f := range frames {
 		kinds += string(rune('0' + f.Kind))
 	}
-	// def(s1) sample def(s2) sample tick sample
-	if kinds != "121232" {
-		t.Fatalf("frame order = %s, want 121232", kinds)
+	// run-start def(s1) sample def(s2) sample tick sample
+	if kinds != "4121232" {
+		t.Fatalf("frame order = %s, want 4121232", kinds)
 	}
-	if frames[0].Def.ID != "s1" || frames[2].Def.ID != "s2" {
-		t.Errorf("defs wrong: %+v / %+v", frames[0].Def, frames[2].Def)
+	if frames[1].Def.ID != "s1" || frames[3].Def.ID != "s2" {
+		t.Errorf("defs wrong: %+v / %+v", frames[1].Def, frames[3].Def)
 	}
-	if frames[1].Value != 1.5 || !frames[1].At.Equal(r1.Add(-time.Second)) || !frames[1].Recv.Equal(r1) {
-		t.Errorf("sample 1 mismatch: %+v", frames[1])
+	if frames[2].Value != 1.5 || !frames[2].At.Equal(r1.Add(-time.Second)) || !frames[2].Recv.Equal(r1) {
+		t.Errorf("sample 1 mismatch: %+v", frames[2])
 	}
-	if frames[3].Value != -2.25 {
-		t.Errorf("sample 2 mismatch: %+v", frames[3])
+	if frames[4].Value != -2.25 {
+		t.Errorf("sample 2 mismatch: %+v", frames[4])
 	}
-	if string(frames[4].Payload) != `{"tick":1}` {
-		t.Errorf("tick payload mismatch: %q", frames[4].Payload)
+	if string(frames[5].Payload) != `{"tick":1}` {
+		t.Errorf("tick payload mismatch: %q", frames[5].Payload)
 	}
-	if frames[5].Idx != frames[1].Idx {
+	if frames[6].Idx != frames[2].Idx {
 		t.Errorf("s1's second sample should reuse its index")
 	}
 }
@@ -295,5 +295,112 @@ func TestWarmAppendAfterCloseRefused(t *testing.T) {
 	segs, _ := ListSegments(dir)
 	if len(segs) != 1 || !segs[0].Sealed {
 		t.Errorf("no new segment may appear after Close: %+v", segs)
+	}
+}
+
+// THE CLOBBER (adversarial finding, confirmed by execution): recovery of a
+// crashed .active whose (start,end) matches an already-sealed segment must
+// REFUSE — never silently replace immutable recorded readings.
+func TestWarmNoClobberOnRecovery(t *testing.T) {
+	dir := t.TempDir()
+	r1 := warmBase.Add(time.Minute)
+	// Run 1: seal a segment ending at r1.
+	w1 := mustOpen(t, dir, testCfg())
+	if err := w1.Append(def("s1"), r1, Sample{At: r1, Value: 111}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	segs, _ := ListSegments(dir)
+	sealedBytes, _ := os.ReadFile(segs[0].Path)
+	// Run 2: same window, same last recv, crash (no Close).
+	w2 := mustOpen(t, dir, testCfg())
+	if err := w2.Append(def("s2"), r1, Sample{At: r1, Value: 222}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w2.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	// (abandon w2 = crash)
+	// Run 3: recovery would seal the leftover .active under the SAME name.
+	if _, err := OpenWarm(dir, testCfg()); err == nil || !strings.Contains(err.Error(), "refusing to clobber") {
+		t.Fatalf("recovery must refuse the clobber, got %v", err)
+	}
+	now, _ := os.ReadFile(segs[0].Path)
+	if string(now) != string(sealedBytes) {
+		t.Fatal("the sealed segment was modified — immutability violated")
+	}
+}
+
+// Close is idempotent: a second Close is a no-op, never a panic.
+func TestWarmCloseIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	w := mustOpen(t, dir, testCfg())
+	r1 := warmBase.Add(time.Minute)
+	if err := w.Append(def("s1"), r1, Sample{At: r1, Value: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("second Close must be a clean no-op, got %v", err)
+	}
+}
+
+// A restart (new store, same dir) writes a run-start frame into its first
+// segment — the boundary replay resets reconstructed state at.
+func TestWarmRunStartOnRestart(t *testing.T) {
+	dir := t.TempDir()
+	r1 := warmBase.Add(time.Minute)
+	w1 := mustOpen(t, dir, testCfg())
+	if err := w1.Append(def("s1"), r1, Sample{At: r1, Value: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatal(err)
+	}
+	w2 := mustOpen(t, dir, testCfg())
+	r2 := r1.Add(30 * time.Second) // same window, later end -> distinct sealed name
+	if err := w2.Append(def("s1"), r2, Sample{At: r2, Value: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatal(err)
+	}
+	segs, _ := ListSegments(dir)
+	if len(segs) != 2 {
+		t.Fatalf("want 2 sealed segments (same window, distinct ends), got %+v", segs)
+	}
+	// Total order: same start, earlier end first.
+	if !segs[0].End.Before(segs[1].End) {
+		t.Errorf("same-start segments must order by end: %+v", segs)
+	}
+	starts := 0
+	for _, seg := range segs {
+		_ = ReplayFrames(seg.Path, func(f Frame) error {
+			if f.Kind == FrameRunStart {
+				starts++
+			}
+			return nil
+		})
+	}
+	if starts != 2 {
+		t.Errorf("each run's first segment must carry a run-start frame, got %d", starts)
+	}
+}
+
+// A foreign .active file (not seg-<ms>.active) is left untouched by recovery.
+func TestWarmForeignActiveUntouched(t *testing.T) {
+	dir := t.TempDir()
+	foreign := filepath.Join(dir, "userdata.active")
+	if err := os.WriteFile(foreign, []byte("not ours"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w := mustOpen(t, dir, testCfg())
+	defer w.Close()
+	if _, err := os.Stat(foreign); err != nil {
+		t.Error("recovery must not touch files it cannot prove are its own")
 	}
 }

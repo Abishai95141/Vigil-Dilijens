@@ -79,16 +79,29 @@ func run(args []string, out *os.File) error {
 		}
 	}
 
+	// Export runs even on a mismatching bundle (the Parquet is diagnosis input),
+	// but an export failure must never MASK a determinism verdict.
+	var exportErr error
 	if *parquetOut != "" {
 		rows, err := export.Parquet(*bundle, *parquetOut)
 		if err != nil {
-			return fmt.Errorf("parquet export: %w", err)
+			exportErr = fmt.Errorf("parquet export: %w", err)
+			fmt.Fprintf(out, "  parquet export FAILED: %v\n", err)
+		} else {
+			fmt.Fprintf(out, "  exported %d readings -> %s\n", rows, *parquetOut)
 		}
-		fmt.Fprintf(out, "  exported %d readings -> %s\n", rows, *parquetOut)
 	}
 
 	if rep.Mismatches > 0 {
 		return fmt.Errorf("DETERMINISM VIOLATION: %d of %d ticks did not reproduce byte-identically", rep.Mismatches, len(rep.Ticks))
+	}
+	if len(rep.Ticks) == 0 {
+		// Zero ticks verified is not a pass — it is nothing. A capture that
+		// recorded no evaluation must not print a vacuous green verdict.
+		return fmt.Errorf("no evaluation ticks in the bundle: nothing was verified")
+	}
+	if exportErr != nil {
+		return exportErr
 	}
 	fmt.Fprintf(out, "  verdict: all %d ticks replayed byte-identically (doc 05 §3.5 holds)\n", len(rep.Ticks))
 	return nil

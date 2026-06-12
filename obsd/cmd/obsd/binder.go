@@ -83,11 +83,14 @@ func (b *binder) fingerprints(now time.Time) []observe.Fingerprint {
 	return observe.Materialize(b.last, rules, b.ingestor, b.fpParams, now)
 }
 
-// bound is the composite the renderer consumes.
+// bound is the composite the renderer consumes. Stale means the result was
+// compiled for an EARLIER inventory (this tick's re-bind failed): consumers
+// must state it, and selection must not brand binding-unseen entities by kind.
 type bound struct {
 	Result *binding.Result
 	Avail  *binding.AvailabilityReport
 	Obs    *binding.ObservabilityReport
+	Stale  bool
 }
 
 // configDriftRebindTicks forces a re-bind every Nth inventory tick even with an
@@ -102,13 +105,16 @@ func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecor
 	if b == nil || b.graph == nil {
 		return nil
 	}
+	finger := inventoryFingerprint(inventory)
 	snapshot := func() *bound {
 		if b.last == nil {
 			return nil
 		}
-		return &bound{Result: b.last, Avail: b.lastAvail, Obs: b.lastObs}
+		// Stale iff the kept result was compiled for a DIFFERENT inventory than
+		// the one this tick sees (a periodic recompile of an unchanged inventory
+		// is not stale).
+		return &bound{Result: b.last, Avail: b.lastAvail, Obs: b.lastObs, Stale: finger != b.lastFinger}
 	}
-	finger := inventoryFingerprint(inventory)
 	if b.last != nil && finger == b.lastFinger && b.ticksUnseen < configDriftRebindTicks {
 		b.ticksUnseen++
 		return snapshot()
@@ -116,7 +122,7 @@ func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecor
 
 	snap, err := kube.SnapshotConfig(ctx, b.client)
 	if err != nil {
-		b.logger.Warn("binding: config snapshot failed; keeping previous bound graph", "err", err)
+		b.logger.Warn("binding: config snapshot failed; keeping previous bound graph (STALE for this inventory)", "err", err)
 		return snapshot()
 	}
 	facts, err := kube.GatherFacts(ctx, b.client)

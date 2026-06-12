@@ -25,6 +25,11 @@ type Sample struct {
 // (doc 14 §2.3 hot window / §5 scrape interval).
 const hotCapacity = 240
 
+// HotCapacity exposes the ring capacity: it bounds what a window evaluation can
+// see, so it is digest-bearing — replay bundles pin it and the engine refuses a
+// capacity mismatch.
+func HotCapacity() int { return hotCapacity }
+
 // ring is a fixed-capacity circular buffer of samples, oldest overwritten first.
 type ring struct {
 	buf   [hotCapacity]Sample

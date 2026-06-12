@@ -205,6 +205,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				CreatedAt: time.Now().UTC(), ClusterID: clusterID,
 				GraphVersion: ontologyGraph.Version, ParamsVersion: p.Version, Profile: p.Profile,
 				FPParams: fpParams, ScrapeInterval: p.Scrape.Interval.Duration(),
+				HotRingCapacity: qss.HotCapacity(), ObsdVersion: version.Version,
 				Contents: []string{"readings (qss segments, arrival-ordered)", "resolved bars per epoch", "evaluation ticks with digests"},
 				Absent:   []string{"topology log (lands with 07 M2 traversal)", "time-shifted evaluation (lands with harness suites)"},
 			}); err != nil {
@@ -349,7 +350,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// deterministic Tier-A core feeds detection; the full records (incl.
 			// the none-list) are the audit surface.
 			selected := selection.TierASet(bd.Result, bnd.graph)
-			renderSelection(out, selection.Select(active, bd.Result, bnd.graph, now, "evaluation-tick"))
+			renderSelection(out, selection.Select(active, bd.Result, bnd.graph, bd.Stale, now, "evaluation-tick"))
 			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
 			// now" — re-materialized each tick against fresh samples.
 			fps = bnd.fingerprints(now)

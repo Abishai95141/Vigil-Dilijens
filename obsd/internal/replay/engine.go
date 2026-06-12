@@ -38,6 +38,7 @@ type TickOutcome struct {
 type Report struct {
 	Manifest     Manifest
 	Segments     int
+	Runs         int  // process-run boundaries replayed (restarts into the same bundle)
 	UnsealedTail bool // an .active segment existed and was ignored (capture not closed)
 	Samples      int64
 	Streams      int
@@ -67,6 +68,21 @@ func Run(opts Options) (*Report, error) {
 		// graph would change findings and silently invalidate the comparison.
 		return nil, fmt.Errorf("replay: graph version mismatch: bundle pinned %s, loaded %s",
 			m.GraphVersion, opts.Graph.Version)
+	}
+	// Manifest plausibility: a zeroed/garbage parameter set would replay with
+	// silently different semantics (zero watermark = everything stale) and the
+	// failure would masquerade as a determinism violation. Refuse instead.
+	if m.FPParams.ScrapeInterval <= 0 || m.FPParams.RateWindow <= 0 || m.FPParams.Watermark <= 0 ||
+		m.FPParams.Band < 0 || m.FPParams.Band >= 1 || m.FPParams.WellAboveFactor <= 0 {
+		return nil, fmt.Errorf("replay: manifest parameter set implausible (%+v) — refusing to replay with different semantics", m.FPParams)
+	}
+	// The hot-ring capacity is a digest-bearing constant (it bounds what a window
+	// evaluation can see). A bundle captured under a different capacity cannot
+	// replay byte-identically; refuse rather than mis-verify. Zero = an older
+	// bundle that predates the pin (accepted; the current capacity applied then too).
+	if m.HotRingCapacity != 0 && m.HotRingCapacity != qss.HotCapacity() {
+		return nil, fmt.Errorf("replay: bundle captured with hot-ring capacity %d, this binary has %d — cannot replay byte-identically",
+			m.HotRingCapacity, qss.HotCapacity())
 	}
 
 	rules := make(map[string]*graph.ThresholdRule, len(opts.Graph.Rules))
@@ -100,6 +116,12 @@ func Run(opts Options) (*Report, error) {
 		idxDef := map[uint32]qss.StreamDef{} // per-segment stream dictionary
 		err := qss.ReplayFrames(seg.Path, func(f qss.Frame) error {
 			switch f.Kind {
+			case qss.FrameRunStart:
+				// A process-run boundary: live evaluation restarted with empty
+				// rings and a fresh stream registry; the reconstruction must too,
+				// or replay would evaluate pre-restart samples live never saw.
+				reader.reset()
+				rep.Runs++
 			case qss.FrameDef:
 				idxDef[f.Idx] = f.Def
 				reader.register(f.Def)
@@ -210,6 +232,14 @@ var _ observe.StreamReader = (*bundleReader)(nil)
 
 func newBundleReader() *bundleReader {
 	return &bundleReader{hot: qss.NewHotStore(), meta: map[string]qss.StreamDef{}, byUIDMetric: map[string][]string{}}
+}
+
+// reset clears all reconstructed state — a process-run boundary: the live side
+// restarted with empty rings and a fresh stream registry.
+func (r *bundleReader) reset() {
+	r.hot = qss.NewHotStore()
+	r.meta = map[string]qss.StreamDef{}
+	r.byUIDMetric = map[string][]string{}
 }
 
 func (r *bundleReader) register(def qss.StreamDef) {

@@ -203,7 +203,10 @@ func evalThresholdVar(b *binding.Binding, rule *graph.ThresholdRule, streamID, u
 			return VariableThreshold{}, false
 		}
 		num, numAt, nok := windowValue(streamID, expoType, reader, p, evalNow)
-		den, denAt, dok := windowValue(divs[0], expoType, reader, p, evalNow)
+		// The divisor is a different stream with its OWN exposition type — a
+		// gauge divisor under a counter numerator must not be window-delta'd.
+		denType, _ := reader.StreamType(divs[0])
+		den, denAt, dok := windowValue(divs[0], denType, reader, p, evalNow)
 		// A non-finite or zero denominator (or non-finite numerator) must not produce
 		// a fabricated ratio; drop the component rather than feed Inf/NaN to the ladder.
 		if !nok || !dok || den == 0 || math.IsNaN(num) || math.IsInf(num, 0) || math.IsNaN(den) || math.IsInf(den, 0) {
@@ -250,9 +253,18 @@ func evalThresholdVar(b *binding.Binding, rule *graph.ThresholdRule, streamID, u
 		vt.Stale = stale(latest.At, evalNow, p.Watermark)
 	}
 
+	// Result-finiteness guard: the ingest gate keeps non-finite SAMPLES out, but
+	// arithmetic over finite inputs can still overflow (a huge quotient, a slope
+	// delta near ±MaxFloat64). A non-finite component would poison the ladder and
+	// be uncanonicalizable (the replay digest) — drop it, never surface garbage.
+	if !finite(vt.Value) || !finite(vt.Slope) || !finite(vt.WellAbove) {
+		return VariableThreshold{}, false
+	}
 	vt.State = EvalThreshold(vt.Value, bar.Value, vt.WellAbove, p.Band, bar.Direction)
 	return vt, true
 }
+
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // evalRateGuard produces a rate-guarded-variable component (rate-of-change rules):
 // the reset-aware window delta vs the guard.
@@ -260,6 +272,11 @@ func evalRateGuard(b *binding.Binding, streamID string, reader StreamReader, p F
 	rr := EvalRate(reader.LastN(streamID, ringWindowN(p)), evalNow, p.RateWindow, p.ScrapeInterval)
 	latest, ok := reader.Latest(streamID)
 	if !ok {
+		return VariableRate{}, false
+	}
+	// Result-finiteness guard (mirrors evalThresholdVar): an overflowed window
+	// sum must neither fabricate Breached nor poison the digest.
+	if !finite(rr.WindowDelta) || !finite(rr.PerSecond) {
 		return VariableRate{}, false
 	}
 	// A gap that leaves <2 usable samples after it (Elapsed<=0 with GapBroken) means

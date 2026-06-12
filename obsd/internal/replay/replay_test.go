@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,8 +81,9 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 	if err := cap.WriteManifest(Manifest{
 		CreatedAt: base, ClusterID: "test-cluster", GraphVersion: g.Version,
 		ParamsVersion: "0", Profile: "dev", FPParams: fpParams(), ScrapeInterval: 15 * time.Second,
-		Contents: []string{"readings (qss segments)", "resolved bars per epoch", "evaluation ticks with digests"},
-		Absent:   []string{"topology log (lands with 07 M2 traversal)"},
+		HotRingCapacity: qss.HotCapacity(),
+		Contents:        []string{"readings (qss segments)", "resolved bars per epoch", "evaluation ticks with digests"},
+		Absent:          []string{"topology log (lands with 07 M2 traversal)"},
 	}); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
 	}
@@ -302,5 +304,134 @@ func TestDigestNonFiniteIsErrorNotPanic(t *testing.T) {
 	fp := observe.Fingerprint{CEIKey: "x", Thresholds: []observe.VariableThreshold{{Value: z / z}}}
 	if _, _, err := Digest(base, []observe.Fingerprint{fp}, nil); err == nil {
 		t.Fatal("a NaN in a fingerprint must surface as a digest error")
+	}
+}
+
+// A restart into the same bundle dir (adversarial findings): the bars epoch
+// CONTINUES (no overwrite, no spurious epoch for unchanged bars), the manifest
+// is verified pin-compatible, a run-start frame resets replay's reconstructed
+// state at the boundary — and every tick across BOTH runs verifies.
+func TestRestartContinuationReplays(t *testing.T) {
+	g := loadGraph(t)
+	dir := t.TempDir()
+	rules := make(map[string]*graph.ThresholdRule, len(g.Rules))
+	for _, r := range g.Rules {
+		rules[r.ID] = r
+	}
+	matcher := detect.NewMatcher(g)
+	def := leakDef()
+
+	totalTicks := 0
+	runOnce := func(offset time.Duration, n int) {
+		cap, err := NewCapture(dir, qss.WarmConfig{SegmentDuration: 2 * time.Hour, Retention: 7 * 24 * time.Hour})
+		if err != nil {
+			t.Fatalf("NewCapture: %v", err)
+		}
+		if err := cap.WriteManifest(Manifest{
+			CreatedAt: base, ClusterID: "test-cluster", GraphVersion: g.Version,
+			ParamsVersion: "0", Profile: "dev", FPParams: fpParams(), ScrapeInterval: 15 * time.Second,
+			HotRingCapacity: qss.HotCapacity(),
+		}); err != nil {
+			t.Fatalf("WriteManifest: %v", err)
+		}
+		epoch, err := cap.SetBars(base.Add(offset), []binding.Binding{leakBinding()})
+		if err != nil {
+			t.Fatalf("SetBars: %v", err)
+		}
+		if epoch != 1 {
+			t.Fatalf("unchanged bars across a restart must keep epoch 1, got %d", epoch)
+		}
+		live := newBundleReader() // fresh per run — the restart's empty rings
+		live.register(def)
+		for i := 0; i < n; i++ {
+			recv := base.Add(offset + time.Duration(i)*15*time.Second)
+			val := float64((110 + 4*i) << 20)
+			live.hot.Append(def.ID, qss.Sample{At: recv, Value: val})
+			if err := cap.Warm().Append(def, recv, qss.Sample{At: recv, Value: val}); err != nil {
+				t.Fatal(err)
+			}
+			evalNow := recv.Add(time.Second)
+			fps := observe.Materialize(&binding.Result{Bindings: []binding.Binding{leakBinding()}}, rules, live, fpParams(), evalNow)
+			var findings []detect.Finding
+			for _, fp := range fps {
+				findings = append(findings, matcher.MatchFingerprint(fp)...)
+			}
+			digest, _, derr := Digest(evalNow, fps, findings)
+			if derr != nil {
+				t.Fatal(derr)
+			}
+			if err := cap.Tick(TickRecord{EvalNow: evalNow, BarsEpoch: epoch, Digest: digest,
+				Fingerprints: len(fps), Findings: len(findings)}); err != nil {
+				t.Fatal(err)
+			}
+			totalTicks++
+		}
+		if err := cap.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runOnce(0, 5)
+	runOnce(3*time.Minute, 5) // same 2h window: same-start sealed segments
+
+	// Continuation, not duplication: exactly one bars epoch on disk.
+	if _, err := os.Stat(filepath.Join(dir, "bars-2.json")); err == nil {
+		t.Error("unchanged bars across a restart must not mint a second epoch")
+	}
+	rep, err := Run(Options{BundleDir: dir, Graph: g})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if rep.Runs != 2 {
+		t.Errorf("runs replayed = %d, want 2 (one run-start per process)", rep.Runs)
+	}
+	if len(rep.Ticks) != totalTicks || rep.Mismatches != 0 {
+		for _, tk := range rep.Ticks {
+			if !tk.Match {
+				t.Errorf("tick %s diverged", tk.EvalNow)
+			}
+		}
+		t.Fatalf("ticks=%d (want %d) mismatches=%d — the restart boundary must replay exactly",
+			len(rep.Ticks), totalTicks, rep.Mismatches)
+	}
+}
+
+// A continued bundle must be pin-compatible: a different graph version refuses.
+func TestContinuationPinCompatibility(t *testing.T) {
+	g := loadGraph(t)
+	dir := t.TempDir()
+	buildBundle(t, dir, g, -1)
+	cap, err := NewCapture(dir, qss.WarmConfig{SegmentDuration: 2 * time.Hour, Retention: 7 * 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cap.Close()
+	err = cap.WriteManifest(Manifest{
+		CreatedAt: base, ClusterID: "test-cluster",
+		GraphVersion:  "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+		ParamsVersion: "0", Profile: "dev", FPParams: fpParams(), ScrapeInterval: 15 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "already pinned") {
+		t.Errorf("a different graph pin must refuse continuation, got %v", err)
+	}
+}
+
+// A garbage manifest (zeroed parameter set) refuses to replay rather than
+// mis-verifying under silently different semantics.
+func TestImplausibleManifestRefused(t *testing.T) {
+	g := loadGraph(t)
+	dir := t.TempDir()
+	buildBundle(t, dir, g, -1)
+	var m Manifest
+	raw, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	m.FPParams.Watermark = 0
+	out, _ := json.Marshal(m)
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), out, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(Options{BundleDir: dir, Graph: g}); err == nil {
+		t.Error("a zeroed watermark must refuse to replay")
 	}
 }

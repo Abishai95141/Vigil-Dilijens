@@ -37,6 +37,11 @@ const (
 	// ReasonStructuralEntity: the entity's kind carries no instrumented
 	// variables at all (Services, roles, policies — structural topology).
 	ReasonStructuralEntity Reason = "structural-entity"
+	// ReasonBindingsStale: the bound graph predates this entity (a re-bind is
+	// pending or failed) — a statement about BINDING freshness, never about the
+	// entity's kind. Selection records are MEASURED facts; without this code a
+	// just-created Pod would be branded structural-entity, which is false.
+	ReasonBindingsStale Reason = "bindings-stale"
 )
 
 // Record is the monitoring selection record (doc 06 §3.5): one entity's
@@ -74,8 +79,14 @@ func TierASet(res *binding.Result, g *graph.Graph) map[string][]string {
 	if res == nil || g == nil {
 		return map[string][]string{}
 	}
-	// signal -> phenomena that declare it a member (participates_in edges).
+	// signal -> phenomena that declare it a member (participates_in edges), and
+	// metric -> phenomena whose authored detection CHECKS consult that metric.
+	// The union matters: the matcher fires on check METRICS, so for the funnel
+	// to provably cover everything detection could fire on, any entity whose
+	// bound metric backs a check must participate — even if its binding rides a
+	// rule whose signal happens not to be a member of that phenomenon.
 	sigPhen := map[string][]string{}
+	metricPhen := map[string][]string{}
 	phenIDs := make([]string, 0, len(g.Phenomena))
 	for id := range g.Phenomena {
 		phenIDs = append(phenIDs, id)
@@ -84,6 +95,9 @@ func TierASet(res *binding.Result, g *graph.Graph) map[string][]string {
 	for _, id := range phenIDs {
 		for _, m := range g.Phenomena[id].Members {
 			sigPhen[m.SignalID] = append(sigPhen[m.SignalID], id)
+		}
+		for _, c := range g.ChecksFor(id) {
+			metricPhen[c.Metric] = append(metricPhen[c.Metric], id)
 		}
 	}
 	// rule -> signal (the authored bridge each bound variable rides on).
@@ -94,6 +108,17 @@ func TierASet(res *binding.Result, g *graph.Graph) map[string][]string {
 
 	out := map[string][]string{}
 	seen := map[string]map[string]bool{}
+	add := func(ceiKey string, phens []string) {
+		for _, phen := range phens {
+			if seen[ceiKey] == nil {
+				seen[ceiKey] = map[string]bool{}
+			}
+			if !seen[ceiKey][phen] {
+				seen[ceiKey][phen] = true
+				out[ceiKey] = append(out[ceiKey], phen)
+			}
+		}
+	}
 	for i := range res.Bindings {
 		b := &res.Bindings[i]
 		// Gate 1: evaluable bound variable (the fingerprint-eligible filter,
@@ -101,16 +126,10 @@ func TierASet(res *binding.Result, g *graph.Graph) map[string][]string {
 		if b.State != binding.StateBound || b.Bar == nil || b.Validation == binding.ValidationFailed {
 			continue
 		}
-		// Gate 2: the variable's signal is a member of >=1 phenomenon.
-		for _, phen := range sigPhen[ruleSig[b.RuleID]] {
-			if seen[b.CEIKey] == nil {
-				seen[b.CEIKey] = map[string]bool{}
-			}
-			if !seen[b.CEIKey][phen] {
-				seen[b.CEIKey][phen] = true
-				out[b.CEIKey] = append(out[b.CEIKey], phen)
-			}
-		}
+		// Gate 2: the variable's signal is a member of >=1 phenomenon, OR its
+		// metric backs a phenomenon's authored check (what the matcher fires on).
+		add(b.CEIKey, sigPhen[ruleSig[b.RuleID]])
+		add(b.CEIKey, metricPhen[b.Metric])
 	}
 	for k := range out {
 		sort.Strings(out[k])
@@ -121,7 +140,11 @@ func TierASet(res *binding.Result, g *graph.Graph) map[string][]string {
 // Select runs the M1 funnel over the live inventory, producing one record per
 // entity (the watch list AND the none-list, each with its reason). The Tier-A
 // verdicts come from TierASet — the same deterministic core detection uses.
-func Select(inventory []identity.InstanceRecord, res *binding.Result, g *graph.Graph, now time.Time, trigger string) *Result {
+//
+// staleBindings says res was compiled for an EARLIER inventory (a re-bind is
+// pending or failed): entities the bound graph has never seen then get the
+// truthful bindings-stale reason instead of a false structural-entity verdict.
+func Select(inventory []identity.InstanceRecord, res *binding.Result, g *graph.Graph, staleBindings bool, now time.Time, trigger string) *Result {
 	tierA := TierASet(res, g)
 
 	// Coverage and instantiation facts per entity, from the binding states.
@@ -169,6 +192,12 @@ func Select(inventory []identity.InstanceRecord, res *binding.Result, g *graph.G
 		case instantiated[key]:
 			rec.Tier = TierNone
 			rec.Reason = ReasonNoEvaluableVariable
+		case staleBindings:
+			// The bound graph has no row for this entity AND predates the current
+			// inventory: the only truthful statement is that binding is stale —
+			// never a claim about the entity's kind.
+			rec.Tier = TierNone
+			rec.Reason = ReasonBindingsStale
 		default:
 			rec.Tier = TierNone
 			rec.Reason = ReasonStructuralEntity
