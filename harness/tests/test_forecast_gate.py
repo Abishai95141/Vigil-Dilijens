@@ -156,3 +156,29 @@ def test_band_membership_is_gated():
     v = gate(score_class(events, readings, METRIC))
     assert not v.passed
     assert any("in-band" in r for r in v.reasons)
+
+
+def test_hover_crossing_is_not_a_class_event():
+    """A series hovering AT its bar re-crosses on noise: detection's
+    jurisdiction (at-threshold ladder), never a creep-class event."""
+    horizon = 16
+    # hovering just under the bar, noise pokes it over at step 8
+    base = [990.0 + (5.0 if i % 3 == 0 else 0.0) for i in range(60)]
+    readings = {(UID, METRIC): [(i * CADENCE, base[i]) for i in range(60)]}
+    events = []
+    for k in range(MIN_SCORED_FORECASTS + 2):
+        basis_idx = 20 + k
+        basis_ns = basis_idx * CADENCE
+        future = base[basis_idx + 1 : basis_idx + 1 + horizon]
+        events.append({
+            "evalNow": iso(basis_ns), "barsEpoch": 1, "cadence": CADENCE,
+            "traces": [trace(basis_ns, future,
+                             [v - 20 for v in future], [v + 20 for v in future],
+                             994.0, cand_steps=None, silence="flat-series")],
+            "silences": [], "unbudgeted": 0, "degraded": False,
+        })
+    rep = score_class(events, readings, METRIC)
+    assert rep.event_count == 0
+    assert rep.events_hover_excluded >= 1
+    v = gate(rep)
+    assert v.insufficient  # no class-eligible events — never judged on hover noise

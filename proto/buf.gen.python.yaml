@@ -7,8 +7,11 @@ version: v2
 # generated vigil/ tree explicitly before regenerating. Generated code is
 # COMMITTED (techstack §2.6).
 clean: false
+# Remote plugins are PINNED: an unpinned remote plugin re-generates with
+# whatever gencode version the registry currently serves — gen-check caught a
+# silent 7.35.0→7.35.1 drift (2026-06-13). Bump deliberately, with the diff.
 plugins:
-  - remote: buf.build/protocolbuffers/python
+  - remote: buf.build/protocolbuffers/python:v35.1
     out: ../clockd/src
-  - remote: buf.build/grpc/python
+  - remote: buf.build/grpc/python:v1.81.1
     out: ../clockd/src

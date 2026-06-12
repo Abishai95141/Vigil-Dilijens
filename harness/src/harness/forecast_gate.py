@@ -68,6 +68,18 @@ MIN_CROSSINGS = 3
 MIN_LEAD_STEPS = 8        # ≥2 min at the 15s dev cadence
 EVENT_RECALL_MIN = 1.0    # every realized crossing event must get an advance warning
 MIN_CROSSING_EVENTS = 3   # distinct physical events required before a verdict
+# Class eligibility of a crossing EVENT: the creep class warns about an
+# APPROACH — ELIGIBILITY_LOOKBACK_STEPS before the crossing the series must
+# have been genuinely below the at-threshold band (mirrors
+# observation.at_threshold_band, doc 14 A6). A series HOVERING at its bar
+# (e.g. the deliberately near-limit boutique service) re-crosses on noise:
+# there is nothing to anticipate, and the at-threshold detection ladder (the
+# NOW pillar) already owns that statement continuously. Excluded WITH the
+# reason, never silently. The lookback is deliberately LONGER than MIN_LEAD
+# (a creep is inside the band during its final approach — that is what makes
+# it imminent); 32 steps = 8 min at the dev cadence.
+AT_THRESHOLD_BAND = 0.05
+ELIGIBILITY_LOOKBACK_STEPS = 32
 
 
 @dataclass
@@ -97,6 +109,7 @@ class ClassReport:
     ttc_frac_errors: list = field(default_factory=list)
 
     silences_correct: int = 0
+    events_hover_excluded: int = 0  # at-bar hover crossings — detection's jurisdiction
 
     @property
     def band_points(self) -> int:
@@ -132,12 +145,14 @@ class ClassReport:
 
     @property
     def event_count(self) -> int:
-        return len(self.events)
+        return sum(1 for v in self.events.values() if v != "hover")
 
     @property
     def events_warned(self) -> int:
         return sum(
-            1 for lead in self.events.values() if lead is not None and lead >= MIN_LEAD_STEPS
+            1
+            for lead in self.events.values()
+            if lead != "hover" and lead is not None and lead >= MIN_LEAD_STEPS
         )
 
     @property
@@ -168,6 +183,20 @@ def load_readings(path: str | Path) -> dict[tuple[str, str], list[tuple[int, flo
 
 def _crossed(value: float, bar: float, direction: str) -> bool:
     return value <= bar if direction == "below" else value >= bar
+
+
+def _event_eligible(
+    series: list[tuple[int, float]], crossing_ns: int, bar: float, direction: str
+) -> bool:
+    """A creep-class event must have an APPROACH: MIN_LEAD_STEPS before the
+    crossing the series sat genuinely below the at-threshold band."""
+    idx = next((i for i, (at, _) in enumerate(series) if at == crossing_ns), None)
+    if idx is None or idx < ELIGIBILITY_LOOKBACK_STEPS:
+        return False
+    v = series[idx - ELIGIBILITY_LOOKBACK_STEPS][1]
+    if direction == "below":
+        return v > bar * (1 + AT_THRESHOLD_BAND)
+    return v < bar * (1 - AT_THRESHOLD_BAND)
 
 
 def _iso_to_ns(ts: str) -> int:
@@ -218,10 +247,16 @@ def score_class(
             if actual_idx is not None:
                 rep.actual_crossings += 1
                 ev_key = (tr["streamUid"], future[actual_idx][0])
+                if not _event_eligible(series, future[actual_idx][0], bar, direction):
+                    # Per-forecast stats flow identically below; only the
+                    # EVENT ledger marks it hover (never recalled on).
+                    if ev_key not in rep.events:
+                        rep.events_hover_excluded += 1
+                    rep.events[ev_key] = "hover"
                 lead = actual_idx + 1 if cand else None
                 prev = rep.events.get(ev_key)
-                if ev_key not in rep.events or (
-                    lead is not None and (prev is None or lead > prev)
+                if prev != "hover" and (
+                    ev_key not in rep.events or (lead is not None and (prev is None or lead > prev))
                 ):
                     rep.events[ev_key] = lead
                 if cand:
@@ -317,8 +352,10 @@ def render(rep: ClassReport, verdict: GateVerdict) -> str:
         f" (skipped short-future: {rep.forecasts_skipped_short_future})",
         f"  band coverage:    {rep.coverage:.3f} over {rep.band_points}"
         " realized points (nominal 0.8)",
-        f"  events:           {rep.event_count} physical crossings"
-        f" · {rep.events_warned} warned with ≥{MIN_LEAD_STEPS} steps lead"
+        f"  events:           {rep.event_count} class-eligible crossings"
+        f" (+{rep.events_hover_excluded} at-bar hover crossings excluded —"
+        " detection's jurisdiction)"
+        f",  {rep.events_warned} warned with ≥{MIN_LEAD_STEPS} steps lead"
         f" (event recall {rep.event_recall:.2f})",
         f"  per-forecast:     {rep.actual_crossings} crossing-bearing forecasts"
         f" · {rep.warned_crossings} warned · {rep.missed_crossings} quiet"
