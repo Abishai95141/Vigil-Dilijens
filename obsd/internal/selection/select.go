@@ -2,6 +2,7 @@ package selection
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
@@ -44,6 +45,37 @@ const (
 	ReasonBindingsStale Reason = "bindings-stale"
 )
 
+// Topology is the validity-aware topology view neighbourhood closure walks
+// (doc 06 §3.2): selection expands each chosen entity out to the spans of the
+// phenomena it participates in, honouring edge validity (03 §3.5). The live
+// EdgeStore satisfies it; closure is an attention/audit surface, never part of
+// the deterministic digest path (TierASet stays pure of topology).
+type Topology interface {
+	Neighbours(typ identity.EdgeType, fromKey string, w identity.TimeWindow) []identity.Neighbour
+	NeighboursInto(typ identity.EdgeType, toKey string, w identity.TimeWindow) []identity.Neighbour
+	Sources(typ identity.EdgeType) []string
+}
+
+// NeighbourRef is one entity pulled into the watch set by span expansion, with
+// the edge path that earned it (doc 06 §3.5 "Neighbourhood CEIs ... with the
+// edge paths used").
+type NeighbourRef struct {
+	CEIKey       string
+	Via          string // edge type crossed
+	Result       string // valid | suspect (absent edges never pull anyone in)
+	Hop          int    // 1 for first-order spans, up to 2 for second-order
+	ForPhenomena []string
+}
+
+// ClosureGap records a spanned phenomenon whose required neighbourhood is NOT
+// reachable from a selected entity — the doc 06 M2 exit demands this absence be
+// a recorded coverage fact, never a silent drop.
+type ClosureGap struct {
+	EntityCEI  string
+	Phenomenon string
+	Reason     string
+}
+
 // Record is the monitoring selection record (doc 06 §3.5): one entity's
 // attention verdict, with the reason attached. MEASURED-class.
 type Record struct {
@@ -56,6 +88,7 @@ type Record struct {
 	Phenomena      []string // sorted phenomenon IDs that earned the attention
 	Tier           Tier
 	Reason         Reason
+	Neighbourhood  []NeighbourRef // span expansion (06 M2); empty without topology
 	SelectedAt     time.Time
 	Trigger        string
 }
@@ -66,6 +99,7 @@ type Result struct {
 	Records      []Record // sorted by EntityCEI
 	TierACount   int
 	NoneByReason map[Reason]int
+	ClosureGaps  []ClosureGap // spanned phenomena whose neighbourhood is unreachable
 	GraphVersion string
 	SelectedAt   time.Time
 	Trigger      string
@@ -137,14 +171,18 @@ func TierASet(res *binding.Result, g *graph.Graph) map[string][]string {
 	return out
 }
 
-// Select runs the M1 funnel over the live inventory, producing one record per
+// Select runs the funnel over the live inventory, producing one record per
 // entity (the watch list AND the none-list, each with its reason). The Tier-A
 // verdicts come from TierASet — the same deterministic core detection uses.
+// With a topology view, Tier-A records additionally carry their neighbourhood
+// closure (06 M2): the entities each spanned phenomenon needs, or a recorded
+// gap where none is reachable. topo == nil skips closure (stated by the empty
+// neighbourhoods, never fabricated).
 //
 // staleBindings says res was compiled for an EARLIER inventory (a re-bind is
 // pending or failed): entities the bound graph has never seen then get the
 // truthful bindings-stale reason instead of a false structural-entity verdict.
-func Select(inventory []identity.InstanceRecord, res *binding.Result, g *graph.Graph, staleBindings bool, now time.Time, trigger string) *Result {
+func Select(inventory []identity.InstanceRecord, res *binding.Result, g *graph.Graph, staleBindings bool, now time.Time, trigger string, topo Topology, w identity.TimeWindow) *Result {
 	tierA := TierASet(res, g)
 
 	// Coverage and instantiation facts per entity, from the binding states.
@@ -185,6 +223,11 @@ func Select(inventory []identity.InstanceRecord, res *binding.Result, g *graph.G
 			rec.Tier = TierA
 			rec.Reason = ReasonPhenomenonMember
 			r.TierACount++
+			if topo != nil && g != nil {
+				var gaps []ClosureGap
+				rec.Neighbourhood, gaps = expandNeighbourhood(key, inst.Kind, rec.Phenomena, g, topo, w)
+				r.ClosureGaps = append(r.ClosureGaps, gaps...)
+			}
 		case covered[key]:
 			rec.PassesCoverage = true
 			rec.Tier = TierNone
@@ -208,5 +251,123 @@ func Select(inventory []identity.InstanceRecord, res *binding.Result, g *graph.G
 		r.Records = append(r.Records, rec)
 	}
 	sort.Slice(r.Records, func(i, j int) bool { return r.Records[i].EntityCEI < r.Records[j].EntityCEI })
+	sort.Slice(r.ClosureGaps, func(i, j int) bool {
+		a, b := r.ClosureGaps[i], r.ClosureGaps[j]
+		if a.EntityCEI != b.EntityCEI {
+			return a.EntityCEI < b.EntityCEI
+		}
+		return a.Phenomenon < b.Phenomenon
+	})
 	return r
+}
+
+// expandNeighbourhood walks one Tier-A entity out to the spans of its
+// participating phenomena (doc 06 §3.2): along each phenomenon's DECLARED
+// traversal edge types, to its declared depth (1 for first-order, 2 for
+// second-order), both directions, honouring edge validity over the window.
+// Containers walk from their containing pod (containment is identity, not a
+// hop — the spans overlay's addressing principle). Every spanned phenomenon
+// with no reachable neighbourhood yields a recorded gap.
+func expandNeighbourhood(key, kind string, phenomena []string, g *graph.Graph, topo Topology, w identity.TimeWindow) ([]NeighbourRef, []ClosureGap) {
+	var refs []NeighbourRef
+	var gaps []ClosureGap
+
+	// Container-scope bindings carry the POD's CEI key (doc 04 compiler), so a
+	// Container record usually walks from its own key. A true container-instance
+	// key (uid = podUID/name) resolves its pod through runs-on sources.
+	walkFrom := key
+	if kind == "Container" {
+		if uid := containerPodUID(key); uid != "" {
+			walkFrom = ""
+			for _, src := range topo.Sources(identity.EdgeRunsOn) {
+				cei, err := identity.ParseKey(src)
+				if err == nil && cei.Kind == "Pod" && cei.UID == uid {
+					walkFrom = src
+					break
+				}
+			}
+		}
+	}
+
+	byRef := map[string]*NeighbourRef{} // (cei, via, hop) -> ref, phenomena merged
+	for _, phen := range phenomena {
+		p, ok := g.Phenomena[phen]
+		if !ok || !p.HasSpan() || p.Span == graph.SpanEntityLocal {
+			continue
+		}
+		if walkFrom == "" {
+			gaps = append(gaps, ClosureGap{EntityCEI: key, Phenomenon: phen,
+				Reason: "containing pod absent from topology"})
+			continue
+		}
+		depth := 1
+		if p.Span == graph.SpanSecondOrder {
+			depth = 2
+		}
+		visited := map[string]bool{walkFrom: true, key: true}
+		frontier := []string{walkFrom}
+		reached := false
+		for hop := 1; hop <= depth; hop++ {
+			var next []string
+			for _, from := range frontier {
+				for _, typ := range p.TraversalEdgeTypes {
+					et := identity.EdgeType(typ)
+					nbrs := append(topo.Neighbours(et, from, w), topo.NeighboursInto(et, from, w)...)
+					sort.Slice(nbrs, func(i, j int) bool { return nbrs[i].To.Key() < nbrs[j].To.Key() })
+					for _, n := range nbrs {
+						nk := n.To.Key()
+						if hop == 1 {
+							reached = true
+						}
+						if visited[nk] {
+							continue
+						}
+						visited[nk] = true
+						next = append(next, nk)
+						rk := nk + "\x1f" + typ + "\x1f" + string(rune('0'+hop))
+						ref, seen := byRef[rk]
+						if !seen {
+							ref = &NeighbourRef{CEIKey: nk, Via: typ, Result: n.Result.String(), Hop: hop}
+							byRef[rk] = ref
+						}
+						ref.ForPhenomena = append(ref.ForPhenomena, phen)
+					}
+				}
+			}
+			frontier = next
+		}
+		if !reached {
+			gaps = append(gaps, ClosureGap{EntityCEI: key, Phenomenon: phen,
+				Reason: "no traversable neighbour along " + strings.Join(p.TraversalEdgeTypes, "|") + " in window"})
+		}
+	}
+
+	for _, ref := range byRef {
+		sort.Strings(ref.ForPhenomena)
+		refs = append(refs, *ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		a, b := refs[i], refs[j]
+		if a.CEIKey != b.CEIKey {
+			return a.CEIKey < b.CEIKey
+		}
+		if a.Via != b.Via {
+			return a.Via < b.Via
+		}
+		return a.Hop < b.Hop
+	})
+	return refs, gaps
+}
+
+// containerPodUID extracts the pod UID a container CEI key embeds
+// (uid = <podUID>/<containerName>), or "" when not container-form.
+func containerPodUID(ceiKey string) string {
+	parts := strings.Split(ceiKey, "|")
+	if len(parts) != 6 {
+		return ""
+	}
+	if i := strings.IndexByte(parts[5], '/'); i > 0 {
+		return parts[5][:i]
+	}
+	return ""
 }

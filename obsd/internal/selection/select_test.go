@@ -66,7 +66,7 @@ func TestFunnelVerdicts(t *testing.T) {
 		{CEI: svc, Kind: "Service", Namespace: "shop", Name: "web"},
 	}
 
-	r := Select(inv, res, g, false, selAt, "test")
+	r := Select(inv, res, g, false, selAt, "test", nil, identity.TimeWindow{})
 	if len(r.Records) != 4 {
 		t.Fatalf("every inventory entity gets a record: got %d, want 4", len(r.Records))
 	}
@@ -127,7 +127,7 @@ func TestValidationFailedExcluded(t *testing.T) {
 	if len(set) != 0 {
 		t.Errorf("a QA-failed binding must not earn Tier A: %v", set)
 	}
-	r := Select([]identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}, res, g, false, selAt, "test")
+	r := Select([]identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}, res, g, false, selAt, "test", nil, identity.TimeWindow{})
 	if r.Records[0].Reason != ReasonNoEvaluableVariable {
 		t.Errorf("reason = %s, want no-evaluable-variable", r.Records[0].Reason)
 	}
@@ -143,8 +143,8 @@ func TestSelectDeterministic(t *testing.T) {
 		boundBinding(pod.Key(), "THR_CONTAINER_CPU_THROTTLE_RATIO", "container_cpu_cfs_throttled_periods_total"),
 	}}
 	inv := []identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}
-	a := Select(inv, res, g, false, selAt, "test")
-	b := Select(inv, res, g, false, selAt, "test")
+	a := Select(inv, res, g, false, selAt, "test", nil, identity.TimeWindow{})
+	b := Select(inv, res, g, false, selAt, "test", nil, identity.TimeWindow{})
 	if !reflect.DeepEqual(a, b) {
 		t.Error("Select is not deterministic")
 	}
@@ -160,7 +160,7 @@ func TestSelectDeterministic(t *testing.T) {
 func TestSelectWithoutBindingOrGraph(t *testing.T) {
 	pod := cei("shop", "Pod", "web-a", "uid-a")
 	inv := []identity.InstanceRecord{{CEI: pod, Kind: "Pod", Namespace: "shop", Name: "web-a"}}
-	r := Select(inv, nil, nil, false, selAt, "test")
+	r := Select(inv, nil, nil, false, selAt, "test", nil, identity.TimeWindow{})
 	if r.TierACount != 0 || r.Records[0].Tier != TierNone {
 		t.Errorf("no bindings -> nothing selected: %+v", r.Records[0])
 	}
@@ -180,7 +180,7 @@ func TestStaleBindingsReason(t *testing.T) {
 		{CEI: podA, Kind: "Pod", Namespace: "shop", Name: "web-a"},
 		{CEI: podNew, Kind: "Pod", Namespace: "shop", Name: "web-new"},
 	}
-	r := Select(inv, res, g, true, selAt, "test")
+	r := Select(inv, res, g, true, selAt, "test", nil, identity.TimeWindow{})
 	for _, rec := range r.Records {
 		switch rec.Name {
 		case "web-a":
@@ -194,7 +194,7 @@ func TestStaleBindingsReason(t *testing.T) {
 		}
 	}
 	// Without staleness the same absence means a structural kind.
-	r2 := Select(inv, res, g, false, selAt, "test")
+	r2 := Select(inv, res, g, false, selAt, "test", nil, identity.TimeWindow{})
 	for _, rec := range r2.Records {
 		if rec.Name == "web-new" && rec.Reason != ReasonStructuralEntity {
 			t.Errorf("fresh bindings + no rows = structural-entity, got %s", rec.Reason)
@@ -223,5 +223,70 @@ func TestMetricJoinCoversMatcher(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("check-metric join must earn participation: %v", phens)
+	}
+}
+
+// Neighbourhood closure (doc 06 M2): a Tier-A container participating in the
+// first-order THROTTLING_CASCADE pulls in its pod's node along runs-on (with
+// the edge verdict); with no traversable edge the absence is a RECORDED gap,
+// never a silent drop.
+func TestNeighbourhoodClosure(t *testing.T) {
+	g := loadGraph(t)
+	containerCEI := identity.CEI{Layer: identity.LayerInstance, Cluster: "cl", Namespace: "shop",
+		Kind: "Container", Name: "app", UID: "uid-pod/app"}
+	podCEI := cei("shop", "Pod", "app-7d9", "uid-pod")
+	nodeCEI := identity.CEI{Layer: identity.LayerInstance, Cluster: "cl", Kind: "Node", Name: "w1", UID: "uid-node"}
+
+	res := &binding.Result{Bindings: []binding.Binding{
+		boundBinding(containerCEI.Key(), "THR_CONTAINER_CPU_THROTTLE_RATIO", "container_cpu_cfs_throttled_periods_total"),
+	}}
+	inv := []identity.InstanceRecord{{CEI: containerCEI, Kind: "Container", Namespace: "shop", Name: "app"}}
+	w := identity.TimeWindow{Start: selAt.Add(-90 * time.Second), End: selAt}
+
+	// With a fresh pod→node edge: the node enters the watch set, hop 1, valid.
+	edges := identity.NewEdgeStore(func() time.Time { return selAt },
+		map[identity.EdgeType]time.Duration{identity.EdgeRunsOn: 90 * time.Second}, time.Hour)
+	edges.Assert(identity.EdgeRunsOn, podCEI, nodeCEI, selAt.Add(-10*time.Second))
+	r := Select(inv, res, g, false, selAt, "test", edges, w)
+	rec := r.Records[0]
+	if rec.Tier != TierA {
+		t.Fatalf("container must be Tier A: %+v", rec)
+	}
+	var nodeRef *NeighbourRef
+	for i := range rec.Neighbourhood {
+		if rec.Neighbourhood[i].CEIKey == nodeCEI.Key() {
+			nodeRef = &rec.Neighbourhood[i]
+		}
+	}
+	if nodeRef == nil || nodeRef.Via != "runs-on" || nodeRef.Hop != 1 || nodeRef.Result != "valid" {
+		t.Fatalf("closure must pull the node in via runs-on hop 1 valid: %+v", rec.Neighbourhood)
+	}
+	found := false
+	for _, p := range nodeRef.ForPhenomena {
+		if p == "PHEN_THROTTLING_CASCADE" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the ref must name the phenomena that need it: %v", nodeRef.ForPhenomena)
+	}
+	for _, gap := range r.ClosureGaps {
+		if gap.Phenomenon == "PHEN_THROTTLING_CASCADE" {
+			t.Errorf("reachable neighbourhood must not be a gap: %+v", gap)
+		}
+	}
+
+	// Without any topology for the pod: the same phenomenon is a RECORDED gap.
+	empty := identity.NewEdgeStore(func() time.Time { return selAt },
+		map[identity.EdgeType]time.Duration{identity.EdgeRunsOn: 90 * time.Second}, time.Hour)
+	r2 := Select(inv, res, g, false, selAt, "test", empty, w)
+	foundGap := false
+	for _, gap := range r2.ClosureGaps {
+		if gap.EntityCEI == containerCEI.Key() && gap.Phenomenon == "PHEN_THROTTLING_CASCADE" {
+			foundGap = true
+		}
+	}
+	if !foundGap {
+		t.Errorf("unreachable neighbourhood must be a recorded gap: %+v", r2.ClosureGaps)
 	}
 }
