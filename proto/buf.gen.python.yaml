@@ -1,0 +1,14 @@
+version: v2
+# Python stubs for clockd (techstack §5: "grpcio server in Python from the same
+# protos"). The `vigil` package is generated as a REAL src root next to clockd
+# (clockd/src/vigil/...), installed via pyproject packages — no sys.path shims,
+# no import-order sensitivity. `clean` must stay FALSE: the out dir is clockd/src,
+# which also holds the handwritten clockd package; `just gen` removes the
+# generated vigil/ tree explicitly before regenerating. Generated code is
+# COMMITTED (techstack §2.6).
+clean: false
+plugins:
+  - remote: buf.build/protocolbuffers/python
+    out: ../clockd/src
+  - remote: buf.build/grpc/python
+    out: ../clockd/src

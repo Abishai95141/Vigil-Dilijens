@@ -79,8 +79,20 @@ tools:
 
 # Lint protos and regenerate committed Go stubs.
 gen:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The python template's out dir is clockd/src (shared with the handwritten
+    # clockd package), so it cannot use buf's clean — remove the generated tree
+    # explicitly instead, then regenerate.
+    rm -rf clockd/src/vigil
     cd proto && buf lint && buf generate
-    @echo "regenerated proto/gen — remember to commit it"
+    buf generate --template buf.gen.python.yaml
+    cd ..
+    # The generated dirs carry no __init__.py; make them regular packages so the
+    # editable install (hatchling `packages`) and the absolute imports inside the
+    # generated grpc stubs ("from vigil.clock.v1 import ...") resolve everywhere.
+    find clockd/src/vigil -type d -exec touch {}/__init__.py \;
+    echo "regenerated proto/gen + clockd/src/vigil — remember to commit both"
 
 # Validate the ontology KG (schema + referential integrity) and print the authoring
 # gap report (doc 02 M3 / doc 14 A14). Add --strict to fail on gaps.
@@ -97,11 +109,12 @@ gen-check:
     #!/usr/bin/env bash
     set -euo pipefail
     cd proto && buf generate
+    buf generate --template buf.gen.python.yaml
     cd ..
-    if ! git diff --quiet -- proto/gen; then
-        echo "proto/gen is stale — run 'just gen' and commit"; git --no-pager diff --stat -- proto/gen; exit 1
+    if ! git diff --quiet -- proto/gen clockd/src/vigil; then
+        echo "generated stubs are stale — run 'just gen' and commit"; git --no-pager diff --stat -- proto/gen clockd/src/vigil; exit 1
     fi
-    echo "proto/gen up to date"
+    echo "proto/gen + clockd/src/vigil up to date"
 
 # Check protos for backwards-incompatible changes against the main branch.
 buf-breaking:
@@ -116,6 +129,21 @@ clockd-setup:
 # Run clockd tests + lint.
 clockd-test:
     cd clockd && uv run ruff check . && uv run pytest -q
+
+# Run the clockd gRPC service (doc 09 M1). CLOCK=stub|timesfm (timesfm needs
+# the `model` extra: pinned package 2.0.x serving the 2.5 checkpoint, doc 14 A15).
+clockd CLOCK="stub" PORT="50051":
+    cd clockd && uv run --extra {{ if CLOCK == "timesfm" { "model" } else { "serve" } }} python -m clockd.server --clock {{CLOCK}} --port {{PORT}}
+
+# clockd tests INCLUDING the gRPC serving layer (needs the `serve` extra).
+clockd-serve-test:
+    cd clockd && uv run --extra serve ruff check . && uv run --extra serve pytest -q
+
+# The opt-in model conformance run (doc 09 M1 swap test, Python half): the SAME
+# fixtures as the stub, against pinned TimesFM 2.5. Heavy — downloads/loads the
+# checkpoint on first run.
+clockd-model-conformance:
+    cd clockd && VIGIL_MODEL_CONFORMANCE=1 uv run --extra model pytest tests/test_conformance.py -q
 
 # Create/refresh the harness uv environment.
 harness-setup:

@@ -12,9 +12,13 @@ a forecast mean something is authored graph knowledge, joined at surfacing, neve
 - `src/clockd/server.py` — gRPC serving placeholder (Phase 2; stubs generated from
   `proto/vigil/clock/v1/clock.proto`).
 
-**TimesFM 2.5** lands behind the `model` extra in Phase 2, pinned by BOTH the package
-version and the HF checkpoint revision `google/timesfm-2.5-200m-pytorch` (doc 14 A15).
-CPU is sufficient for dev.
+**TimesFM 2.5** lives behind the `model` extra, pinned by BOTH version lines (doc 14
+A15) — and they are deliberately different numbers: the MODEL is 2.5 (HF checkpoint
+`google/timesfm-2.5-200m-pytorch`, revision-pinned in `src/clockd/timesfm_clock.py`),
+while the PyPI **package** `timesfm` is the SDK whose own line tops out at 2.0.x
+(2.0.0 added the 2.5-model class; no `timesfm==2.5` package exists). CPU is
+sufficient for dev (~290 ms/forecast measured; probe record in
+`artifacts/phase2-plan.md` §6).
 
 Do: keep the base install heavy-dep-free so conformance tests run anywhere. Don't:
 let any string/semantic field cross the clock boundary.
