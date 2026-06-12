@@ -69,16 +69,18 @@ type DerivationChain struct {
 // forecastable modality, doc 02 §2).
 func (s *Signal) IsMetric() bool { return s.Modality == "Metric" }
 
-// Forecastable is an APPROXIMATE derivation of forecast-eligibility (doc 09 §3.2):
-// a Metric whose free-text data_type names a gauge or counter. data_type in the KG
-// is unnormalized, so this is a heuristic the forecast funnel (09) refines; the gap
-// report flags data_type normalization as follow-on work.
+// Forecastable derives forecast-eligibility in principle (doc 09 §3.2): a
+// Metric whose canonical series shape contains a gauge or a counter (counters
+// only via rate derivation, flagged second-class by the funnel). Derived from
+// the authored data_type via ParseSeriesShape (seriesshape.go) — the funnel's
+// remaining per-target gates (bound, real dynamics, resolvable bar, precursor)
+// are runtime properties owned by doc 09 M2.
 func (s *Signal) Forecastable() bool {
 	if !s.IsMetric() {
 		return false
 	}
-	dt := strings.ToLower(s.DataType)
-	return strings.Contains(dt, "gauge") || strings.Contains(dt, "counter")
+	sh := s.Shape()
+	return sh.Gauge || sh.Counter
 }
 
 // InlineMember is one authored member tuple from a phenomenon's signals[] array:

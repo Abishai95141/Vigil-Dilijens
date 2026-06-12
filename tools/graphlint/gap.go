@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/Abishai95141/Vigil-Dilijens/internal/seriesshape"
 )
 
 // GapReport is the authoring-gap analysis (doc 14 A14): what a human must still
@@ -28,8 +30,19 @@ type GapReport struct {
 	ThresholdRulesStructured int
 
 	TemporalVocabulary []string // distinct temporal tags actually used (informational)
-	DataTypeVariants   int      // distinct free-text data_type values (forecast-funnel normalization, doc 09)
-	EdgesTotal         int
+	DataTypeVariants   int      // distinct free-text data_type values (informational; shapes are derived)
+
+	// Series-shape accounting over Metric signals (doc 09 §3.2 funnel inputs),
+	// derived via graph.ParseSeriesShape: the curation queue is the UNKNOWN
+	// spellings plus Metric-modality signals whose data_type parses non-series
+	// (a modality/data_type disagreement a curator should resolve).
+	ShapeSeries        int
+	ShapeGaugeOrCtr    int
+	ShapeContainsGauge int
+	ShapeNonSeries     []string // signal ids: Metric modality but payload-typed data_type
+	ShapeUnknown       []string // signal ids: unclassifiable data_type spelling
+
+	EdgesTotal int
 }
 
 const maxMissingSpanList = 50
@@ -53,6 +66,22 @@ func analyzeGap(doc kgDoc) GapReport {
 			g.SignalsTotal++
 			if n.Modality == "Metric" {
 				g.MetricSignals++
+				sh := seriesshape.Parse(n.DataType)
+				if sh.Series() {
+					g.ShapeSeries++
+				}
+				if sh.Gauge || sh.Counter {
+					g.ShapeGaugeOrCtr++
+				}
+				if sh.Gauge {
+					g.ShapeContainsGauge++
+				}
+				if sh.NonSeries {
+					g.ShapeNonSeries = append(g.ShapeNonSeries, n.ID)
+				}
+				if sh.Unknown {
+					g.ShapeUnknown = append(g.ShapeUnknown, n.ID)
+				}
 			}
 			if n.DataType != "" {
 				dtypes[n.DataType] = struct{}{}
@@ -101,7 +130,14 @@ func (g GapReport) String() string {
 	}
 	fmt.Fprintf(&b, "    signals: %d total, %d metric; threshold rules: %d structured (authored overlays), %d agent hints remaining to structure\n",
 		g.SignalsTotal, g.MetricSignals, g.ThresholdRulesStructured, g.ThresholdHintEdges)
-	fmt.Fprintf(&b, "    data_type variants: %d (needs normalization for the forecast funnel, doc 09)\n", g.DataTypeVariants)
+	fmt.Fprintf(&b, "    data_type variants: %d spellings; series shapes DERIVED (doc 09 §3.2 funnel): %d series / %d gauge-or-counter / %d contain-a-gauge of %d Metric signals\n",
+		g.DataTypeVariants, g.ShapeSeries, g.ShapeGaugeOrCtr, g.ShapeContainsGauge, g.MetricSignals)
+	if len(g.ShapeUnknown) > 0 {
+		fmt.Fprintf(&b, "    data_type curation queue — unclassifiable spellings: %d %v\n", len(g.ShapeUnknown), g.ShapeUnknown)
+	}
+	if len(g.ShapeNonSeries) > 0 {
+		fmt.Fprintf(&b, "    data_type curation queue — Metric modality but payload-typed data_type (disagreement): %d %v\n", len(g.ShapeNonSeries), g.ShapeNonSeries)
+	}
 	fmt.Fprintf(&b, "    temporal vocabulary in use (%d): %s\n", len(g.TemporalVocabulary), strings.Join(g.TemporalVocabulary, " "))
 	return b.String()
 }
