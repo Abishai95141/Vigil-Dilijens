@@ -1,0 +1,37 @@
+{
+  "bundle": "bundle-v1",
+  "comment": "Ground truth for the committed synthetic fixture (obsd/internal/replay/testdata/bundle-v1, regenerated under graph v0.3.0). The signal trajectories are constructed in replay_test.go buildBundle, so the truth is known by design: working set 110+4i Mi against a 121.6Mi bar (at-threshold from i=2), throttle ratio 0.67 + node PSI 0.2/s from i=1 (both crossed, valid runs-on edge), cgroup OOM counter increments at i=6. Evals at 2026-06-11T12:00:01Z + i*15s.",
+  "phenomena_in_scope": [
+    "PHEN_MEMORY_LEAK",
+    "PHEN_THROTTLING_CASCADE",
+    "PHEN_OOM_KILL_CGROUP"
+  ],
+  "positives": [
+    {
+      "phenomenon": "PHEN_MEMORY_LEAK",
+      "entity_contains": "web-a",
+      "from": "2026-06-11T12:00:25Z",
+      "to": "2026-06-11T12:02:00Z"
+    },
+    {
+      "phenomenon": "PHEN_THROTTLING_CASCADE",
+      "entity_contains": "web-a",
+      "from": "2026-06-11T12:00:10Z",
+      "to": "2026-06-11T12:02:00Z"
+    },
+    {
+      "phenomenon": "PHEN_OOM_KILL_CGROUP",
+      "entity_contains": "web-a",
+      "from": "2026-06-11T12:01:25Z",
+      "to": "2026-06-11T12:02:00Z"
+    }
+  ],
+  "cascades": [
+    {
+      "trigger": "PHEN_MEMORY_LEAK",
+      "downstream": "PHEN_OOM_KILL_CGROUP",
+      "from": "2026-06-11T12:01:25Z",
+      "to": "2026-06-11T12:02:00Z"
+    }
+  ]
+}
