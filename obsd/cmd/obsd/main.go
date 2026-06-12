@@ -287,9 +287,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	}
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
-	// The unexplained-channel snapshot (doc 08), published each tick like coverage —
-	// off the deterministic path, race-free via the atomic.
+	// The operator surfaces (doc 10 M2–M4), published each tick like coverage —
+	// off the deterministic path, race-free via atomics.
 	var unexpView atomic.Pointer[vapi.UnexplainedView]
+	var insightsView atomic.Pointer[vapi.InsightsView]
+	var topoView atomic.Pointer[vapi.TopologyView]
 
 	// The store gate: scrape cycles write under the write lock; evaluation ticks
 	// read under the read lock. Ticks therefore always observe whole scrape
@@ -304,16 +306,32 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		providers = &vapi.Providers{
 			Coverage:    func() *vapi.CoverageView { return coverage.Load() },
 			Unexplained: func() *vapi.UnexplainedView { return unexpView.Load() },
+			Insights:    func() *vapi.InsightsView { return insightsView.Load() },
+			Topology:    func() *vapi.TopologyView { return topoView.Load() },
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
+			// The anomaly timeline (doc 10 M4) composes the durable match +
+			// unexplained history; reads the store on request (off the hot path).
+			providers.Timeline = func() (*vapi.TimelineView, error) {
+				fr, err := findingsStore.ActiveFindings(200)
+				if err != nil {
+					return nil, err
+				}
+				ur, err := findingsStore.ActiveUnexplained(200)
+				if err != nil {
+					return nil, err
+				}
+				return vapi.BuildTimeline(time.Now().UTC(), fr, ur), nil
+			}
 		}
-		logger.Info("operator surfacing API enabled (doc 10 M1)", "routes", "/api/coverage /api/findings /api/unexplained")
+		logger.Info("operator surfacing API enabled (doc 10 M1–M4)",
+			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
-		capture, &coverage, &unexpView, findingsStore, budgets)
+		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets)
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -362,7 +380,12 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration) {
+	// Per-edge-type budgets as the topology builder wants them (string-keyed).
+	strBudgets := make(map[string]time.Duration, len(budgets))
+	for k, v := range budgets {
+		strBudgets[string(k)] = v
+	}
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -479,9 +502,23 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 					BlindSpot:  unexplained.BlindSpotNotice,
 				})
 			}
+			// The "now" insight surface (doc 10 M2) + the topology surface (doc 10
+			// M3): live snapshots, current marks only (predictive marks are a
+			// separate visual language added in M5/Phase 2).
+			if insightsView != nil {
+				insightsView.Store(vapi.BuildInsights(clusterID, graphVersion, graphRelease, now, findings, cascades))
+			}
+			if topoView != nil {
+				topoView.Store(vapi.BuildTopology(clusterID, graphVersion, now, active, topoSnap, strBudgets, findings, unexp, selected))
+			}
 			if findingsStore != nil {
 				if err := findingsStore.UpsertFindings(now, findings); err != nil {
 					logger.Error("findings store: upsert failed (surfacing only)", "err", err)
+				}
+				// Persist the unexplained cards too, so the anomaly timeline (doc
+				// 10 M4) survives restarts and shows closed aging spans.
+				if err := findingsStore.UpsertUnexplained(now, unexp); err != nil {
+					logger.Error("findings store: unexplained upsert failed (surfacing only)", "err", err)
 				}
 			}
 			if capture != nil {

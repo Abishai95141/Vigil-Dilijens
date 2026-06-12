@@ -20,6 +20,12 @@ type Providers struct {
 	// Unexplained returns the current unexplained-channel snapshot (doc 08);
 	// may be nil when the channel is not running.
 	Unexplained func() *UnexplainedView
+	// Insights returns the current "now" surface snapshot (doc 10 M2); may be nil.
+	Insights func() *InsightsView
+	// Topology returns the current topology surface snapshot (doc 10 M3); may be nil.
+	Topology func() *TopologyView
+	// Timeline returns the composed anomaly timeline (doc 10 M4); may be nil.
+	Timeline func() (*TimelineView, error)
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -82,6 +88,47 @@ func Register(mux *http.ServeMux, p Providers) {
 				Candidates:  []unexplained.CandidateReport{},
 				BlindSpot:   unexplained.BlindSpotNotice,
 			}
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/insights", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.Insights == nil || p.Insights() == nil {
+			writeJSON(w, &InsightsView{GeneratedAt: timeNowUTC(), Findings: []InsightCard{}, Cascades: []CascadeCard{}})
+			return
+		}
+		writeJSON(w, p.Insights())
+	})
+
+	mux.HandleFunc("/api/topology", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.Topology == nil || p.Topology() == nil {
+			writeJSON(w, &TopologyView{GeneratedAt: timeNowUTC(), Nodes: []TopoNode{}, Edges: []TopoEdge{}})
+			return
+		}
+		writeJSON(w, p.Topology())
+	})
+
+	mux.HandleFunc("/api/timeline", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.Timeline == nil {
+			writeJSON(w, &TimelineView{GeneratedAt: timeNowUTC(), Matches: []TimelineSpan{}, Unexplained: []TimelineSpan{}, Projected: []TimelineSpan{}, ProjectedNote: projectedLaneNote})
+			return
+		}
+		v, err := p.Timeline()
+		if err != nil {
+			http.Error(w, "timeline unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		writeJSON(w, v)
 	})
