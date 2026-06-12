@@ -1,0 +1,202 @@
+/* ============================================================================
+   Vigil — Design Tokens (the single source of truth)
+   ----------------------------------------------------------------------------
+   Owning doc: 10-surfacing-and-operator-experience.md · 01-epistemic-separation.
+   Consumed by: web/ (imported once at the app root) and brand/BRANDKIT.md.
+
+   The organizing principle is NOT decoration — it is the charter. Every datum
+   carries exactly one provenance class (MEASURED / PROJECTED / AUTHORED), and an
+   operator must read a finding's epistemic strength at a glance, before a word
+   (doc 10 §3.1). So the provenance classes get the FIRST, most distinct visual
+   identities; everything else (chrome, severity, status) is built around them
+   and is forbidden from impersonating them.
+
+   Rules encoded here, enforced in review:
+   - The three provenance hues are reserved. Brand-blue chrome never encodes a
+     class; severity colors only ever appear INSIDE measured content.
+   - PROJECTED is a BAND, never a line: it ships a translucent fill token and no
+     solid stroke for series. (doc 01 §3 — the band never collapses.)
+   - Color is never the only signal: each class also carries a label, an icon,
+     and a shape/treatment, so the system is legible without color (WCAG + CVD).
+   ============================================================================ */
+
+:root {
+  /* ---- Provenance classes — the trust spine (doc 01 §3) -------------------
+     Defined ONCE. provenance.ts references these exact custom-property names. */
+
+  /* MEASURED — a fact from the store, or its arithmetic consequence.
+     Mood: indicative. Identity: teal, solid, an instrument reading. */
+  --prov-measured:        #14b6a4;
+  --prov-measured-on-dark:#2dd4bf;
+  --prov-measured-tint:   rgba(45, 212, 191, 0.12);
+  --prov-measured-border: rgba(45, 212, 191, 0.36);
+  --prov-measured-text:   #5eead4;
+
+  /* PROJECTED — a forecast against a bar, with a mandatory band.
+     Mood: modal ("might"). Identity: violet, translucent, never a hard line. */
+  --prov-projected:        #8b7bf7;
+  --prov-projected-on-dark:#a78bfa;
+  --prov-projected-band:   rgba(167, 139, 250, 0.18); /* the band fill */
+  --prov-projected-tint:   rgba(167, 139, 250, 0.12);
+  --prov-projected-border: rgba(167, 139, 250, 0.40);
+  --prov-projected-text:   #c4b5fd;
+
+  /* AUTHORED — a curated graph relationship, surfaced verbatim with attribution.
+     Mood: attributed. Identity: muted gold, editorial, deliberately quiet so a
+     citation never shouts louder than a live reading. */
+  --prov-authored:        #c79a3f;
+  --prov-authored-on-dark:#d8b765;
+  --prov-authored-tint:   rgba(216, 183, 101, 0.12);
+  --prov-authored-border: rgba(216, 183, 101, 0.34);
+  --prov-authored-text:   #e8cf94;
+
+  /* ---- Severity ladder (doc 05 §3.4) -------------------------------------
+     The 4-rung state of ONE measured variable. A sub-language INSIDE measured
+     content only — never a standalone class mark. "below" is deliberately
+     quiet: healthy is unremarkable, not celebrated. */
+  --rung-unknown:      #3a4252; /* no usable / stale sample (rendered hatched) */
+  --rung-below:        #5b6678; /* healthy side — neutral, intentionally calm  */
+  --rung-at-threshold: #e0b341; /* approaching the bar                          */
+  --rung-above:        #ee7b3c; /* crossed                                      */
+  --rung-well-above:   #e5484d; /* deep into violation (A6 line)                */
+
+  /* ---- Coverage states (doc 04/05) — the honest map's cells --------------- */
+  --cov-full:        var(--prov-measured-on-dark);
+  --cov-partial:     #e0b341;
+  --cov-none:        #5c6679;
+  --cov-unbounded:   #8a93a6; /* bar-less: Tier-B-ineligible, listed           */
+  --cov-suspect:     #c79a3f; /* QA-suspect binding (authored-ish caution)     */
+
+  /* ---- Brand & chrome — NEVER a provenance class -------------------------- */
+  --brand-azure:      #4c82f7; /* interactive: links, focus, primary action    */
+  --brand-azure-hover:#6a98f9;
+  --brand-azure-press:#3a6fe0;
+  --brand-ink:        #0a0d13; /* the deep watch-tower base                     */
+
+  /* ---- Operational status (orthogonal to provenance) --------------------- */
+  --status-ok:    #2fa98b;
+  --status-warn:  #e0b341;
+  --status-error: #e5484d;
+  --status-info:  #4c82f7;
+
+  /* ---- Neutral ink ramp — dark-first (observability is dark-first) -------- */
+  --bg:            #0a0d13;
+  --surface-1:     #10141d;
+  --surface-2:     #161b26;
+  --surface-3:     #1e2533;
+  --border-subtle: #232b3a;
+  --border:        #2e3749;
+  --border-strong: #3c4760;
+  --text-strong:   #eaedf4;
+  --text:          #c2c9d6;
+  --text-muted:    #8a93a6;
+  --text-faint:    #5c6679;
+  --overlay:       rgba(6, 9, 14, 0.66);
+
+  /* ---- Typography (doc-mandated pairing) ---------------------------------
+     Plus Jakarta Sans — titles & headings (warmth + authority).
+     Poppins         — subheadings & supporting/body text (friendly, legible).
+     JetBrains Mono  — DATA ONLY: values, units, CEI keys, digests, ladders.
+                       Never prose; observability numbers must be tabular. */
+  --font-display: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-heading: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-body:    "Poppins", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Type scale — line-heights are 8pt-aligned (doc research: 8/4 rhythm).
+     size / line-height. */
+  --text-display:   2.5rem;  --lh-display: 3rem;    /* 40/48  Plus Jakarta 700 */
+  --text-h1:        2rem;    --lh-h1:      2.5rem;  /* 32/40  Plus Jakarta 700 */
+  --text-h2:        1.5rem;  --lh-h2:      2rem;    /* 24/32  Plus Jakarta 600 */
+  --text-h3:        1.25rem; --lh-h3:      1.75rem; /* 20/28  Plus Jakarta 600 */
+  --text-h4:        1rem;    --lh-h4:      1.5rem;  /* 16/24  Plus Jakarta 600 */
+  --text-body-lg:   1rem;    --lh-body-lg: 1.5rem;  /* 16/24  Poppins 400/500  */
+  --text-body:      0.875rem;--lh-body:    1.25rem; /* 14/20  Poppins 400      */
+  --text-caption:   0.75rem; --lh-caption: 1rem;    /* 12/16  Poppins 400/500  */
+  --text-overline:  0.6875rem;--lh-overline:1rem;   /* 11/16  Poppins 600 tracked */
+  --text-mono:      0.8125rem;--lh-mono:   1.25rem; /* 13/20  JetBrains Mono    */
+
+  --weight-regular: 400;
+  --weight-medium:  500;
+  --weight-semibold:600;
+  --weight-bold:    700;
+  --tracking-tight: -0.01em;  /* display/headings */
+  --tracking-normal: 0;
+  --tracking-wide:  0.04em;   /* overline / tags  */
+  --tracking-mono:  0;
+
+  /* ---- Spacing — 8pt grid with a 4pt half-step (doc research) -------------
+     Rule of thumb encoded by usage: internal padding ≤ external margin. */
+  --space-3xs: 0.125rem; /* 2  */
+  --space-2xs: 0.25rem;  /* 4  */
+  --space-xs:  0.5rem;   /* 8  */
+  --space-sm:  0.75rem;  /* 12 */
+  --space-md:  1rem;     /* 16 */
+  --space-lg:  1.5rem;   /* 24 */
+  --space-xl:  2rem;     /* 32 */
+  --space-2xl: 2.5rem;   /* 40 */
+  --space-3xl: 3rem;     /* 48 */
+  --space-4xl: 4rem;     /* 64 */
+  --space-5xl: 5rem;     /* 80 */
+
+  /* Component padding presets (so cards/inputs/cells are consistent). */
+  --pad-card:   var(--space-lg);  /* 24 — finding cards, panels   */
+  --pad-cell:   var(--space-sm);  /* 12 — table/coverage cells    */
+  --pad-control:var(--space-sm) var(--space-md); /* 12 16 — buttons/inputs */
+  --gutter:     var(--space-lg);  /* 24 — grid gutter             */
+  --page-pad:   var(--space-xl);  /* 32 — page frame              */
+
+  /* ---- Radii ------------------------------------------------------------- */
+  --radius-xs:  0.25rem; /* 4  pills, tags        */
+  --radius-sm:  0.5rem;  /* 8  inputs, buttons    */
+  --radius-md:  0.75rem; /* 12 cards              */
+  --radius-lg:  1rem;    /* 16 panels, modals     */
+  --radius-full:9999px;
+
+  /* ---- Borders ----------------------------------------------------------- */
+  --border-hairline: 1px solid var(--border-subtle);
+  --border-default:  1px solid var(--border);
+
+  /* ---- Elevation — subtle, dark-aware (no heavy drop shadows) ------------- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.30);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.36);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.44);
+  --ring-focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--brand-azure);
+
+  /* ---- Motion — minimal, never alarmist (doc 10 §6 alert-fatigue) -------- */
+  --motion-fast:  120ms;
+  --motion-base:  180ms;
+  --motion-slow:  260ms;
+  --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out:  cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ---- Charts ------------------------------------------------------------ */
+  --grid-line:   var(--border-subtle);
+  --axis-line:   var(--border);
+  --suspect-dash: 4 3; /* stroke-dasharray for suspect edges / stale marks    */
+}
+
+/* Light mode — the secondary surface (reports/print). Only neutrals + the
+   on-light provenance values change; hues and meanings are identical. */
+:root[data-theme="light"] {
+  --bg:            #f7f8fb;
+  --surface-1:     #ffffff;
+  --surface-2:     #f1f3f8;
+  --surface-3:     #e9edf4;
+  --border-subtle: #e4e8f0;
+  --border:        #d4dae6;
+  --border-strong: #b8c1d4;
+  --text-strong:   #10141d;
+  --text:          #3a4150;
+  --text-muted:    #6b7385;
+  --text-faint:    #9aa3b5;
+  --overlay:       rgba(16, 20, 29, 0.40);
+
+  --prov-measured-on-dark: #0d9488;
+  --prov-projected-on-dark:#7c5cf0;
+  --prov-authored-on-dark: #a9802a;
+  --brand-azure:           #2e5fd0;
+  --shadow-1: 0 1px 2px rgba(16, 20, 29, 0.08);
+  --shadow-2: 0 4px 12px rgba(16, 20, 29, 0.10);
+  --shadow-3: 0 12px 32px rgba(16, 20, 29, 0.14);
+}

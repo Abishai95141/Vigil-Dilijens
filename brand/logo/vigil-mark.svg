@@ -1,0 +1,20 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vigil mark">
+  <title>Vigil mark</title>
+  <!-- The aperture: a watcher's lens / rounded container (the surfacing layer,
+       the one place the classes meet). -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#0a0d13"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="15.5" stroke="#2e3749"/>
+  <!-- Three tiers of certainty, each in its own visual language, converging on
+       one focal reading at the base (join, never fuse). Top to bottom:
+       AUTHORED (dotted, attributed) · PROJECTED (banded, modal) · MEASURED (solid). -->
+  <!-- AUTHORED — dotted arc, quiet gold -->
+  <path d="M18 20 H46" stroke="#d8b765" stroke-width="3" stroke-linecap="round" stroke-dasharray="0.1 7"/>
+  <!-- PROJECTED — translucent band (never a single line) -->
+  <rect x="18" y="27" width="28" height="7" rx="3.5" fill="#a78bfa" fill-opacity="0.30"/>
+  <path d="M18 30.5 H46" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-dasharray="5 4"/>
+  <!-- MEASURED — solid bar, confident teal -->
+  <path d="M18 41 H46" stroke="#2dd4bf" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- The focal "now" the system reports: a single converging sightline + dot. -->
+  <path d="M32 41 V50" stroke="#c2c9d6" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="32" cy="52.5" r="2.5" fill="#eaedf4"/>
+</svg>

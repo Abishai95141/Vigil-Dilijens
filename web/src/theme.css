@@ -1,0 +1,255 @@
+/* Vigil web theme — imports the canonical brand tokens (the single source of
+   truth lives in brand/tokens.css), self-hosts the brand fonts, and defines the
+   base element + reusable brand component classes every surface uses. Imported
+   once in main.tsx. */
+
+/* The mandated type pairing, self-hosted (no runtime CDN — network-free build).
+   Plus Jakarta Sans = titles/headings · Poppins = subheadings/body · JetBrains
+   Mono = data only. */
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+@import "@fontsource/poppins/400.css";
+@import "@fontsource/poppins/500.css";
+@import "@fontsource/poppins/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+/* The canonical design tokens (provenance colors, spacing, type scale, …). */
+@import "../../brand/tokens.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--text-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- Headings — Plus Jakarta Sans, in the ink-strong color --------------- */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading);
+  color: var(--text-strong);
+  margin: 0;
+  letter-spacing: var(--tracking-tight);
+}
+h1 {
+  font-size: var(--text-h1);
+  line-height: var(--lh-h1);
+  font-weight: var(--weight-bold);
+}
+h2 {
+  font-size: var(--text-h2);
+  line-height: var(--lh-h2);
+  font-weight: var(--weight-semibold);
+}
+h3 {
+  font-size: var(--text-h3);
+  line-height: var(--lh-h3);
+  font-weight: var(--weight-semibold);
+}
+h4 {
+  font-size: var(--text-h4);
+  line-height: var(--lh-h4);
+  font-weight: var(--weight-semibold);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--brand-azure);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-focus);
+  border-radius: var(--radius-xs);
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  line-height: var(--lh-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Reusable brand classes --------------------------------------------- */
+
+.v-overline {
+  font-family: var(--font-body);
+  font-size: var(--text-overline);
+  line-height: var(--lh-overline);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.v-muted {
+  color: var(--text-muted);
+}
+.v-faint {
+  color: var(--text-faint);
+}
+
+/* Card — the base surface for any panel/finding. */
+.v-card {
+  background: var(--surface-1);
+  border: var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: var(--pad-card);
+}
+
+/* Provenance class chip — label + icon, in the class identity. Use
+   data-prov="MEASURED|PROJECTED|AUTHORED". */
+.v-prov-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-family: var(--font-body);
+  font-size: var(--text-overline);
+  line-height: 1;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  padding: var(--space-2xs) var(--space-xs);
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+}
+.v-prov-chip[data-prov="MEASURED"] {
+  color: var(--prov-measured-text);
+  background: var(--prov-measured-tint);
+  border-color: var(--prov-measured-border);
+}
+.v-prov-chip[data-prov="PROJECTED"] {
+  color: var(--prov-projected-text);
+  background: var(--prov-projected-tint);
+  border-color: var(--prov-projected-border);
+}
+.v-prov-chip[data-prov="AUTHORED"] {
+  color: var(--prov-authored-text);
+  background: var(--prov-authored-tint);
+  border-color: var(--prov-authored-border);
+}
+
+/* Provenance card — a 3px left-rule in the class color (the keystone). */
+.v-prov-card {
+  background: var(--surface-1);
+  border: var(--border-hairline);
+  border-left-width: 3px;
+  border-radius: var(--radius-md);
+  padding: var(--pad-card);
+}
+.v-prov-card[data-prov="MEASURED"] {
+  border-left-color: var(--prov-measured-on-dark);
+}
+.v-prov-card[data-prov="PROJECTED"] {
+  border-left-color: var(--prov-projected-on-dark);
+}
+.v-prov-card[data-prov="AUTHORED"] {
+  border-left-color: var(--prov-authored-on-dark);
+}
+
+/* Severity ladder pill — a tiny 4-segment indicator. */
+.v-ladder {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+.v-ladder-seg {
+  width: 14px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--surface-3);
+}
+.v-ladder-seg[data-on="true"] {
+  background: var(--rung-color, var(--rung-below));
+}
+
+/* Coverage cell. data-state = full|partial|none|unbounded|suspect. */
+.v-cov {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+}
+.v-cov-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex: none;
+}
+.v-cov[data-state="full"] .v-cov-dot {
+  background: var(--cov-full);
+}
+.v-cov[data-state="partial"] .v-cov-dot {
+  background: var(--cov-partial);
+}
+.v-cov[data-state="none"] .v-cov-dot {
+  background: var(--cov-none);
+}
+.v-cov[data-state="unbounded"] .v-cov-dot {
+  background: transparent;
+  border: 1.5px dashed var(--cov-unbounded);
+}
+.v-cov[data-state="suspect"] .v-cov-dot {
+  background: var(--cov-suspect);
+}
+
+/* Button. */
+.v-btn {
+  font-family: var(--font-body);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-body);
+  padding: var(--pad-control);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-strong);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out), border-color
+    var(--motion-fast) var(--ease-out);
+}
+.v-btn:hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.v-btn--primary {
+  background: var(--brand-azure);
+  border-color: var(--brand-azure);
+  color: #fff;
+}
+.v-btn--primary:hover {
+  background: var(--brand-azure-hover);
+  border-color: var(--brand-azure-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

@@ -1,0 +1,16 @@
+<svg width="220" height="64" viewBox="0 0 220 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vigil">
+  <title>Vigil logo lockup</title>
+  <!-- Mark -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#0a0d13"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="15.5" stroke="#2e3749"/>
+  <path d="M18 20 H46" stroke="#d8b765" stroke-width="3" stroke-linecap="round" stroke-dasharray="0.1 7"/>
+  <rect x="18" y="27" width="28" height="7" rx="3.5" fill="#a78bfa" fill-opacity="0.30"/>
+  <path d="M18 30.5 H46" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-dasharray="5 4"/>
+  <path d="M18 41 H46" stroke="#2dd4bf" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M32 41 V50" stroke="#c2c9d6" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="32" cy="52.5" r="2.5" fill="#eaedf4"/>
+  <!-- Wordmark: Plus Jakarta Sans, the brand title face. -->
+  <text x="78" y="40" font-family="'Plus Jakarta Sans', system-ui, sans-serif" font-size="30" font-weight="700" letter-spacing="-0.01em" fill="#eaedf4">Vigil</text>
+  <!-- A measured-teal focal dot terminates the wordmark — "reports what is." -->
+  <circle cx="183" cy="36" r="3" fill="#2dd4bf"/>
+</svg>

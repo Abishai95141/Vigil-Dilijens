@@ -5,7 +5,14 @@ one place the three provenance classes meet, each still wearing its label — an
 must never fuse them on screen or in language (doc 10 §3.1, doc 01 §5).
 
 - `biome` is the single lint+format tool; `vitest` for unit tests.
-- Provenance design tokens are defined ONCE (`src/provenance.ts`) and used everywhere.
+- **Design system is `brand/`** ([`brand/BRANDKIT.md`](../brand/BRANDKIT.md)). Color,
+  spacing, type, and component tokens live ONCE in
+  [`brand/tokens.css`](../brand/tokens.css) (imported via `src/theme.css`); the
+  per-class *semantics* (label, register, treatment) live in `src/provenance.ts`.
+  Never hardcode a hex, a space value, or a font — reach for a token. Brand
+  primitives (`Logo`, `ProvChip`, `ProvCard`, `Ladder`, `CoverageCell`) live in
+  `src/components/Brand.tsx`. Type pairing: Plus Jakarta Sans (titles/headings),
+  Poppins (subheads/body), JetBrains Mono (data only).
 - Coming as surfaces land: Connect-Web typed client from `/proto`, **Cytoscape.js**
   (topology, with suspect edges visibly distinct), **Apache ECharts** (timeline —
   PROJECTED content draws as **bands, never lines**), Tailwind, SSE finding streams.

@@ -20,12 +20,14 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
@@ -35,6 +37,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
+	fstore "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/store"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
 )
 
@@ -62,6 +65,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		ontology    = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
 		overlays    = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
 		storeDir    = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
+		dbPath      = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
+		apiEnabled  = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -114,7 +119,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled)
 }
 
 // sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
@@ -123,7 +128,7 @@ const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir string) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -233,6 +238,26 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		}
 	}
 
+	// Surfacing back end (doc 10): the SQLite findings store (A7) and the
+	// published Coverage Report snapshot the API serves. Both are OFF the
+	// deterministic path — a surfacing failure never perturbs detection/replay.
+	graphVersion := ""
+	if ontologyGraph != nil {
+		graphVersion = ontologyGraph.Version
+	}
+	var findingsStore *fstore.Store
+	if apiEnabled {
+		s, err := fstore.Open(dbPath)
+		if err != nil {
+			logger.Error("findings store disabled: open failed (surfacing only, non-gating)", "err", err)
+		} else {
+			findingsStore = s
+			defer findingsStore.Close()
+		}
+	}
+	var coverage atomic.Pointer[vapi.CoverageView]
+	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, time.Now(), nil, nil, nil))
+
 	// The store gate: scrape cycles write under the write lock; evaluation ticks
 	// read under the read lock. Ticks therefore always observe whole scrape
 	// cycles — the visibility property the replay digest depends on (doc 05 §3.5).
@@ -241,10 +266,20 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 
 	go scrapeLoop(ctx, logger, &gate, ingestor, kube.NewProxyFetcher(client), watcher, p.Scrape.Interval.Duration())
 
-	go serveHealth(ctx, logger, ln, registry, watcher)
-	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, p.Observation.EvaluationTick.Duration(),
+	var providers *vapi.Providers
+	if apiEnabled {
+		providers = &vapi.Providers{
+			Coverage: func() *vapi.CoverageView { return coverage.Load() },
+		}
+		if findingsStore != nil {
+			providers.Findings = findingsStore.ActiveFindings
+		}
+		logger.Info("operator surfacing API enabled (doc 10 M1)", "routes", "/api/coverage /api/findings")
+	}
+	go serveHealth(ctx, logger, ln, registry, watcher, providers)
+	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
-		capture)
+		capture, &coverage, findingsStore)
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
 	return watcher.Run(ctx)
@@ -253,9 +288,14 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 // serveHealth exposes /metrics (Prometheus), /healthz (liveness), and /readyz
 // (informer sync) — the health-metrics endpoints of doc 03 §6 — on an already-bound
 // listener (so bind failures are surfaced by the caller, not swallowed here).
-func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, registry *prometheus.Registry, watcher *identity.Watcher) {
+func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, registry *prometheus.Registry, watcher *identity.Watcher, providers *vapi.Providers) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	if providers != nil {
+		// The operator surfacing API (doc 10) shares the health listener so the web
+		// app's /api proxy target is the one bound port.
+		vapi.Register(mux, *providers)
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok")
@@ -288,7 +328,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID string, every time.Duration, bnd *binder, capture *replay.Capture) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], findingsStore *fstore.Store) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -350,7 +390,8 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// deterministic Tier-A core feeds detection; the full records (incl.
 			// the none-list) are the audit surface.
 			selected := selection.TierASet(bd.Result, bnd.graph)
-			renderSelection(out, selection.Select(active, bd.Result, bnd.graph, bd.Stale, now, "evaluation-tick"))
+			selResult := selection.Select(active, bd.Result, bnd.graph, bd.Stale, now, "evaluation-tick")
+			renderSelection(out, selResult)
 			// Live fingerprints (doc 05 M3): the first MEASURED "what is happening
 			// now" — re-materialized each tick against fresh samples.
 			fps = bnd.fingerprints(now)
@@ -359,6 +400,17 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// fingerprints (doc 06 provides the Tier-A set to detection).
 			findings = bnd.detectFindings(fps, selected)
 			renderFindings(out, findings)
+			// Surfacing (doc 10 M1): publish the Coverage Report snapshot the API
+			// serves, and persist the findings feed (A7). Off the deterministic
+			// path — failures are logged, never allowed to perturb the tick.
+			if coverage != nil {
+				coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, now, bd.Result, bnd.lastObs, selResult))
+			}
+			if findingsStore != nil {
+				if err := findingsStore.UpsertFindings(now, findings); err != nil {
+					logger.Error("findings store: upsert failed (surfacing only)", "err", err)
+				}
+			}
 			if capture != nil {
 				epoch, err := capture.SetBars(now, bd.Result.Bindings)
 				if err != nil {

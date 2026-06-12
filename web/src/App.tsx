@@ -1,26 +1,54 @@
-import { PROVENANCE, type ProvenanceClass } from "./provenance";
+import { Logo } from "./components/Brand";
+import { CoverageReport } from "./surfaces/CoverageReport";
 
-// Scaffold placeholder. The real first surface is the Coverage Report (doc 10 M1) —
-// the honest map of what the system can and cannot watch — which renders before any
-// finding does. This component just demonstrates the three-class visual separation.
-const CLASSES: ProvenanceClass[] = ["MEASURED", "PROJECTED", "AUTHORED"];
-
+// The Vigil operator shell (doc 10). One frame: a quiet header carrying the mark,
+// and the active surface below. The first (and, in 0b, only) surface is the
+// Coverage Report — the honest map shown before any finding.
 export default function App() {
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: "2rem", maxWidth: 720 }}>
-      <h1>Vigil</h1>
-      <p>Kubernetes AI Observability — curated ontology graph + narrow forecasting clock.</p>
-      <p>
-        <em>Scaffold.</em> First surface to build: the Coverage Report (doc 10 M1).
-      </p>
-      <h2>Provenance classes (never fused)</h2>
-      <ul>
-        {CLASSES.map((c) => (
-          <li key={c}>
-            <strong>{PROVENANCE[c].label}</strong> — register: {PROVENANCE[c].register}
-          </li>
-        ))}
-      </ul>
-    </main>
+    <div
+      style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}
+    >
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-sm)",
+          padding: "var(--space-sm) var(--page-pad)",
+          borderBottom: "var(--border-hairline)",
+          background: "var(--surface-1)",
+          position: "sticky",
+          top: 0,
+          zIndex: 10,
+        }}
+      >
+        <Logo size={28} />
+        <span
+          style={{
+            fontFamily: "var(--font-heading)",
+            fontWeight: "var(--weight-bold)",
+            fontSize: "var(--text-h3)",
+            color: "var(--text-strong)",
+            letterSpacing: "var(--tracking-tight)",
+          }}
+        >
+          Vigil
+        </span>
+        <span className="v-overline" style={{ marginLeft: "var(--space-xs)" }}>
+          Coverage
+        </span>
+      </header>
+      <main
+        style={{
+          flex: 1,
+          width: "100%",
+          maxWidth: 1200,
+          margin: "0 auto",
+          padding: "var(--page-pad)",
+        }}
+      >
+        <CoverageReport />
+      </main>
+    </div>
   );
 }
