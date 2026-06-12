@@ -48,6 +48,11 @@ RECALL_MIN = 0.70
 FALSE_WARNING_MAX = 0.30
 TTC_MEDIAN_FRAC_MAX = 0.35  # median |ttc error| ≤ 35% of actual time-to-cross
 MIN_SCORED_FORECASTS = 5
+# A crossing-warning class cannot ship without CROSSING evidence: band coverage
+# and silence correctness alone say nothing about whether the clock anticipates
+# the event the class exists to warn about (learned from corpus B1, where the
+# above-bar window fell between scrapes and a hollow pass nearly resulted).
+MIN_CROSSINGS = 3
 
 
 @dataclass
@@ -222,6 +227,16 @@ def gate(rep: ClassReport) -> GateVerdict:
             False,
             True,
             [f"insufficient corpus: {rep.forecasts_scored} scored < {MIN_SCORED_FORECASTS}"],
+        )
+    if rep.actual_crossings < MIN_CROSSINGS:
+        return GateVerdict(
+            False,
+            True,
+            [
+                f"insufficient crossing evidence: {rep.actual_crossings} realized"
+                f" crossings < {MIN_CROSSINGS} — a crossing-warning class ships on"
+                " crossing evidence, not on its absence"
+            ],
         )
     reasons: list[str] = []
     cov = rep.coverage

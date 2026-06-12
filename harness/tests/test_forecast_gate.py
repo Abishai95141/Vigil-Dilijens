@@ -128,3 +128,17 @@ def test_thin_corpus_is_insufficient_never_pass():
     events, readings = well_calibrated_events(MIN_SCORED_FORECASTS - 1)
     v = gate(score_class(events, readings, METRIC))
     assert v.insufficient and not v.passed
+
+
+def test_no_crossing_evidence_is_insufficient_even_with_good_coverage():
+    """Corpus B1 lesson: coverage + silences alone must never ship a
+    crossing-warning class."""
+    events, readings = well_calibrated_events(MIN_SCORED_FORECASTS + 2)
+    for e in events:  # nothing ever crosses, nothing ever warned
+        tr = e["traces"][0]
+        tr["barValue"] = 1e9
+        del tr["candidate"]
+        tr["silence"] = "no-crossing-within-horizon"
+    v = gate(score_class(events, readings, METRIC))
+    assert v.insufficient and not v.passed
+    assert any("crossing evidence" in r for r in v.reasons)

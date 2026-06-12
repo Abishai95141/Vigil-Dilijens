@@ -43,11 +43,21 @@ layer). Recorded as the driving requirement for 09 M5.
 evidence; per the gate rule the early-warning lane stays dark unless the
 representative corpus (below) passes.
 
-## Evidence B — representative slow-creep corpus
+## Evidence B1 — slow-creep corpus (leak-slow.yaml, 124 ticks) — and a GATE LESSON
 
-Workload: `corpus/chaos/leak-slow.yaml` — the class's TARGET scenario (doc 09
-§3.8 hours-scale creep, scaled to dev): ~18 min flat hold (context fills),
-then one clean ~12 MiB/min ramp to the 0.95×256Mi bar, no restart inside the
-context window.
+One clean ramp, no reset in context. Result: band coverage 0.737 ✓, every
+silence correct, zero candidates — and **zero realized crossings to score**:
+the scraped working-set never touched the 0.95×limit bar, because the
+above-bar window before the kill (~5 s at this ramp rate) fell BETWEEN 15 s
+scrapes. The original criteria returned a hollow PASS on coverage + silences
+alone.
 
-(results appended after the capture run)
+**Gate hardened in response:** `MIN_CROSSINGS = 3` — a crossing-warning class
+ships on CROSSING evidence, never on its absence; B1 now reads INSUFFICIENT
+(regression test pins this). Corpus lesson: the crossing must be
+scrape-visible — `corpus/chaos/leak-plateau.yaml` ramps a tmpfs-backed leak to
+a HELD plateau above the bar (no kill race; minutes of above-bar evidence).
+
+## Evidence B2 — plateau corpus (leak-plateau.yaml) — THE GATE RUN
+
+(results appended after the capture)

@@ -1,0 +1,46 @@
+# Slow-creep leak that PLATEAUS ABOVE the bar (doc 11 M5 / 09 M3 corpus).
+# The forecast class warns about the BAR crossing (0.95×limit), not the kill;
+# leak-slow.yaml taught us the above-bar window before an OOM (~5s) falls
+# between 15s scrapes — the crossing must stay scrape-visible. Here the leak
+# fills a memory-backed emptyDir (tmpfs pages charge the container's cgroup →
+# working_set) to ~501MiB against a 512Mi limit: crossing at ~486.5MB
+# (0.95×512Mi) ≈ ramp minute 14, then a HELD plateau above the bar with no
+# OOM — clean crossing timing, minutes of above-bar evidence.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaker-plateau
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: leaker-plateau }
+  template:
+    metadata:
+      labels: { app: leaker-plateau }
+    spec:
+      containers:
+        - name: leak
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "prefill 321MiB tmpfs, hold 17m, ramp 12MiB/min to ~501MiB, plateau";
+              i=0;
+              while [ $i -lt 107 ]; do dd if=/dev/zero of=/leak/p$i bs=1M count=3 2>/dev/null; i=$((i+1)); done;
+              sleep 1020;
+              while [ $i -lt 167 ]; do dd if=/dev/zero of=/leak/p$i bs=1M count=3 2>/dev/null; i=$((i+1)); sleep 15; done;
+              echo plateau; sleep 100000
+          volumeMounts:
+            - { name: leak, mountPath: /leak }
+          resources:
+            requests: { memory: "64Mi", cpu: "10m" }
+            limits: { memory: "512Mi", cpu: "200m" }
+      volumes:
+        - name: leak
+          emptyDir: { medium: Memory, sizeLimit: 600Mi }

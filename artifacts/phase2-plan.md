@@ -113,6 +113,17 @@ D5. **Context fetch v1** = hot ring (1h @ 15s = 240 points) only. The marquee
   widening 5.9→12.1; sawtooth → no fabricated trend; `band_collapses=false`
   on every shape. Model load 4.2 s warm (one-time per process).
 
+D6. **Sawtooth context is the OOM class's hard case** (M3 evidence A,
+    2026-06-13): with prior ramp→kill→reset cycles in context, the zero-shot
+    clock projects the next RESET, not the bar crossing (recall 0.022 on the
+    fast-cycling corpus) — while staying honest (band coverage 0.845, zero
+    false warnings). Doc-anticipated (09 §3.4 context pollution); remedy =
+    Phase 3 splice points at known boundaries (container restarts — already
+    identity-layer knowledge). Gate consequence: the class ships (if at all)
+    on the REPRESENTATIVE slow-creep corpus; the sawtooth limitation is
+    recorded and drives 09 M5's requirements. Full numbers:
+    corpus/labels/forecast-gate-09M3.md.
+
 ## 7. Risks being tracked
 
 - PyPI 2.0.x may not ship the 2.5 class → git-revision pin fallback (D2).
