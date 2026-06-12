@@ -163,7 +163,7 @@ func TestBuildTimeline(t *testing.T) {
 		Scope: nodeKey, Name: "worker-1", Kind: "Node", Status: "resolved",
 		FirstSeen: at.Add(-8 * time.Minute), LastSeen: at.Add(-3 * time.Minute),
 	}}
-	v := BuildTimeline(at, findings, unexp)
+	v := BuildTimeline(at, findings, unexp, nil)
 
 	if len(v.Matches) != 1 || v.Matches[0].Class != "MEASURED" || v.Matches[0].Surface != "insight" {
 		t.Errorf("match span wrong: %+v", v.Matches)

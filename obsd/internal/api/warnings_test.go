@@ -105,3 +105,25 @@ func TestWarningsRegisterAudit(t *testing.T) {
 		t.Error("confidence class is mandatory")
 	}
 }
+
+// The projected lane on the timeline (10 M5): each warning renders as a
+// FORWARD-POINTING band span [earliest, latest]; an open far edge extends to
+// the horizon and the note says band-shaped, never a point.
+func TestTimelineProjectedLane(t *testing.T) {
+	res := cycleWithCandidate()
+	v := BuildWarnings("v", "r", wAt, true, res, 0, ClockHealthRow{Ready: true}, nil, nil)
+	tl := BuildTimeline(wAt, nil, nil, v.Warnings)
+	if len(tl.Projected) != 1 {
+		t.Fatalf("one warning must yield one projected span: %+v", tl.Projected)
+	}
+	sp := tl.Projected[0]
+	if sp.Class != "PROJECTED" || sp.Surface != "early-warning" {
+		t.Errorf("projected lane must stay PROJECTED-class: %+v", sp)
+	}
+	if !sp.From.Equal(v.Warnings[0].EarliestAt) || !sp.To.Equal(v.Warnings[0].LatestAt) {
+		t.Errorf("the span IS the [earliest, latest] band: %+v", sp)
+	}
+	if sp.From.Equal(sp.To) {
+		t.Error("a projected span must be a band, never a point (doc 01 §3)")
+	}
+}

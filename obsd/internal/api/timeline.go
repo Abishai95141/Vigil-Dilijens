@@ -49,14 +49,36 @@ type TimelineSpan struct {
 const projectedLaneNote = "Projected (PROJECTED-class) early warnings render here once the forecasting layer ships (doc 09 / 10 M5, Phase 2). The lane is reserved and intentionally empty — never a fabricated future."
 
 // BuildTimeline composes the timeline from the persisted findings + unexplained
-// rows. Pure given its inputs; the API handler reads the store and calls it.
-func BuildTimeline(now time.Time, findings []store.FindingRow, unexp []store.UnexplainedRow) *TimelineView {
+// rows, plus the current early-warning projections (doc 10 §3.3: projections
+// render as FORWARD-POINTING ranges, band-shaped, never a point — the span IS
+// the [earliest, latest] crossing band). Pure given its inputs; the API
+// handler reads the store + the warnings snapshot and calls it. warnings nil
+// = the lane is off (the gate rule); the note states why.
+func BuildTimeline(now time.Time, findings []store.FindingRow, unexp []store.UnexplainedRow, warnings []WarningCard) *TimelineView {
 	v := &TimelineView{
 		GeneratedAt:   now.UTC(),
 		Matches:       []TimelineSpan{},
 		Unexplained:   []TimelineSpan{},
 		Projected:     []TimelineSpan{},
 		ProjectedNote: projectedLaneNote,
+	}
+	for _, w := range warnings {
+		to := w.LatestAt
+		if w.LatestBeyondHorizon {
+			// The far edge is open: the span extends to the horizon's end and
+			// the status says so — never a fabricated closing time.
+			to = w.BasisAt.Add(time.Duration(float64(w.HorizonSteps) * w.CadenceSeconds * float64(time.Second)))
+		}
+		v.Projected = append(v.Projected, TimelineSpan{
+			Class: "PROJECTED", Surface: "early-warning",
+			Label:     "projected to cross — " + w.Metric,
+			EntityCEI: w.EntityCEI, Name: w.Name, Kind: w.Kind,
+			Status: w.Confidence, From: w.EarliestAt.UTC(), To: to.UTC(),
+		})
+	}
+	if len(v.Projected) > 0 {
+		v.ProjectedNote = "Forward-pointing PROJECTED bands: each span is the [earliest, latest] " +
+			"crossing window of an early warning — a band, never a point, never a certainty."
 	}
 	from := now
 

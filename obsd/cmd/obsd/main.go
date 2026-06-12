@@ -332,7 +332,13 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				if err != nil {
 					return nil, err
 				}
-				return vapi.BuildTimeline(time.Now().UTC(), fr, ur), nil
+				// Projected lane (10 M5): the current early-warning bands,
+				// only when the lane is enabled (the gate rule).
+				var pw []vapi.WarningCard
+				if wv := warningsView.Load(); wv != nil && wv.Enabled {
+					pw = wv.Warnings
+				}
+				return vapi.BuildTimeline(time.Now().UTC(), fr, ur, pw), nil
 			}
 		}
 		logger.Info("operator surfacing API enabled (doc 10 M1–M5)",

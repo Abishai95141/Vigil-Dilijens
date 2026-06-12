@@ -1,0 +1,39 @@
+# Slow single-ramp memory leak — the forecasting class's REPRESENTATIVE corpus
+# (doc 09 §3.8: the hours-scale creep toward an OOM, doc 11 M5 backtests).
+# Unlike leak-oom.yaml (fast sawtooth for cascade detection), this holds flat
+# long enough for the forecast context to fill (>16 min at the 15s scrape),
+# then ramps steadily toward the 0.95×limit bar with NO restart inside the
+# context window — one clean crossing per capture.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaker-slow
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: leaker-slow }
+  template:
+    metadata:
+      labels: { app: leaker-slow }
+    spec:
+      containers:
+        - name: leak
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "prefill 60MiB, hold 18m, then ramp ~12MiB/min toward the limit";
+              data=$(head -c 1048576 /dev/urandom | base64);
+              hold=""; i=0;
+              while [ $i -lt 45 ]; do hold="$hold$data"; i=$((i+1)); done;  # ~60MiB as shell vars
+              sleep 1080;
+              while true; do hold="$hold$data$data$data$data$data$data$data$data$data"; sleep 60; done
+          resources:
+            requests: { memory: "64Mi", cpu: "10m" }
+            limits: { memory: "256Mi", cpu: "200m" }
