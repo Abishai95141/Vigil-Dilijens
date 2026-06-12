@@ -65,6 +65,7 @@ type Params struct {
 	Store       StoreParams       `yaml:"store"`
 	Binding     BindingParams     `yaml:"binding"`
 	Selection   SelectionParams   `yaml:"selection"`
+	Forecast    ForecastParams    `yaml:"forecast"`
 }
 
 // ScrapeParams — doc 14 §5/A1.
@@ -131,6 +132,22 @@ type BindingParams struct {
 // SelectionParams — doc 06 + doc 14 §5.
 type SelectionParams struct {
 	TierBBudgetPerCycle int `yaml:"tier_b_budget_per_cycle"`
+}
+
+// ForecastParams — doc 09 §3.3/§3.6/§3.7 + doc 14 A13/A15. The forecasting
+// regime: cadence, horizon, quantile levels, and the v1 guardrail constants.
+// Every silence threshold is a parameter — calibrated by the backtest gate
+// (09 M3 / 11 M5), never a hard-coded judgement.
+type ForecastParams struct {
+	Enabled      bool      `yaml:"enabled"`        // the warm path is opt-in; no class surfaces before its gate
+	ClockdTarget string    `yaml:"clockd_target"`  // host:port of the clock service
+	Interval     Duration  `yaml:"interval"`       // forecast cycle cadence (parallel to, never gating, the tick)
+	Deadline     Duration  `yaml:"deadline"`       // per-RPC clock deadline (degraded past it, doc 14 A13)
+	HorizonSteps int       `yaml:"horizon_steps"`  // forecast steps per inference (× scrape interval = wall horizon)
+	Quantiles    []float64 `yaml:"quantiles"`      // requested levels, ascending, within the model head [0.1, 0.9]
+	MinContext   int       `yaml:"min_context"`    // minimum history points before a target may run
+	FlatEpsilon  float64   `yaml:"flat_epsilon"`   // stddev/|level| below which the series is flat ⇒ silence (§3.6)
+	MaxBandRatio float64   `yaml:"max_band_ratio"` // (latest−earliest)/time-to-cross beyond which ⇒ silence (§3.6)
 }
 
 // Default returns the embedded dev-profile parameters, validated.
@@ -232,6 +249,43 @@ func (p Params) Validate() error {
 	positive("detection.cascade_window", p.Detection.CascadeWindow)
 	if p.Selection.TierBBudgetPerCycle <= 0 {
 		errs = append(errs, fmt.Errorf("selection.tier_b_budget_per_cycle must be > 0, got %d", p.Selection.TierBBudgetPerCycle))
+	}
+
+	// Forecast regime (doc 09): validated whenever set, enforced-required when
+	// enabled — a bad guardrail constant silently mis-grades every emission.
+	f := p.Forecast
+	if f.Enabled && f.ClockdTarget == "" {
+		errs = append(errs, errors.New("forecast.clockd_target must be set when forecast.enabled"))
+	}
+	if f.Enabled {
+		positive("forecast.interval", f.Interval)
+		positive("forecast.deadline", f.Deadline)
+	}
+	if f.HorizonSteps < 0 {
+		errs = append(errs, fmt.Errorf("forecast.horizon_steps must be >= 0, got %d", f.HorizonSteps))
+	}
+	if f.Enabled && f.HorizonSteps == 0 {
+		errs = append(errs, errors.New("forecast.horizon_steps must be > 0 when forecast.enabled"))
+	}
+	if f.Enabled && f.MinContext <= 1 {
+		errs = append(errs, fmt.Errorf("forecast.min_context must be > 1 when enabled, got %d", f.MinContext))
+	}
+	if f.FlatEpsilon < 0 {
+		errs = append(errs, fmt.Errorf("forecast.flat_epsilon must be >= 0, got %v", f.FlatEpsilon))
+	}
+	if f.MaxBandRatio < 0 {
+		errs = append(errs, fmt.Errorf("forecast.max_band_ratio must be >= 0, got %v", f.MaxBandRatio))
+	}
+	for i, q := range f.Quantiles {
+		if q <= 0 || q >= 1 {
+			errs = append(errs, fmt.Errorf("forecast.quantiles[%d] must be in (0,1), got %v", i, q))
+		}
+		if i > 0 && q <= f.Quantiles[i-1] {
+			errs = append(errs, fmt.Errorf("forecast.quantiles must be strictly ascending"))
+		}
+	}
+	if f.Enabled && len(f.Quantiles) < 2 {
+		errs = append(errs, errors.New("forecast.quantiles needs at least a lower and upper level when enabled (the band must exist, doc 01 §3)"))
 	}
 
 	// Cross-field invariant (doc 14 §1.3): retracted edges must stay queryable for

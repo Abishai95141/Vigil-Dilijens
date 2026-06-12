@@ -61,3 +61,14 @@ binding:                            # doc 04 + doc 14 §A4
 
 selection:                          # doc 06 + doc 14 §5
   tier_b_budget_per_cycle: 50       # ceiling on clock invocations per cycle (dev); ranked candidates within it
+
+forecast:                           # doc 09 + doc 14 A13/A15 — the warm path regime
+  enabled: false                    # opt-in; NO warning class surfaces before its backtest gate (09 M3)
+  clockd_target: "127.0.0.1:50051"  # the clock service (just clockd)
+  interval: 60s                     # forecast cycle cadence; parallel, never gating the 15s tick
+  deadline: 10s                     # per-RPC clock deadline; past it = degraded (A13), detection untouched
+  horizon_steps: 240                # × 15s scrape = 1h dev horizon (envelope per class from 09 M3 evidence)
+  quantiles: [0.1, 0.5, 0.9]        # the band edges + median; within the model head [0.1, 0.9]
+  min_context: 64                   # ≥16m of history before a target may run
+  flat_epsilon: 0.005               # stddev/|level| under 0.5% = flat ⇒ silence (§3.6; calibrate in M3)
+  max_band_ratio: 2.0               # band wider than 2× the time-to-cross ⇒ silence (§3.6; calibrate in M3)
