@@ -393,6 +393,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		renderInventory(out, active, edges, clusterID, now, rep, g)
 		var fps []observe.Fingerprint
 		var findings []detect.Finding
+		var cascades []detect.Cascade
 		barsEpoch := 0
 		barsOK := true
 		// Topology snapshot (doc 07 M2/§3.7): ONE canonical snapshot per tick
@@ -432,10 +433,13 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// now" — re-materialized each tick against fresh samples.
 			fps = bnd.fingerprints(now)
 			renderFingerprints(out, fps, boutiqueNamespace)
-			// Phenomenon matches (doc 07 M1 entity-local + M2 first-order) over the
-			// SELECTED fingerprints (doc 06 provides the Tier-A set to detection).
+			// Phenomenon matches (doc 07 M1–M3) over the SELECTED fingerprints
+			// (doc 06 provides the Tier-A set to detection), then cascade
+			// recognition over the authored relations (doc 07 M5).
 			findings = bnd.detectFindings(fps, selected, topo, evalWindow)
 			renderFindings(out, findings)
+			cascades = bnd.cascades(now, findings, topo, evalWindow)
+			renderCascades(out, cascades)
 			// Surfacing (doc 10 M1): publish the Coverage Report snapshot the API
 			// serves, and persist the findings feed (A7). Off the deterministic
 			// path — failures are logged, never allowed to perturb the tick.
@@ -462,7 +466,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 		}
 		// The tick digest: the canonical hash of this tick's complete deterministic
 		// output (doc 05 §3.5) — the value replay must reproduce byte-identically.
-		digest, _, derr := replay.Digest(now, fps, findings)
+		digest, _, derr := replay.Digest(now, fps, findings, cascades)
 		if derr != nil {
 			// Unreachable while the ingest gate drops non-finite values; if it ever
 			// fires, the tick is honestly uncapturable — stated, not invented.

@@ -1,0 +1,58 @@
+# Chaos: the storage-saturation scenario (doc 07 M3 live verification; corpus
+# item for the doc 11 falsification suite).
+#
+# An fsync-heavy write loop on one node's disk drives /proc/pressure/io
+# some-stall above the 0.10 flagged default bar -> PHEN_STORAGE_SATURATION
+# fires DEGRADED at the Node anchor (second-order): the required per-device
+# disk-IO member and the two-hop PVC members are honestly unobservable on this
+# cluster (no device sub-variables; volume stats not ingested) — every gap
+# named on the finding. The two-hop WALK itself is certified by golden
+# fixtures (the doc 07 M3 exit) and the replay regression.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: io-pressure
+  namespace: chaos
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: io-pressure}
+  template:
+    metadata:
+      labels: {app: io-pressure}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vigil-worker2
+      containers:
+        - name: writer
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              # Small chunks, fsync per chunk: the dirty set stays ~8MiB so the
+              # writer pressures the DISK, not its own memory cgroup (bs=4M
+              # count=64 conv=fsync was observed to OOM-kill itself: 256MiB of
+              # dirty page cache counts against the cgroup before the fsync).
+              while true; do
+                i=0
+                while [ $i -lt 32 ]; do
+                  dd if=/dev/zero of=/data/x bs=1M count=8 conv=fsync 2>/dev/null
+                  i=$((i+1))
+                done
+                rm -f /data/x
+              done
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: data
+          emptyDir: {} # node-disk backed: the writes hit the real block device

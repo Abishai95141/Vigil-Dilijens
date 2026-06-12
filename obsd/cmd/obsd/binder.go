@@ -41,7 +41,24 @@ type binder struct {
 	lastFinger  string
 	ticksUnseen int
 
-	matcher *detect.Matcher // entity-local phenomenon matcher (doc 07 M1), built once
+	matcher *detect.Matcher        // the phenomenon matcher (doc 07 M1–M3), built once
+	tracker *detect.CascadeTracker // windowed cascade memory (doc 07 M5); reset = process restart
+}
+
+// cascades recognizes the authored relations currently manifest (doc 07 §3.4)
+// against the tracker's window, then observes this tick's findings — exactly
+// once per evaluation tick, in the same order the replay engine uses, so a
+// captured tick's cascades reproduce byte-identically.
+func (b *binder) cascades(now time.Time, findings []detect.Finding, topo detect.Topology, w identity.TimeWindow) []detect.Cascade {
+	if b == nil || b.matcher == nil {
+		return nil
+	}
+	if b.tracker == nil {
+		b.tracker = detect.NewCascadeTracker(b.fpParams.CooccurrenceWindow)
+	}
+	cs := b.matcher.Cascades(now, findings, b.tracker, topo, w)
+	b.tracker.Observe(now, findings)
+	return cs
 }
 
 // detectFindings runs the matcher (doc 07 M1+M2) over the live fingerprints of

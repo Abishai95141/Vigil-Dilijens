@@ -1,0 +1,60 @@
+# Chaos: the leak -> cgroup-OOM cascade scenario (doc 07 M5 live verification;
+# corpus item for the doc 11 falsification suite).
+#
+# A ramping allocator under a small declared memory limit:
+#   1. working set rises through the at-threshold band of its 0.95 x limit bar
+#      while RISING -> PHEN_MEMORY_LEAK fires (entity-local, degraded);
+#   2. the kernel OOM-kills the cgroup at the limit -> container_oom_events_total
+#      increments -> PHEN_OOM_KILL_CGROUP fires (first-order, Container anchor);
+#   3. the authored MEMORY_LEAK -> OOM_KILL_CGROUP relation ("Eventual outcome",
+#      T0+terminal) is recognized as ONE correlated story (doc 07 §3.4) — the
+#      trigger reference pointing at the earlier leak occurrence, same entity.
+#
+# The leak finding's blast radius should name THIS container at risk of the
+# OOM downstream BEFORE the kill — the authored claim made concrete.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaker
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: leaker}
+  template:
+    metadata:
+      labels: {app: leaker}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vigil-worker
+      containers:
+        - name: leak
+          image: python:3.12-alpine
+          command:
+            - python3
+            - -u
+            - -c
+            - |
+              # Fast ramp to ~64MiB, then a slow leak (1MiB/10s): the working
+              # set spends MINUTES in the at-threshold/above band of the
+              # 91.2Mi bar while rising — the MEMORY_LEAK signature — before
+              # the kernel kills the cgroup at 96Mi. (A uniform fast ramp was
+              # observed to cross band->kill inside one 15s scrape: invisible.)
+              import time
+              buf = []
+              while len(buf) < 16:
+                  buf.append(bytearray(4 * 1024 * 1024))
+                  time.sleep(6)
+              while True:
+                  buf.append(bytearray(1 * 1024 * 1024))
+                  time.sleep(10)
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            # The declared limit IS the bar (borrowed normativity): the leak bar
+            # resolves to 0.95 x 96Mi = 91.2Mi; the kernel kills at 96Mi.
+            limits: {cpu: 100m, memory: 96Mi}
