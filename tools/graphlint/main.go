@@ -13,6 +13,7 @@ func main() {
 	base := flag.String("base", "ontology/graph/k8s_signal_kg.json", "base KG file (for -print-version / -release)")
 	printVersion := flag.Bool("print-version", false, "print the content-hash pin for base+overlays and exit (for cutting a release, doc 12 M1)")
 	release := flag.String("release", "", "verify a release manifest still matches the graph (immutability, doc 12 M1); non-zero exit on drift")
+	releaseLatest := flag.String("release-latest", "", "verify the NEWEST release manifest in this dir (by created date) still matches the graph; no-op if the dir is empty")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "graphlint — validate the ontology KG + authored overlays, report the authoring gap, and verify graph releases (doc 02 M3 / 12 M1 / doc 14 A14)")
 		fmt.Fprintln(os.Stderr, "usage: graphlint [-schema PATH] [-overlays DIR] [-strict] [-print-version] [-release MANIFEST] [PATH ...]   (default PATH: ontology/graph)")
@@ -30,10 +31,23 @@ func main() {
 		fmt.Println(v)
 		return
 	}
-	if *release != "" {
-		r, err := verifyRelease(*release, *base, *overlays)
+	manifest := *release
+	if *releaseLatest != "" {
+		p, err := latestManifestPath(*releaseLatest)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "FAIL  release %s\n      %v\n", *release, err)
+			fmt.Fprintln(os.Stderr, "graphlint:", err)
+			os.Exit(2)
+		}
+		if p == "" {
+			fmt.Printf("no release manifests in %s — nothing to verify\n", *releaseLatest)
+			return
+		}
+		manifest = p
+	}
+	if manifest != "" {
+		r, err := verifyRelease(manifest, *base, *overlays)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL  release %s\n      %v\n", manifest, err)
 			os.Exit(1)
 		}
 		fmt.Printf("PASS  release %s — graph matches %s\n", r.Name, r.GraphVersion)

@@ -137,11 +137,13 @@ func LatestRelease(dir string) (string, *Release, error) {
 	if len(cands) == 0 {
 		return "", nil, nil
 	}
+	// Sort by the ISO `created` date (lexically correct, and immune to the
+	// vX.10 > vX.2 lexical-name trap) — newest first; name as a stable tiebreak.
 	sort.Slice(cands, func(i, j int) bool {
-		if cands[i].rel.Name != cands[j].rel.Name {
-			return cands[i].rel.Name > cands[j].rel.Name // higher semver name first
+		if cands[i].rel.Created != cands[j].rel.Created {
+			return cands[i].rel.Created > cands[j].rel.Created
 		}
-		return cands[i].rel.Created > cands[j].rel.Created
+		return cands[i].rel.Name > cands[j].rel.Name
 	})
 	return cands[0].path, cands[0].rel, nil
 }

@@ -62,13 +62,11 @@ lint:
     fi
     cd proto && buf lint
     cd "{{justfile_directory()}}"
-    # Graph release immutability (doc 12 M1): the committed release must still
-    # describe the actual ontology. Editing the graph without cutting a new
-    # release fails here (and in release_test.go).
-    latest="$(ls ontology/releases/*.yaml 2>/dev/null | sort | tail -1)"
-    if [ -n "${latest}" ]; then
-        go run ./tools/graphlint -release "${latest}"
-    fi
+    # Graph release immutability (doc 12 M1): the NEWEST committed release must
+    # still describe the actual ontology (newest chosen by created-date, not
+    # filename). Editing the graph without cutting a new release fails here (and
+    # in release_test.go).
+    go run ./tools/graphlint -release-latest ontology/releases
     echo "lint OK"
 
 # Optional heavier linters, go-installed on demand (pure Go, no CGO, cross-platform).

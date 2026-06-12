@@ -22,8 +22,42 @@ import (
 type releaseManifest struct {
 	Name         string   `yaml:"release"`
 	GraphVersion string   `yaml:"graph_version"`
+	Created      string   `yaml:"created"`
 	Base         string   `yaml:"base"`
 	Overlays     []string `yaml:"overlays"`
+}
+
+// latestManifestPath returns the newest release manifest in dir by ISO `created`
+// date (lexically correct, immune to the vX.10/vX.2 name trap), or "" if none.
+// Mirrors graph.LatestRelease so the lint gate and the runtime agree on "latest".
+func latestManifestPath(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	best, bestKey := "", ""
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".yaml" {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var r releaseManifest
+		if yaml.Unmarshal(raw, &r) != nil || r.Name == "" {
+			continue
+		}
+		key := r.Created + "\x00" + r.Name
+		if key > bestKey {
+			best, bestKey = p, key
+		}
+	}
+	return best, nil
 }
 
 // computeGraphVersion recomputes the content-hash pin for (base + overlays).
