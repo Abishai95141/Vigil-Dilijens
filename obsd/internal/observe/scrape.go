@@ -95,9 +95,11 @@ func (in *Ingestor) SetTap(tap func(def qss.StreamDef, recv time.Time, s qss.Sam
 // the network phase and consumed by the ingest phase. Splitting the two lets the
 // caller hold a store gate only around the ingest (CPU) phase, so evaluation
 // ticks always observe whole scrape cycles — the property byte-identical replay
-// depends on (doc 05 §3.5).
+// depends on (doc 05 §3.5). Family says which normalization dialect the body
+// speaks (empty = cAdvisor, the founding lane).
 type NodePayload struct {
 	Node       string
+	Family     identity.Family
 	Body       []byte
 	ReceivedAt time.Time
 	Err        error
@@ -111,7 +113,29 @@ func FetchCAdvisor(ctx context.Context, f Fetcher, nodes []string) []NodePayload
 	out := make([]NodePayload, 0, len(sorted))
 	for _, node := range sorted {
 		body, receivedAt, err := f.NodeMetrics(ctx, node, "metrics/cadvisor")
-		out = append(out, NodePayload{Node: node, Body: body, ReceivedAt: receivedAt, Err: err})
+		out = append(out, NodePayload{Node: node, Family: identity.FamilyCAdvisor, Body: body, ReceivedAt: receivedAt, Err: err})
+	}
+	return out
+}
+
+// nodeExporterPort is node-exporter's conventional hostNetwork port. The fetch
+// rides the SAME API-server node proxy as cAdvisor, port-qualified
+// (nodes/<name>:9100/proxy/metrics, doc 14 A2's dev path).
+const nodeExporterPort = "9100"
+
+// FetchNodeExporter fetches node-exporter payloads from the given nodes (the
+// caller passes only nodes where the tool is actually running — presence is
+// detected, doc 04 §3.1, so an undeployed exporter produces no error noise).
+// Payload.Node carries the BARE node name: identity for this family comes from
+// scrape-target metadata (doc 14 §3.2 row 3), never from the port-qualified
+// proxy coordinate.
+func FetchNodeExporter(ctx context.Context, f Fetcher, nodes []string) []NodePayload {
+	sorted := append([]string(nil), nodes...)
+	sort.Strings(sorted)
+	out := make([]NodePayload, 0, len(sorted))
+	for _, node := range sorted {
+		body, receivedAt, err := f.NodeMetrics(ctx, node+":"+nodeExporterPort, "metrics")
+		out = append(out, NodePayload{Node: node, Family: identity.FamilyNodeExporter, Body: body, ReceivedAt: receivedAt, Err: err})
 	}
 	return out
 }
@@ -129,7 +153,11 @@ func (in *Ingestor) IngestPayloads(payloads []NodePayload) IngestSummary {
 			sum.NodeErrors = append(sum.NodeErrors, fmt.Sprintf("%s: %v", p.Node, p.Err))
 			continue
 		}
-		in.ingestExposition(p.Body, identity.FamilyCAdvisor, p.Node, p.ReceivedAt, &sum)
+		family := p.Family
+		if family == "" {
+			family = identity.FamilyCAdvisor
+		}
+		in.ingestExposition(p.Body, family, p.Node, p.ReceivedAt, &sum)
 	}
 	return sum
 }
@@ -201,7 +229,7 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node s
 			res := in.norm.Normalize(s)
 			switch res.Outcome {
 			case identity.OutcomeResolved:
-				streamID := res.CEI.Key() + "|" + name
+				streamID := res.CEI.Key() + "|" + name + streamSubID(family, labels)
 				sampleAt := s.EventTime
 				if sampleAt.IsZero() {
 					sampleAt = receivedAt
@@ -231,6 +259,40 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node s
 			}
 		}
 	}
+}
+
+// streamSubID disambiguates label-dimensioned series within one (CEI, metric).
+// node-exporter resolves EVERY series to the node CEI (identity from scrape
+// target, doc 14 §3.2 row 3), so a multi-series family like
+// node_filesystem_avail_bytes{device,mountpoint} would otherwise interleave
+// unrelated dimensions in ONE ring — a stream identity mis-join. The full sorted
+// label set becomes part of the stream identity instead. Single-series metrics
+// (MemAvailable, conntrack, PSI, vmstat) carry no labels and keep clean IDs;
+// multi-series ones land as distinct streams, and a (UID, metric) join that
+// finds several is an AMBIGUITY the materializer states rather than guesses
+// (sub-variable normalization is the doc 02 data_type queue, not this layer).
+// cAdvisor/KSM identity rides on the labels themselves and stays unchanged.
+func streamSubID(family identity.Family, labels map[string]string) string {
+	if family != identity.FamilyNodeExporter || len(labels) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(labels[k])
+	}
+	b.WriteByte('}')
+	return b.String()
 }
 
 // scalarType maps an exposition family to a scalar sample type; histogram and

@@ -1,0 +1,88 @@
+# node-exporter — the node hardware/kernel signal source (doc 14 §3.2 row 3).
+#
+# Phase-1 prerequisite: first-order node-pressure phenomena (doc 07 M2) need the
+# node-scoped signals the KG authors against node-exporter (MemAvailable,
+# conntrack, PSI, vmstat OOM kills). Deploying it flips those signals from
+# out-of-scope to obtainable in the binding availability report (doc 04 §3.1) —
+# tool presence is DETECTED from the workload corpus, never configured by hand.
+#
+# Scrape path: obsd reaches each node's :9100 through the API server's node
+# proxy (nodes/<name>:9100/proxy/metrics) — same dev-path pattern as cAdvisor
+# (doc 14 A2). hostNetwork makes the pod listen on the node's own address, which
+# is exactly what the node proxy dials.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: node-exporter
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: node-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: node-exporter
+    spec:
+      hostNetwork: true
+      hostPID: true
+      # Cover the control-plane node too: its pressure signals matter as much as
+      # the workers' (kube-system pods run there).
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+      containers:
+        - name: node-exporter
+          # Pinned version (doc 14: lockstep machines, no floating tags).
+          image: quay.io/prometheus/node-exporter:v1.9.1
+          args:
+            - --path.procfs=/host/proc
+            - --path.sysfs=/host/sys
+            - --path.rootfs=/host/root
+            - --web.listen-address=:9100
+          ports:
+            - name: metrics
+              containerPort: 9100
+              hostPort: 9100
+          # Declared limits: node-exporter is itself a monitored workload — its
+          # own working-set bar resolves from THIS config (borrowed normativity).
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 96Mi
+          volumeMounts:
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+            - name: root
+              mountPath: /host/root
+              readOnly: true
+              mountPropagation: HostToContainer
+      volumes:
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: root
+          hostPath:
+            path: /
