@@ -28,6 +28,60 @@
         "Source": "",
         "CollectionMethod": ""
       }
+    },
+    {
+      "CEIKey": "i|cl|shop|Pod|web-a|poduid-1",
+      "RoleKey": "r|cl|shop|Deployment|web",
+      "Entity": "Container",
+      "Container": "web",
+      "RuleID": "THR_CONTAINER_CPU_THROTTLE_RATIO",
+      "Metric": "container_cpu_cfs_throttled_periods_total",
+      "State": "bound",
+      "Validation": "suspect",
+      "Reason": "",
+      "Bar": {
+        "Kind": "absolute",
+        "Source": "default",
+        "Flagged": true,
+        "ConfigPath": "",
+        "Factor": 0,
+        "Value": 0.25,
+        "Unit": "ratio",
+        "Direction": "above",
+        "Window": "5m",
+        "ResolvedAt": "2026-06-11T12:00:00Z"
+      },
+      "Emission": {
+        "Source": "",
+        "CollectionMethod": ""
+      }
+    },
+    {
+      "CEIKey": "i|cl||Node|n1|nodeuid-1",
+      "RoleKey": "",
+      "Entity": "Node",
+      "Container": "",
+      "RuleID": "THR_NODE_CPU_PSI_STALL",
+      "Metric": "node_pressure_cpu_waiting_seconds_total",
+      "State": "bound",
+      "Validation": "suspect",
+      "Reason": "",
+      "Bar": {
+        "Kind": "absolute",
+        "Source": "default",
+        "Flagged": true,
+        "ConfigPath": "",
+        "Factor": 0,
+        "Value": 0.1,
+        "Unit": "ratio",
+        "Direction": "above",
+        "Window": "5m",
+        "ResolvedAt": "2026-06-11T12:00:00Z"
+      },
+      "Emission": {
+        "Source": "",
+        "CollectionMethod": ""
+      }
     }
   ]
 }

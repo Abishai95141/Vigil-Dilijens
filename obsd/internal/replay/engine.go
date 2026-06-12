@@ -11,6 +11,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
@@ -44,6 +45,9 @@ type Report struct {
 	Streams      int
 	Ticks        []TickOutcome
 	Mismatches   int
+	// TopologyLess: the bundle predates topology recording (no edge-budget pin)
+	// — first-order matching was skipped, exactly the regime that captured it.
+	TopologyLess bool
 }
 
 // Run replays a bundle through the real observation and detection components,
@@ -91,8 +95,12 @@ func Run(opts Options) (*Report, error) {
 	}
 	matcher := detect.NewMatcher(opts.Graph)
 	reader := newBundleReader()
-	rep := &Report{Manifest: m}
+	rep := &Report{Manifest: m, TopologyLess: m.EdgeBudgets == nil}
 	bars := map[int]*barsEpoch{} // epoch -> resolved bars + Tier-A set (lazy, cached)
+	budgets := make(map[identity.EdgeType]time.Duration, len(m.EdgeBudgets))
+	for k, v := range m.EdgeBudgets {
+		budgets[identity.EdgeType(k)] = v
+	}
 
 	segs, err := qss.ListSegments(filepath.Join(opts.BundleDir, segmentsDir))
 	if err != nil {
@@ -137,7 +145,7 @@ func Run(opts Options) (*Report, error) {
 				if err := json.Unmarshal(f.Payload, &rec); err != nil {
 					return fmt.Errorf("tick frame: %w", err)
 				}
-				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m)
+				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets)
 				if err != nil {
 					return err
 				}
@@ -164,10 +172,12 @@ type barsEpoch struct {
 }
 
 // evalTick re-runs one recorded evaluation tick: materialize fingerprints from
-// the reconstructed rings against the recorded bars epoch, match phenomena over
-// the selected (Tier-A) entities, and compare digests.
+// the reconstructed rings against the recorded bars epoch, rebuild the recorded
+// topology snapshot under the pinned edge budgets, match phenomena over the
+// selected (Tier-A) entities, and compare digests.
 func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
-	rules map[string]*graph.ThresholdRule, matcher *detect.Matcher, reader *bundleReader, m Manifest) (TickOutcome, error) {
+	rules map[string]*graph.ThresholdRule, matcher *detect.Matcher, reader *bundleReader, m Manifest,
+	budgets map[identity.EdgeType]time.Duration) (TickOutcome, error) {
 
 	var fps []observe.Fingerprint
 	var findings []detect.Finding
@@ -193,12 +203,28 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 			bars[rec.BarsEpoch] = ep
 		}
 		fps = observe.Materialize(ep.res, rules, reader, m.FPParams, rec.EvalNow)
-		for _, fp := range fps {
-			if len(ep.selected[fp.CEIKey]) == 0 {
-				continue
+
+		// Topology (doc 07 §3.7): rebuild the recorded snapshot under the PINNED
+		// budgets and walk it through the same Match path live used. A tick with
+		// no recorded topology (pre-topology bundle, manifest budgets nil) runs
+		// entity-local-only — the regime that recorded it, stated in the report.
+		// A topology-recording bundle whose tick lacks the field is a corrupt or
+		// hand-edited bundle: refuse rather than mis-verify.
+		var topo detect.Topology
+		if m.EdgeBudgets != nil {
+			if rec.Topology == nil {
+				return TickOutcome{}, fmt.Errorf("replay: tick %s carries no topology snapshot but the manifest pins edge budgets (corrupt bundle?)", rec.EvalNow.Format(time.RFC3339Nano))
 			}
-			findings = append(findings, matcher.MatchFingerprint(fp)...)
+			store, err := identity.NewEdgeStoreFromSnapshot(rec.Topology, budgets)
+			if err != nil {
+				return TickOutcome{}, fmt.Errorf("replay: tick %s: %w", rec.EvalNow.Format(time.RFC3339Nano), err)
+			}
+			topo = store
+		} else if rec.Topology != nil {
+			return TickOutcome{}, fmt.Errorf("replay: tick %s records topology but the manifest pins no edge budgets — suspicion thresholds unknown; refusing to guess", rec.EvalNow.Format(time.RFC3339Nano))
 		}
+		w := identity.TimeWindow{Start: rec.EvalNow.Add(-m.FPParams.CooccurrenceWindow), End: rec.EvalNow}
+		findings = matcher.Match(fps, ep.selected, topo, w)
 	}
 	digest, canonical, err := Digest(rec.EvalNow, fps, findings)
 	if err != nil {

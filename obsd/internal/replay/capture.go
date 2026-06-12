@@ -35,6 +35,13 @@ type Manifest struct {
 	HotRingCapacity int    `json:"hot_ring_capacity,omitempty"`
 	ObsdVersion     string `json:"obsd_version,omitempty"`
 
+	// EdgeBudgets pins the per-edge-type staleness budgets (doc 14 §1.2) in
+	// force during capture. Traversal suspicion is a budget-relative judgement
+	// (doc 07 §3.2), so replay must walk under the CAPTURE's budgets, never the
+	// local parameter file's. nil = a bundle captured before topology recording:
+	// the engine then replays entity-local-only (the regime that recorded it).
+	EdgeBudgets map[string]time.Duration `json:"edge_budgets,omitempty"`
+
 	// Contents declares what this bundle carries — honest partial coverage.
 	Contents []string `json:"contents"`
 	// Absent names replay inputs NOT captured yet (stated, never implied).
@@ -137,6 +144,18 @@ func (c *Capture) WriteManifest(m Manifest) error {
 		if prev.FPParams != m.FPParams || prev.ScrapeInterval != m.ScrapeInterval ||
 			(prev.HotRingCapacity != 0 && prev.HotRingCapacity != m.HotRingCapacity) {
 			return fmt.Errorf("replay: bundle already pinned to a different parameter set; refusing to continue it (use a fresh --store-dir)")
+		}
+		// Edge budgets are digest-bearing the same way (suspicion thresholds):
+		// a continued bundle must keep the exact budget set. A pre-topology
+		// bundle (nil) cannot be continued into the topology regime — its early
+		// ticks would replay under a mode its manifest does not declare.
+		if len(prev.EdgeBudgets) != len(m.EdgeBudgets) {
+			return fmt.Errorf("replay: bundle pinned to a different edge-budget set; refusing to continue it (use a fresh --store-dir)")
+		}
+		for k, v := range prev.EdgeBudgets {
+			if m.EdgeBudgets[k] != v {
+				return fmt.Errorf("replay: bundle pinned edge budget %s=%s, this run has %s; refusing to continue it", k, v, m.EdgeBudgets[k])
+			}
 		}
 		return nil // compatible: keep the original manifest (and its created_at)
 	}

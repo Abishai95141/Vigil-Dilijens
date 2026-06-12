@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 )
 
@@ -46,11 +47,19 @@ func Digest(evalNow time.Time, fps []observe.Fingerprint, findings []detect.Find
 }
 
 // TickRecord is the payload of a warm-segment tick frame: the evaluation
-// instant, which bars epoch was in force, and the live digest to verify against.
+// instant, which bars epoch was in force, the topology snapshot the matcher
+// walked (doc 07 §3.7: same readings + same graph version + same TOPOLOGY
+// snapshot ⇒ same matches), and the live digest to verify against. Topology is
+// per-tick, not per-epoch: confirmation stamps advance continuously and
+// suspicion is a stamp-relative judgement, so the snapshot actually evaluated
+// IS the input — recording anything coarser would replay a different topology
+// than live saw. nil = a tick captured before topology recording (replayed in
+// entity-local-only mode, stated); empty non-nil = a genuinely edgeless tick.
 type TickRecord struct {
-	EvalNow      time.Time `json:"eval_now"`
-	BarsEpoch    int       `json:"bars_epoch"`
-	Digest       string    `json:"digest"`
-	Fingerprints int       `json:"fingerprints"`
-	Findings     int       `json:"findings"`
+	EvalNow      time.Time           `json:"eval_now"`
+	BarsEpoch    int                 `json:"bars_epoch"`
+	Topology     []identity.EdgeSnap `json:"topology"`
+	Digest       string              `json:"digest"`
+	Fingerprints int                 `json:"fingerprints"`
+	Findings     int                 `json:"findings"`
 }

@@ -87,9 +87,28 @@ def test_parquet_bridge_roundtrips_readings(tmp_path: Path) -> None:
     assert table.num_rows == int(declared.group(1)) == int(exported.group(1))
     cols = set(table.column_names)
     assert {"stream_id", "uid", "metric", "type", "recv_unix_nano", "at_unix_nano", "value"} <= cols
-    # The fixture's single stream is the working-set gauge; values are bytes and rising.
-    metrics = table.column("metric").to_pylist()
-    assert set(metrics) == {"container_memory_working_set_bytes"}
-    values = table.column("value").to_pylist()
-    assert values == sorted(values) and values[0] > 0, "fixture readings should rise monotonically"
+    # The fixture carries the entity-local leak stream AND the first-order
+    # THROTTLING_CASCADE pair (container throttle counters + node PSI, 07 M2).
+    metrics = set(table.column("metric").to_pylist())
+    assert metrics == {
+        "container_memory_working_set_bytes",
+        "container_cpu_cfs_throttled_periods_total",
+        "container_cpu_cfs_periods_total",
+        "node_pressure_cpu_waiting_seconds_total",
+    }
+    # Per stream, readings rise monotonically (gauges rising, counters cumulative).
+    rows = sorted(
+        zip(
+            table.column("stream_id").to_pylist(),
+            table.column("at_unix_nano").to_pylist(),
+            table.column("value").to_pylist(),
+            strict=True,
+        )
+    )
+    per_stream: dict[str, list[float]] = {}
+    for sid, _, val in rows:
+        per_stream.setdefault(sid, []).append(val)
+    assert len(per_stream) == 4
+    for sid, vals in per_stream.items():
+        assert vals == sorted(vals), f"{sid} readings should rise monotonically"
     assert isinstance(pa.types.is_float64(table.schema.field("value").type), bool)  # schema sanity

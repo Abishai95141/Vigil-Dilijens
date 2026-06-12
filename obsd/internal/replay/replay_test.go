@@ -11,8 +11,10 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
 )
 
 const (
@@ -43,6 +45,7 @@ func fpParams() observe.FPParams {
 const (
 	memLimit = float64(128 << 20) // 128Mi
 	podCEI   = "i|cl|shop|Pod|web-a|poduid-1"
+	nodeCEI  = "i|cl||Node|n1|nodeuid-1"
 )
 
 func leakBinding() binding.Binding {
@@ -58,12 +61,76 @@ func leakBinding() binding.Binding {
 	}
 }
 
+// throttleBinding + psiBinding: the first-order THROTTLING_CASCADE pair (07 M2)
+// — the container's throttle ratio (anchor) and the node's CPU PSI stall
+// fraction (neighbour, one runs-on hop). Both default-flagged bars.
+func throttleBinding() binding.Binding {
+	return binding.Binding{
+		CEIKey: podCEI, RoleKey: "r|cl|shop|Deployment|web", Entity: "Container", Container: "web",
+		RuleID: "THR_CONTAINER_CPU_THROTTLE_RATIO", Metric: "container_cpu_cfs_throttled_periods_total",
+		State: binding.StateBound, Validation: binding.ValidationSuspect,
+		Bar: &binding.ResolvedBar{
+			Kind: "absolute", Source: binding.SourceDefault, Flagged: true,
+			Value: 0.25, Unit: "ratio", Direction: "above", Window: "5m", ResolvedAt: base,
+		},
+	}
+}
+
+func psiBinding() binding.Binding {
+	return binding.Binding{
+		CEIKey: nodeCEI, Entity: "Node",
+		RuleID: "THR_NODE_CPU_PSI_STALL", Metric: "node_pressure_cpu_waiting_seconds_total",
+		State: binding.StateBound, Validation: binding.ValidationSuspect,
+		Bar: &binding.ResolvedBar{
+			Kind: "absolute", Source: binding.SourceDefault, Flagged: true,
+			Value: 0.10, Unit: "ratio", Direction: "above", Window: "5m", ResolvedAt: base,
+		},
+	}
+}
+
+func fixtureBindings() []binding.Binding {
+	return []binding.Binding{leakBinding(), throttleBinding(), psiBinding()}
+}
+
 func leakDef() qss.StreamDef {
 	return qss.StreamDef{
 		ID: podCEI + "|container_memory_working_set_bytes", CEIKey: podCEI, UID: "poduid-1/web",
 		Kind: "Container", Metric: "container_memory_working_set_bytes", Type: "gauge",
 		Node: "n1", Cadence: "scrape",
 	}
+}
+
+func throttledDef() qss.StreamDef {
+	return qss.StreamDef{
+		ID: podCEI + "|container_cpu_cfs_throttled_periods_total", CEIKey: podCEI, UID: "poduid-1/web",
+		Kind: "Container", Metric: "container_cpu_cfs_throttled_periods_total", Type: "counter",
+		Node: "n1", Cadence: "scrape",
+	}
+}
+
+func periodsDef() qss.StreamDef {
+	return qss.StreamDef{
+		ID: podCEI + "|container_cpu_cfs_periods_total", CEIKey: podCEI, UID: "poduid-1/web",
+		Kind: "Container", Metric: "container_cpu_cfs_periods_total", Type: "counter",
+		Node: "n1", Cadence: "scrape",
+	}
+}
+
+func psiDef() qss.StreamDef {
+	return qss.StreamDef{
+		ID: nodeCEI + "|node_pressure_cpu_waiting_seconds_total", CEIKey: nodeCEI, UID: "nodeuid-1",
+		Kind: "Node", Metric: "node_pressure_cpu_waiting_seconds_total", Type: "counter",
+		Node: "n1", Cadence: "scrape",
+	}
+}
+
+// fixtureEdgeBudgets pins the staleness budgets the test bundles capture under.
+func fixtureEdgeBudgets() map[string]time.Duration {
+	return map[string]time.Duration{"runs-on": 90 * time.Second}
+}
+
+func typedBudgets() map[identity.EdgeType]time.Duration {
+	return map[identity.EdgeType]time.Duration{identity.EdgeRunsOn: 90 * time.Second}
 }
 
 // buildBundle simulates the LIVE path into dir: per scrape round it appends the
@@ -81,19 +148,19 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 	if err := cap.WriteManifest(Manifest{
 		CreatedAt: base, ClusterID: "test-cluster", GraphVersion: g.Version,
 		ParamsVersion: "0", Profile: "dev", FPParams: fpParams(), ScrapeInterval: 15 * time.Second,
-		HotRingCapacity: qss.HotCapacity(),
-		Contents:        []string{"readings (qss segments)", "resolved bars per epoch", "evaluation ticks with digests"},
-		Absent:          []string{"topology log (lands with 07 M2 traversal)"},
+		HotRingCapacity: qss.HotCapacity(), EdgeBudgets: fixtureEdgeBudgets(),
+		Contents: []string{"readings (qss segments)", "resolved bars per epoch",
+			"topology snapshot per tick", "evaluation ticks with digests"},
 	}); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	epoch, err := cap.SetBars(base, []binding.Binding{leakBinding()})
+	epoch, err := cap.SetBars(base, fixtureBindings())
 	if err != nil || epoch != 1 {
 		t.Fatalf("SetBars: epoch=%d err=%v", epoch, err)
 	}
 	// Idempotence: an unchanged bar set must not create a new epoch.
-	if e2, _ := cap.SetBars(base.Add(time.Minute), []binding.Binding{leakBinding()}); e2 != 1 {
+	if e2, _ := cap.SetBars(base.Add(time.Minute), fixtureBindings()); e2 != 1 {
 		t.Fatalf("unchanged bars must keep epoch 1, got %d", e2)
 	}
 
@@ -102,34 +169,72 @@ func buildBundle(t *testing.T, dir string, g *graph.Graph, tamperRound int) []Ti
 		rules[r.ID] = r
 	}
 	matcher := detect.NewMatcher(g)
+	res := &binding.Result{Bindings: fixtureBindings()}
+	selected := selection.TierASet(res, g)
 	live := newBundleReader() // the in-memory "live" view (same read semantics as the Ingestor)
-	def := leakDef()
-	live.register(def)
+	defs := []qss.StreamDef{leakDef(), throttledDef(), periodsDef(), psiDef()}
+	for _, d := range defs {
+		live.register(d)
+	}
+
+	// Live topology: the pod runs on the node, confirmed each scrape — exactly
+	// what the watcher's informers would assert. The matcher walks the per-tick
+	// SNAPSHOT (recorded == evaluated), mirroring obsd.
+	pod, err := identity.ParseKey(podCEI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := identity.ParseKey(nodeCEI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edges := identity.NewEdgeStore(func() time.Time { return base }, typedBudgets(), 24*time.Hour)
 
 	var recs []TickRecord
 	for i := 0; i < 8; i++ {
 		recv := base.Add(time.Duration(i) * 15 * time.Second)
-		val := float64((110 + 4*i) << 20) // 110Mi rising 4Mi per scrape: below -> at -> above -> well-above
-		live.hot.Append(def.ID, qss.Sample{At: recv, Value: val})
+		edges.Assert(identity.EdgeRunsOn, pod, node, recv)
+
+		// The leak signature: working set rising 4Mi per scrape (below -> at ->
+		// above -> well-above the 121.6Mi bar).
+		val := float64((110 + 4*i) << 20)
 		captured := val
 		if i == tamperRound {
 			captured = val - float64(20<<20) // the disk copy lies by -20Mi
 		}
-		if err := cap.Warm().Append(def, recv, qss.Sample{At: recv, Value: captured}); err != nil {
-			t.Fatalf("warm append: %v", err)
+		samples := []struct {
+			def  qss.StreamDef
+			live float64
+			disk float64
+		}{
+			{leakDef(), val, captured},
+			// Throttle ratio: Δ10 throttled / Δ15 periods per scrape = 0.67 >> 0.25.
+			{throttledDef(), float64(10 * i), float64(10 * i)},
+			{periodsDef(), float64(15 * i), float64(15 * i)},
+			// Node PSI: +3 stall-seconds per 15s scrape = 0.2/s >> 0.10.
+			{psiDef(), float64(3 * i), float64(3 * i)},
+		}
+		for _, s := range samples {
+			live.hot.Append(s.def.ID, qss.Sample{At: recv, Value: s.live})
+			if err := cap.Warm().Append(s.def, recv, qss.Sample{At: recv, Value: s.disk}); err != nil {
+				t.Fatalf("warm append: %v", err)
+			}
 		}
 
 		evalNow := recv.Add(time.Second)
-		fps := observe.Materialize(&binding.Result{Bindings: []binding.Binding{leakBinding()}}, rules, live, fpParams(), evalNow)
-		var findings []detect.Finding
-		for _, fp := range fps {
-			findings = append(findings, matcher.MatchFingerprint(fp)...)
+		topoSnap := edges.Snapshot()
+		topo, err := identity.NewEdgeStoreFromSnapshot(topoSnap, typedBudgets())
+		if err != nil {
+			t.Fatal(err)
 		}
+		w := identity.TimeWindow{Start: evalNow.Add(-fpParams().CooccurrenceWindow), End: evalNow}
+		fps := observe.Materialize(res, rules, live, fpParams(), evalNow)
+		findings := matcher.Match(fps, selected, topo, w)
 		digest, _, derr := Digest(evalNow, fps, findings)
 		if derr != nil {
 			t.Fatalf("digest: %v", derr)
 		}
-		rec := TickRecord{EvalNow: evalNow, BarsEpoch: epoch, Digest: digest,
+		rec := TickRecord{EvalNow: evalNow, BarsEpoch: epoch, Topology: topoSnap, Digest: digest,
 			Fingerprints: len(fps), Findings: len(findings)}
 		if err := cap.Tick(rec); err != nil {
 			t.Fatalf("tick: %v", err)
@@ -174,11 +279,17 @@ func TestBundleReplaysByteIdentical(t *testing.T) {
 	if len(rep.Ticks) != len(recs) {
 		t.Errorf("ticks replayed = %d, want %d", len(rep.Ticks), len(recs))
 	}
-	if rep.Samples != 8 || rep.Streams != 1 {
-		t.Errorf("samples=%d streams=%d, want 8/1", rep.Samples, rep.Streams)
+	if rep.Samples != 32 || rep.Streams != 4 {
+		t.Errorf("samples=%d streams=%d, want 32/4", rep.Samples, rep.Streams)
 	}
-	// Determinism of the engine itself: a second run is identical.
-	rep2, err := Run(Options{BundleDir: dir, Graph: g})
+	if rep.TopologyLess {
+		t.Error("a topology-recording bundle must not report TopologyLess")
+	}
+	// Determinism of the engine itself: a second run is identical — and the
+	// canonical output proves a FIRST-ORDER finding (the cascade, with its span
+	// path) replayed through the real traversal path, not just entity-local ones.
+	outDir := t.TempDir()
+	rep2, err := Run(Options{BundleDir: dir, Graph: g, OutDir: outDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,6 +297,20 @@ func TestBundleReplaysByteIdentical(t *testing.T) {
 		if rep.Ticks[i].ReplayedDigest != rep2.Ticks[i].ReplayedDigest {
 			t.Fatalf("engine is not deterministic at tick %d", i)
 		}
+	}
+	ticksOut, err := filepath.Glob(filepath.Join(outDir, "tick-*.json"))
+	if err != nil || len(ticksOut) == 0 {
+		t.Fatalf("canonical tick output missing: %v %v", ticksOut, err)
+	}
+	sawCascade := false
+	for _, p := range ticksOut {
+		raw, _ := os.ReadFile(p)
+		if strings.Contains(string(raw), "PHEN_THROTTLING_CASCADE") && strings.Contains(string(raw), `"first-order"`) {
+			sawCascade = true
+		}
+	}
+	if !sawCascade {
+		t.Error("the replayed output must contain the first-order THROTTLING_CASCADE finding (span path included)")
 	}
 }
 
@@ -383,6 +508,11 @@ func TestRestartContinuationReplays(t *testing.T) {
 	}
 	if rep.Runs != 2 {
 		t.Errorf("runs replayed = %d, want 2 (one run-start per process)", rep.Runs)
+	}
+	// This bundle predates topology recording (no edge-budget pin): the engine
+	// must replay it in the entity-local-only regime AND say so.
+	if !rep.TopologyLess {
+		t.Error("a pre-topology bundle must be reported TopologyLess")
 	}
 	if len(rep.Ticks) != totalTicks || rep.Mismatches != 0 {
 		for _, tk := range rep.Ticks {

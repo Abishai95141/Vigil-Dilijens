@@ -2,7 +2,7 @@
   "bundle_version": 1,
   "created_at": "2026-06-11T12:00:00Z",
   "cluster_id": "test-cluster",
-  "graph_version": "sha256:3c26469fd971acde1ea328f0580dd31e1d0373121515d2828a2289892ad1657f",
+  "graph_version": "sha256:76fc6dc3f30b3c94a533a87c99aba0c092ecbcf1f1e0e2217087f84142fb43d7",
   "params_version": "0",
   "profile": "dev",
   "fp_params": {
@@ -15,12 +15,14 @@
   },
   "scrape_interval": 15000000000,
   "hot_ring_capacity": 240,
+  "edge_budgets": {
+    "runs-on": 90000000000
+  },
   "contents": [
     "readings (qss segments)",
     "resolved bars per epoch",
+    "topology snapshot per tick",
     "evaluation ticks with digests"
   ],
-  "absent": [
-    "topology log (lands with 07 M2 traversal)"
-  ]
+  "absent": null
 }
