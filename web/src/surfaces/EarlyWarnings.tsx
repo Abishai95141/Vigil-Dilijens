@@ -35,7 +35,10 @@ export function EarlyWarnings() {
         <h3 className="v-overline">Early warnings — off (gate)</h3>
         <p
           className="v-muted"
-          style={{ marginTop: "var(--space-xs)", fontSize: "var(--text-small)" }}
+          style={{
+            marginTop: "var(--space-xs)",
+            fontSize: "var(--text-small)",
+          }}
         >
           {v.gateNote}
         </p>
@@ -45,7 +48,11 @@ export function EarlyWarnings() {
 
   return (
     <div
-      style={{ display: "flex", flexDirection: "column", gap: "var(--space-lg)" }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "var(--space-lg)",
+      }}
     >
       {!v.clock.ready && (
         <article
@@ -55,8 +62,7 @@ export function EarlyWarnings() {
           <h3 className="v-overline">Forecasting degraded</h3>
           <p className="v-muted" style={{ fontSize: "var(--text-small)" }}>
             The clock service is unreachable or not ready
-            {v.clock.degradedSince &&
-            !v.clock.degradedSince.startsWith("0001")
+            {v.clock.degradedSince && !v.clock.degradedSince.startsWith("0001")
               ? ` since ${new Date(v.clock.degradedSince).toLocaleTimeString()}`
               : ""}
             . Detection is unaffected; existing warnings age out rather than
@@ -72,9 +78,9 @@ export function EarlyWarnings() {
         {v.warnings.length === 0 ? (
           <div className="v-card">
             <p className="v-muted">
-              No projection crosses a configured bar within the horizon.
-              Silence is the default output (doc 09 §3.6) — every quiet target
-              is accounted below.
+              No projection crosses a configured bar within the horizon. Silence
+              is the default output (doc 09 §3.6) — every quiet target is
+              accounted below.
             </p>
           </div>
         ) : (
@@ -95,8 +101,8 @@ export function EarlyWarnings() {
       <section className="v-card">
         <div className="v-overline">Lane accounting (honest, per cycle)</div>
         <p className="v-muted" style={{ fontSize: "var(--text-small)" }}>
-          {v.silences.length} target(s) silenced by guardrails ·{" "}
-          {v.unbudgeted} eligible beyond the invocation budget (doc 06 M5)
+          {v.silences.length} target(s) silenced by guardrails · {v.unbudgeted}{" "}
+          eligible beyond the invocation budget (doc 06 M5)
         </p>
         {v.silences.length > 0 && (
           <div style={{ marginTop: "var(--space-xs)" }}>
@@ -213,8 +219,20 @@ function BandStrip({ w }: { w: WarningCard }) {
   const right = w.latestBeyondHorizon ? 100 : pct(w.latestAt);
   const point = pct(w.crossAt);
   return (
-    <svg width="100%" height="14" role="img" aria-label="projected crossing band">
-      <line x1="0%" y1="7" x2="100%" y2="7" stroke="var(--border-soft)" strokeWidth="2" />
+    <svg
+      width="100%"
+      height="14"
+      role="img"
+      aria-label="projected crossing band"
+    >
+      <line
+        x1="0%"
+        y1="7"
+        x2="100%"
+        y2="7"
+        stroke="var(--border-soft)"
+        strokeWidth="2"
+      />
       <rect
         x={`${left}%`}
         y="2"
@@ -224,7 +242,12 @@ function BandStrip({ w }: { w: WarningCard }) {
         fill="var(--prov-projected-band)"
         stroke="var(--prov-projected-border)"
       />
-      <circle cx={`${point}%`} cy="7" r="4" fill="var(--prov-projected-on-dark, var(--prov-projected))" />
+      <circle
+        cx={`${point}%`}
+        cy="7"
+        r="4"
+        fill="var(--prov-projected-on-dark, var(--prov-projected))"
+      />
     </svg>
   );
 }

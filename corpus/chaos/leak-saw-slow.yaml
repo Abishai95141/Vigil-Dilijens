@@ -1,0 +1,74 @@
+# Chaos: the SLOW sawtooth — leak -> cgroup-OOM -> restart -> leak (Phase 3,
+# doc 09 §3.4 / M5 full exit-gate corpus).
+#
+# leak-oom.yaml is the FAST sawtooth (~6-7 min cycles): the post-reset clean
+# ramp is only ~16-25 scrape points, too short for the clock to confidently
+# project the bar crossing — decomposition cut the wrong-reset projections by
+# >half but positive recall stayed 0 (the model honestly aborts on the short
+# ramp). This corpus slows the ramp to ~17-18 min per cycle so the spliced
+# post-reset remainder is ~70 points — long enough that the clock, given the
+# clean ramp, projects the crossing with minutes of lead. That is the missing
+# ingredient for the 09 M5 FULL gate PASS (positive event recall + >=3 events).
+#
+# Sawtooth, not plateau: the memory MUST be charged to the process heap (a
+# python bytearray buffer) so the OOM-kill -> container restart RESETS the
+# working set. A tmpfs/emptyDir leak (leak-plateau) survives the restart and
+# would NOT reset. Each OOM-kill is a NEW completed ramp at a NEW crossing
+# timestamp => a distinct gate crossing event (events keyed (streamUid,
+# crossing_ns) in harness.forecast_gate); restartCount == number of events.
+# Seal the capture once restartCount >= 4 (>= MIN_CROSSING_EVENTS=3, with margin).
+#
+# Timing (15s scrape cadence): interpreter ~12-15Mi + 24Mi prefill ~= ~38Mi
+# baseline; then 1Mi / 7s ~= 8.6 Mi/min. bar = 0.95 x 192Mi = 182.4Mi reached
+# at ramp-minute ~16.9; kernel kills at 192Mi ~ minute 18.0. 8 min before the
+# crossing (minute ~9) the series sits ~113Mi < 0.95xbar (173Mi) -> the gate's
+# 32-step approach-eligibility (ELIGIBILITY_LOOKBACK_STEPS) holds for every
+# cycle. min_context/horizon are REPLAY-time flags, swept offline on this one
+# capture (-forecast-min-context / -forecast-horizon) — no re-capture needed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaker-saw
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: leaker-saw}
+  template:
+    metadata:
+      labels: {app: leaker-saw}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vigil-worker
+      containers:
+        - name: leak
+          image: python:3.12-alpine
+          command:
+            - python3
+            - -u
+            - -c
+            - |
+              # Fast prefill to a ~38Mi baseline, then a SLOW smooth leak
+              # (1Mi / 7s ~= 8.6 Mi/min) so the working set spends ~17 min
+              # climbing through the at-threshold/above band of the 182.4Mi
+              # bar while RISING — a long clean ramp the clock can project —
+              # before the kernel kills the cgroup at 192Mi and the container
+              # restarts (heap freed -> working set resets -> next sawtooth).
+              import time
+              buf = []
+              for _ in range(6):
+                  buf.append(bytearray(4 * 1024 * 1024))
+                  time.sleep(1.5)
+              while True:
+                  buf.append(bytearray(1 * 1024 * 1024))
+                  time.sleep(7)
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            # The declared limit IS the bar (borrowed normativity): the leak
+            # bar resolves to 0.95 x 192Mi = 182.4Mi; the kernel kills at 192Mi.
+            limits: {cpu: 100m, memory: 192Mi}

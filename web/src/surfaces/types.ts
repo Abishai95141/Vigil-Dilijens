@@ -297,3 +297,77 @@ export function shortSpan(seconds: number): string {
   if (seconds < 5400) return `${Math.round(seconds / 60)} min`;
   return `${(seconds / 3600).toFixed(1)} h`;
 }
+
+// --- Context windows (doc 10 M6) — mirrors obsd/internal/api/context.go.
+// Operator-authored annotations (no provenance class); deploy/config boundaries
+// double as Phase-3 forecasting splice points (doc 09 §3.4).
+
+export type ContextWindowKind =
+  | "deploy"
+  | "config-change"
+  | "incident"
+  | "maintenance";
+
+export interface ContextWindow {
+  id: string;
+  label: string;
+  kind: ContextWindowKind;
+  startAt: string;
+  endAt: string; // zero/"0001-..." = open / instantaneous marker
+  annotation: string;
+  author: string;
+  createdAt: string;
+  spliceEligible: boolean;
+}
+
+export interface ContextWindowsView {
+  generatedAt: string;
+  windows: ContextWindow[];
+  spliceCount: number;
+  note: string;
+}
+
+// --- Config (doc 10 M6) — mirrors obsd/internal/api/config.go. System
+// configuration, NOT a provenance-classed finding. The forecast block carries
+// the lane's gate posture (the gate rule, doc 11 §3.5).
+
+export interface ForecastConfigView {
+  enabled: boolean;
+  gateNote: string;
+  clockdTarget: string;
+  interval: string;
+  horizonSteps: number;
+  minContext: number;
+  decompose: boolean;
+  resetDropFraction: number;
+  maxExplainedFraction: number;
+}
+
+export interface ConfigView {
+  generatedAt: string;
+  clusterId: string;
+  profile: string;
+  paramsVersion: string;
+  graphRelease: string;
+  graphVersion: string;
+  scrapeInterval: string;
+  evaluationTick: string;
+  tierBBudget: number;
+  forecast: ForecastConfigView;
+  note: string;
+}
+
+// --- Chat (doc 10 M7) — mirrors obsd/internal/api/chat.go ChatResponse. The
+// register guard's refusal is a first-class field, surfaced as such.
+
+export interface ChatResponse {
+  answer: string;
+  citations: string[] | null;
+  refused: boolean;
+  refusedReason?: string;
+}
+
+/** Is a Go time string the zero value (open / unset)? */
+export function isZeroTime(t: string): boolean {
+  return !t || t.startsWith("0001-01-01");
+}

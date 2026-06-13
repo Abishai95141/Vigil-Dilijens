@@ -384,8 +384,41 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			}
 			return snap
 		}
+		// Config (doc 10 M6): runtime configuration + the forecast lane's gate
+		// posture, so an operator can read the system's settings (and WHY the
+		// soon-lane is dark) without inferring it from the warnings tab.
+		providers.Config = func() *vapi.ConfigView {
+			fcNote := "Early warnings ON: the shipped class(es) passed the backtest calibration gate (doc 11 §3.5)."
+			if !p.Forecast.Enabled {
+				fcNote = vapi.ForecastGateNote()
+			}
+			return &vapi.ConfigView{
+				GeneratedAt:    time.Now().UTC(),
+				ClusterID:      clusterID,
+				Profile:        p.Profile,
+				ParamsVersion:  p.Version,
+				GraphRelease:   graphRelease,
+				GraphVersion:   graphVersion,
+				ScrapeInterval: p.Scrape.Interval.Duration().String(),
+				EvaluationTick: p.Observation.EvaluationTick.Duration().String(),
+				TierBBudget:    p.Selection.TierBBudgetPerCycle,
+				Forecast: vapi.ForecastConfigView{
+					Enabled:              p.Forecast.Enabled,
+					GateNote:             fcNote,
+					ClockdTarget:         p.Forecast.ClockdTarget,
+					Interval:             p.Forecast.Interval.Duration().String(),
+					HorizonSteps:         p.Forecast.HorizonSteps,
+					MinContext:           p.Forecast.MinContext,
+					Decompose:            p.Forecast.Decompose,
+					ResetDropFraction:    p.Forecast.ResetDropFraction,
+					MaxExplainedFraction: p.Forecast.MaxExplainedFraction,
+				},
+				Note: "System configuration (not a provenance-classed finding). " +
+					"Detection runs every evaluation tick regardless of the forecast lane (non-gating, doc 01).",
+			}
+		}
 		logger.Info("operator surfacing API enabled (doc 10 M1–M7-begun)",
-			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/context-windows /api/chat")
+			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/context-windows /api/chat /api/config")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),

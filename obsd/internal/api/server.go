@@ -35,6 +35,9 @@ type Providers struct {
 	// Chat returns the read-only snapshot the register-guarded chat answers from
 	// (doc 10 M7, begun); nil = the route is not mounted.
 	Chat func() *ChatSnapshot
+	// Config returns the runtime configuration view (doc 10 M6) — cadences,
+	// graph release, and the forecast lane's gate posture; nil = not mounted.
+	Config func() *ConfigView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -221,6 +224,19 @@ func Register(mux *http.ServeMux, p Providers) {
 				return
 			}
 			writeJSON(w, AnswerChat(req.Question, p.Chat()))
+		})
+	}
+
+	// Config (doc 10 M6): the runtime configuration view — cadences, graph
+	// release, and the forecast lane's gate posture. Read-only; not a
+	// provenance-classed statement (system configuration, not a finding).
+	if p.Config != nil {
+		mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			writeJSON(w, p.Config())
 		})
 	}
 }

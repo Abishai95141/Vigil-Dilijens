@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { Logo } from "./components/Brand";
+import { Chat } from "./surfaces/Chat";
+import { Config } from "./surfaces/Config";
+import { ContextWindows } from "./surfaces/ContextWindows";
 import { CoverageReport } from "./surfaces/CoverageReport";
 import { EarlyWarnings } from "./surfaces/EarlyWarnings";
 import { InsightFeed } from "./surfaces/InsightFeed";
@@ -13,7 +16,16 @@ import { UnexplainedSurface } from "./surfaces/UnexplainedSurface";
 // wearing its label (doc 10 §2). M2–M4 add the now/topology/anomaly views beside
 // the M1 coverage map; early warnings (PROJECTED) arrive in Phase 2.
 
-type Tab = "insights" | "warnings" | "topology" | "unexplained" | "timeline" | "coverage";
+type Tab =
+  | "insights"
+  | "warnings"
+  | "topology"
+  | "unexplained"
+  | "timeline"
+  | "coverage"
+  | "context"
+  | "ask"
+  | "config";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "insights", label: "Insights" },
@@ -22,6 +34,9 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "unexplained", label: "Unexplained" },
   { id: "timeline", label: "Timeline" },
   { id: "coverage", label: "Coverage" },
+  { id: "context", label: "Context windows" },
+  { id: "ask", label: "Ask" },
+  { id: "config", label: "Config" },
 ];
 
 export default function App() {
@@ -92,6 +107,9 @@ export default function App() {
         {tab === "unexplained" && <UnexplainedSurface />}
         {tab === "timeline" && <Timeline />}
         {tab === "coverage" && <CoverageReport />}
+        {tab === "context" && <ContextWindows />}
+        {tab === "ask" && <Chat />}
+        {tab === "config" && <Config />}
       </main>
     </div>
   );
