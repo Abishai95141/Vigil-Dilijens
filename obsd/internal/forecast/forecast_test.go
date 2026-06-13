@@ -112,7 +112,7 @@ func scriptedForecast(h int, start, slope, width float64) *clock.Forecast {
 func fp() params.ForecastParams {
 	return params.ForecastParams{
 		HorizonSteps: 64, Quantiles: []float64{0.1, 0.5, 0.9},
-		MinContext: 8, FlatEpsilon: 0.005, MaxBandRatio: 2.0,
+		MinContext: 8, FlatEpsilon: 0.005, MaxBandRatio: 0.5,
 	}
 }
 
@@ -163,12 +163,27 @@ func TestProjectSilences(t *testing.T) {
 		t.Errorf("no-crossing must silence, got cand=%v reason=%s", cand, reason)
 	}
 
-	// Band too wide ⇒ silence: a fast point crossing (step 5) under a huge band
-	// whose lower edge never crosses — effective width spans the horizon, so
-	// width/ttc ≈ 63/6 ≫ MaxBandRatio.
-	wideFc := scriptedForecast(64, 480, 1, 200)
-	if cand, reason := Project(wsTarget(), wideFc, t0, t0, cadence, 240, "v", p); cand != nil || reason != SilenceBandTooWide {
-		t.Errorf("too-wide band must silence, got cand=%v reason=%s", cand, reason)
+	// IMMINENT crossing with an OPEN far tail must NOT be silenced. The point
+	// crosses at step 5 and the optimist (q90) crosses at step 0, so the
+	// actionable near cone (earliest→point) is tight (≈5 steps); only the lower
+	// edge never crosses (open tail, stated honestly). The usefulness guardrail
+	// is ABSOLUTE (near cone vs horizon), never vs the time-to-cross, so this
+	// emits — the regression test for the imminence-bias fix (a warning must not
+	// vanish exactly when the crossing becomes imminent).
+	imminentFc := scriptedForecast(64, 480, 1, 200)
+	if cand, reason := Project(wsTarget(), imminentFc, t0, t0, cadence, 240, "v", p); cand == nil {
+		t.Errorf("imminent crossing with an open tail must EMIT (not band-too-wide), silenced: %s", reason)
+	} else if !cand.LatestBeyondHorizon {
+		t.Errorf("the open far tail must be stated (LatestBeyondHorizon)")
+	}
+
+	// GENUINELY too wide ⇒ silence: a slow point crossing (~step 39) while the
+	// optimist already crossed at step 0 — the near cone earliest→point spans
+	// ~61% of the horizon (>0.5), i.e. "could cross anytime in the next ~10 min".
+	// That is the useless case the guardrail still catches.
+	tooWideFc := scriptedForecast(64, 480, 0.15, 10)
+	if cand, reason := Project(wsTarget(), tooWideFc, t0, t0, cadence, 240, "v", p); cand != nil || reason != SilenceBandTooWide {
+		t.Errorf("genuinely-wide near cone must silence band-too-wide, got cand=%v reason=%s", cand, reason)
 	}
 
 	// Below-direction bar: mirrored crossing.

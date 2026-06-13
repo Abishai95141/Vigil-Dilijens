@@ -66,7 +66,7 @@ func builtSurfaces(t *testing.T) map[string][]byte {
 	surfaces := map[string]any{
 		"insights": BuildInsights("cl", "sha256:test", "v0.3.0", at, findings, cascades),
 		"topology": BuildTopology("cl", "v", at, inv, edges, budgets, findings, unexpF, selected, map[string]bool{podKey: true}),
-		"timeline": BuildTimeline(at, frows, urows, nil),
+		"timeline": BuildTimeline(at, frows, urows, nil, false),
 		"warnings": BuildWarnings("v", "r", wAt, true, cycleWithCandidate(), 1, ClockHealthRow{Ready: true}, nil, atRisk),
 	}
 	out := map[string][]byte{}

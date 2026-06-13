@@ -13,9 +13,9 @@ import (
 // doc 11 §3.5). It must be GET-only and carry no provenance class.
 func TestConfigRoute(t *testing.T) {
 	want := &ConfigView{
-		GeneratedAt: time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC),
-		ClusterID:   "test-cluster",
-		Profile:     "dev",
+		GeneratedAt:  time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC),
+		ClusterID:    "test-cluster",
+		Profile:      "dev",
 		GraphRelease: "v0.3.0",
 		Forecast: ForecastConfigView{
 			Enabled:  false,

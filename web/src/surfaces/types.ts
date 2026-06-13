@@ -271,6 +271,8 @@ export interface WarningCard {
   latestBeyondHorizon: boolean;
   timeToCrossSeconds: number;
   confidence: string; // tight | moderate | wide
+  aging: boolean; // held between refreshes for stability — shows the LAST projection
+  firstSeenAt: string;
   precursorPhenomena: string[];
   atRisk: AtRiskRow[];
   contextPoints: number;

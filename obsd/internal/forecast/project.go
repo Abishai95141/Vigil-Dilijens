@@ -108,24 +108,34 @@ func Project(t Target, fc *clock.Forecast, basisAt, generatedAt time.Time,
 	latestIdx := crossIndex(pessimist, t.BarValue, t.Direction)
 	beyond := latestIdx < 0
 
-	// Band-width guardrail (§3.6): a band wider than MaxBandRatio × the
-	// time-to-cross is not a useful warning. A beyond-horizon lower edge uses
-	// the full horizon as its effective width — and is capped to "wide" below.
+	// Usefulness guardrail (§3.6): silence only a crossing band so wide it cannot
+	// be acted on — judged ABSOLUTELY, as a fraction of the forecast horizon, and
+	// NEVER relative to the time-to-cross. Dividing by the time-to-cross inverted
+	// urgency: it suppressed a tight, imminent band precisely when the crossing
+	// mattered most (the warning vanished as it became real). The test is the
+	// width of the ACTIONABLE near cone — earliest → the point estimate — so an
+	// open far tail (LatestBeyondHorizon, shown honestly below) never silences a
+	// tight, imminent crossing. A near cone spanning most of the horizon ("could
+	// be anytime") is the genuinely-useless case this still catches.
 	latestEff := latestIdx
 	if beyond {
 		latestEff = horizon - 1
 	}
 	ttcSteps := pointIdx + 1
-	widthSteps := latestEff - earliestIdx
-	if p.MaxBandRatio > 0 && float64(widthSteps) > p.MaxBandRatio*float64(ttcSteps) {
+	fullWidth := latestEff - earliestIdx // the displayed [earliest, latest] window
+	nearWidth := pointIdx - earliestIdx  // the actionable near cone (earliest → point)
+	if nearWidth < 0 {
+		nearWidth = 0
+	}
+	if p.MaxBandRatio > 0 && float64(nearWidth) > p.MaxBandRatio*float64(horizon) {
 		return nil, SilenceBandTooWide
 	}
 	confidence := "wide"
 	if !beyond {
-		switch ratio := float64(widthSteps) / float64(ttcSteps); {
-		case ratio <= 0.5:
+		switch frac := float64(fullWidth) / float64(horizon); {
+		case frac <= 0.2:
 			confidence = "tight"
-		case ratio <= 1.0:
+		case frac <= 0.45:
 			confidence = "moderate"
 		}
 	}

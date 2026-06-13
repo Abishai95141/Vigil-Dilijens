@@ -43,7 +43,7 @@ spec:
               echo "prefill ~120Mi, creep 3Mi/12s (~15Mi/min) to ~312Mi (above the 304Mi bar), plateau";
               i=0;
               while [ $i -lt 40 ]; do dd if=/dev/zero of=/leak/p$i bs=1M count=3 2>/dev/null; i=$((i+1)); done;
-              while [ $i -lt 104 ]; do dd if=/dev/zero of=/leak/p$i bs=1M count=3 2>/dev/null; i=$((i+1)); sleep 26; done;
+              while [ $i -lt 104 ]; do dd if=/dev/zero of=/leak/p$i bs=1M count=3 2>/dev/null; i=$((i+1)); sleep 14; done;
               echo "plateau above bar"; sleep 100000
           volumeMounts:
             - {name: leak, mountPath: /leak}

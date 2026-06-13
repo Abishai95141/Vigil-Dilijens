@@ -1,5 +1,6 @@
 import { ProvChip } from "../components/Brand";
 import {
+  type SilenceRow,
   type WarningCard,
   type WarningsView,
   entityLabel,
@@ -7,6 +8,36 @@ import {
   shortSpan,
 } from "./types";
 import { useApi } from "./useApi";
+
+// Plain-English meaning of each guardrail silence code (doc 09 §3.6) — so the
+// lane accounting reads as an actionable, grouped statement instead of a flat
+// wall of raw enum strings (the audit's surfacing-clarity finding).
+const SILENCE_GLOSSARY: Record<string, string> = {
+  "no-crossing-within-horizon":
+    "rising, but not projected to cross its bar within the horizon",
+  "band-too-wide": "the crossing window is too wide to act on (doc 09 §3.6)",
+  "flat-series": "flat — no meaningful trend to project",
+  "short-context": "not enough history yet to forecast",
+  "already-crossed": "already over its bar now — detection's jurisdiction",
+  "counter-stream-deferred": "a counter metric; its level is not projectable",
+  "clock-degraded": "the forecasting clock is unavailable; warning withheld",
+  "decomposition-aborted": "too much of the window was a restart footprint",
+  "no-stream": "no resolvable series for this target",
+  "ambiguous-stream": "more than one candidate series; not resolvable",
+};
+
+// Group silences by reason, most-common first (deterministic by count then name).
+function groupByReason(silences: SilenceRow[]): [string, SilenceRow[]][] {
+  const m = new Map<string, SilenceRow[]>();
+  for (const s of silences) {
+    const arr = m.get(s.reason) ?? [];
+    arr.push(s);
+    m.set(s.reason, arr);
+  }
+  return [...m.entries()].sort(
+    (a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]),
+  );
+}
 
 // The Early-warnings surface (doc 10 §3.1 M5 / doc 09 M4) — the "soon" lane.
 // PROJECTED-class cards: a projection of a precursor across its bar, ALWAYS
@@ -105,15 +136,33 @@ export function EarlyWarnings() {
           eligible beyond the invocation budget (doc 06 M5)
         </p>
         {v.silences.length > 0 && (
-          <div style={{ marginTop: "var(--space-xs)" }}>
-            {v.silences.map((s) => (
-              <div key={`${s.entityCei}-${s.metric}`} className="v-evi">
-                <span className="v-faint">{s.reason}</span>
-                <span className="v-mono v-muted">
-                  {entityLabel(s.entityCei)} · {shortMetric(s.metric)}
-                </span>
-                <span />
-              </div>
+          <div style={{ marginTop: "var(--space-sm)" }}>
+            {groupByReason(v.silences).map(([reason, rows]) => (
+              <details key={reason} style={{ marginBottom: "var(--space-xs)" }}>
+                <summary style={{ cursor: "pointer" }}>
+                  <span className="v-badge" data-conf="wide">
+                    {rows.length}
+                  </span>{" "}
+                  <span className="v-mono">{reason}</span>{" "}
+                  <span
+                    className="v-faint"
+                    style={{ fontSize: "var(--text-tiny)" }}
+                  >
+                    — {SILENCE_GLOSSARY[reason] ?? "silenced by a guardrail"}
+                  </span>
+                </summary>
+                <div style={{ marginTop: 4 }}>
+                  {rows.map((s) => (
+                    <div key={`${s.entityCei}-${s.metric}`} className="v-evi">
+                      <span />
+                      <span className="v-mono v-muted">
+                        {entityLabel(s.entityCei)} · {shortMetric(s.metric)}
+                      </span>
+                      <span />
+                    </div>
+                  ))}
+                </div>
+              </details>
             ))}
           </div>
         )}
@@ -157,6 +206,15 @@ function Warning({ w }: { w: WarningCard }) {
           <span className="v-badge" data-conf={w.confidence}>
             {w.confidence}
           </span>
+          {w.aging && (
+            <span
+              className="v-badge"
+              data-conf="wide"
+              title="held between refreshes for stability — the last real projection, not re-projected this cycle"
+            >
+              aging
+            </span>
+          )}
         </div>
         <ProvChip cls="PROJECTED" />
       </header>
@@ -202,6 +260,9 @@ function Warning({ w }: { w: WarningCard }) {
         PROJECTED — an extrapolation with a band, never a certainty. Basis{" "}
         {new Date(w.basisAt).toLocaleTimeString()} · {w.contextPoints} context
         points · graph {w.graphVersion.replace("sha256:", "").slice(0, 12)}…
+        {w.aging
+          ? " · held (aging) — last projection, not refreshed this cycle"
+          : ""}
       </p>
     </article>
   );

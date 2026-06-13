@@ -327,6 +327,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
+			// The durable store can hold a finding whose last match was many ticks
+			// ago; serve anything older than ~3 eval ticks as stale, not firing-now.
+			providers.FindingsStaleAfter = 3 * p.Observation.EvaluationTick.Duration()
 			// The anomaly timeline (doc 10 M4) composes the durable match +
 			// unexplained history; reads the store on request (off the hot path).
 			providers.Timeline = func() (*vapi.TimelineView, error) {
@@ -341,10 +344,12 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				// Projected lane (10 M5): the current early-warning bands,
 				// only when the lane is enabled (the gate rule).
 				var pw []vapi.WarningCard
+				laneOn := false
 				if wv := warningsView.Load(); wv != nil && wv.Enabled {
 					pw = wv.Warnings
+					laneOn = true
 				}
-				return vapi.BuildTimeline(time.Now().UTC(), fr, ur, pw), nil
+				return vapi.BuildTimeline(time.Now().UTC(), fr, ur, pw, laneOn), nil
 			}
 		}
 		// Context windows (doc 10 M6, begun) + register-guarded chat (10 M7, begun).

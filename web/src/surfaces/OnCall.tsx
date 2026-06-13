@@ -197,6 +197,7 @@ function MobileWarning({ c }: { c: WarningCard }) {
         {c.precursorPhenomena.length > 0
           ? ` · precedes ${c.precursorPhenomena.join(", ")}`
           : ""}
+        {c.aging ? " · aging" : ""}
       </p>
     </article>
   );

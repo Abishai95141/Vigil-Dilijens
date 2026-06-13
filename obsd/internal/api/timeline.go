@@ -46,21 +46,26 @@ type TimelineSpan struct {
 	To        time.Time `json:"to"`
 }
 
-const projectedLaneNote = "Projected (PROJECTED-class) early warnings render here once the forecasting layer ships (doc 09 / 10 M5, Phase 2). The lane is reserved and intentionally empty — never a fabricated future."
+// The PROJECTED lane note is CONDITIONAL on the lane's actual state (mirrors the
+// EarlyWarnings surface): OFF (the gate rule) vs ON-but-quiet vs ON-with-bands —
+// never a stale "ships in Phase 2" claim while the lane is live.
+const projectedLaneOffNote = "Early warnings are OFF: no forecast class is operator-visible before its backtest calibration gate passes (doc 11 §3.5 / 09 M3). The lane is reserved — never a fabricated future."
+const projectedLaneQuietNote = "Forecasting is ON; no projection crosses a configured bar within the horizon right now — silence is the default output (doc 09 §3.6), not an empty lane."
+const projectedLaneBandsNote = "Forward-pointing PROJECTED bands: each span is the [earliest, latest] crossing window of an early warning — a band, never a point, never a certainty."
 
 // BuildTimeline composes the timeline from the persisted findings + unexplained
 // rows, plus the current early-warning projections (doc 10 §3.3: projections
 // render as FORWARD-POINTING ranges, band-shaped, never a point — the span IS
-// the [earliest, latest] crossing band). Pure given its inputs; the API
-// handler reads the store + the warnings snapshot and calls it. warnings nil
-// = the lane is off (the gate rule); the note states why.
-func BuildTimeline(now time.Time, findings []store.FindingRow, unexp []store.UnexplainedRow, warnings []WarningCard) *TimelineView {
+// the [earliest, latest] crossing band). Pure given its inputs; the API handler
+// reads the store + the warnings snapshot and calls it. `enabled` is the
+// forecast lane's state, so the empty lane reads as ON-but-quiet (honest
+// silence) or OFF (the gate rule) — never a stale Phase-2 placeholder.
+func BuildTimeline(now time.Time, findings []store.FindingRow, unexp []store.UnexplainedRow, warnings []WarningCard, enabled bool) *TimelineView {
 	v := &TimelineView{
-		GeneratedAt:   now.UTC(),
-		Matches:       []TimelineSpan{},
-		Unexplained:   []TimelineSpan{},
-		Projected:     []TimelineSpan{},
-		ProjectedNote: projectedLaneNote,
+		GeneratedAt: now.UTC(),
+		Matches:     []TimelineSpan{},
+		Unexplained: []TimelineSpan{},
+		Projected:   []TimelineSpan{},
 	}
 	for _, w := range warnings {
 		to := w.LatestAt
@@ -76,9 +81,13 @@ func BuildTimeline(now time.Time, findings []store.FindingRow, unexp []store.Une
 			Status: w.Confidence, From: w.EarliestAt.UTC(), To: to.UTC(),
 		})
 	}
-	if len(v.Projected) > 0 {
-		v.ProjectedNote = "Forward-pointing PROJECTED bands: each span is the [earliest, latest] " +
-			"crossing window of an early warning — a band, never a point, never a certainty."
+	switch {
+	case !enabled:
+		v.ProjectedNote = projectedLaneOffNote
+	case len(v.Projected) > 0:
+		v.ProjectedNote = projectedLaneBandsNote
+	default:
+		v.ProjectedNote = projectedLaneQuietNote
 	}
 	from := now
 

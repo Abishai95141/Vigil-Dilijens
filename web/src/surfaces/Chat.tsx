@@ -174,7 +174,7 @@ function TurnView({ turn }: { turn: Turn }) {
               className="v-authored-note"
               style={{ marginTop: "var(--space-xs)" }}
             >
-              cites (authored / measured): {r.citations.join(", ")}
+              references: {r.citations.join(", ")}
             </p>
           )}
         </article>

@@ -63,6 +63,15 @@ type WarningCard struct {
 	TimeToCrossSeconds  float64   `json:"timeToCrossSeconds"`
 	Confidence          string    `json:"confidence"`
 
+	// Aging is set when this warning was NOT re-projected this cycle but is held
+	// briefly for stability (the doc 08 §3.4 aging pattern, applied to the soon
+	// lane): a marginal projection near a guardrail boundary must not FLICKER on
+	// the operator's screen. The card then shows the LAST real projection
+	// (BasisAt), labelled aging — never a fabricated current one — and clears
+	// after a few quiet cycles. FirstSeenAt is stable across refreshes.
+	Aging       bool      `json:"aging"`
+	FirstSeenAt time.Time `json:"firstSeenAt"`
+
 	// AUTHORED references, cited — never paraphrased into a causal sentence.
 	PrecursorPhenomena []string    `json:"precursorPhenomena"` // "known <phen> precursor per the graph"
 	AtRisk             []AtRiskRow `json:"atRisk"`             // blast radius per the graph (07's walk)

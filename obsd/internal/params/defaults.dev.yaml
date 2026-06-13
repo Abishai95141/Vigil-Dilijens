@@ -71,7 +71,7 @@ forecast:                           # doc 09 + doc 14 A13/A15 — the warm path 
   quantiles: [0.1, 0.5, 0.9]        # the band edges + median; within the model head [0.1, 0.9]
   min_context: 64                   # ≥16m of history before a target may run
   flat_epsilon: 0.005               # stddev/|level| under 0.5% = flat ⇒ silence (§3.6; calibrate in M3)
-  max_band_ratio: 2.0               # band wider than 2× the time-to-cross ⇒ silence (§3.6; calibrate in M3)
+  max_band_ratio: 0.5               # near cone (earliest→point) wider than 0.5× the HORIZON ⇒ silence (§3.6; absolute, never vs ttc — an imminent crossing is never suppressed)
   decompose: true                   # 09 M5: splice context at restart/deploy boundaries (no-op on clean series)
   reset_drop_fraction: 0.4          # a >40% step drop = a gauge reset (container restart) = a splice boundary
   max_explained_fraction: 0.9       # if splicing cuts >90% of the window ⇒ abort (forecast on residue is untrustworthy)

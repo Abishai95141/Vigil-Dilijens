@@ -112,7 +112,7 @@ func TestWarningsRegisterAudit(t *testing.T) {
 func TestTimelineProjectedLane(t *testing.T) {
 	res := cycleWithCandidate()
 	v := BuildWarnings("v", "r", wAt, true, res, 0, ClockHealthRow{Ready: true}, nil, nil)
-	tl := BuildTimeline(wAt, nil, nil, v.Warnings)
+	tl := BuildTimeline(wAt, nil, nil, v.Warnings, true)
 	if len(tl.Projected) != 1 {
 		t.Fatalf("one warning must yield one projected span: %+v", tl.Projected)
 	}

@@ -17,6 +17,10 @@ type Providers struct {
 	Coverage func() *CoverageView
 	// Findings returns the persisted findings feed (may be nil/empty).
 	Findings func(limit int) ([]store.FindingRow, error)
+	// FindingsStaleAfter is the freshness horizon for the findings feed (doc 14
+	// A7 store is durable): a row whose last match is older than this is served
+	// `stale` ("last seen Xago"), never as firing NOW. Zero ⇒ never stale.
+	FindingsStaleAfter time.Duration
 	// Unexplained returns the current unexplained-channel snapshot (doc 08);
 	// may be nil when the channel is not running.
 	Unexplained func() *UnexplainedView
@@ -79,7 +83,11 @@ func Register(mux *http.ServeMux, p Providers) {
 		if rows == nil {
 			rows = []store.FindingRow{}
 		}
-		writeJSON(w, findingsResponse{Findings: rows, GeneratedAt: timeNowUTC()})
+		now := timeNowUTC()
+		for i := range rows {
+			rows[i].MarkFreshness(now, p.FindingsStaleAfter) // serve-time: stale vs firing-now
+		}
+		writeJSON(w, findingsResponse{Findings: rows, GeneratedAt: now})
 	})
 
 	mux.HandleFunc("/api/unexplained", func(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +169,7 @@ func Register(mux *http.ServeMux, p Providers) {
 			return
 		}
 		if p.Timeline == nil {
-			writeJSON(w, &TimelineView{GeneratedAt: timeNowUTC(), Matches: []TimelineSpan{}, Unexplained: []TimelineSpan{}, Projected: []TimelineSpan{}, ProjectedNote: projectedLaneNote})
+			writeJSON(w, &TimelineView{GeneratedAt: timeNowUTC(), Matches: []TimelineSpan{}, Unexplained: []TimelineSpan{}, Projected: []TimelineSpan{}, ProjectedNote: projectedLaneOffNote})
 			return
 		}
 		v, err := p.Timeline()

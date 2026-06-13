@@ -61,6 +61,10 @@ func forecastLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 		"horizon_steps", p.Forecast.HorizonSteps)
 
 	var degradedSince time.Time
+	// Hold a marginal warning steady for ~3 cycles past its last real projection
+	// so the operator surface never FLICKERS (Project() stays pure per-cycle for
+	// the gate; this debounce lives only here, on the warm path, off the digest).
+	debouncer := vapi.NewWarningDebouncer(3 * p.Forecast.Interval.Duration())
 	ticker := time.NewTicker(p.Forecast.Interval.Duration())
 	defer ticker.Stop()
 	for {
@@ -118,12 +122,20 @@ func forecastLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 				return fin.matcher.BlastRadiusFor(phen, anchor, fin.selected, fin.topo, fin.evalWindow)
 			}
 		}
-		warningsView.Store(vapi.BuildWarnings(graphVersion, graphRelease, now, true,
-			res, fin.unbudgeted, ch, fin.inventory, atRisk))
+		view := vapi.BuildWarnings(graphVersion, graphRelease, now, true,
+			res, fin.unbudgeted, ch, fin.inventory, atRisk)
+		debouncer.Step(view, now) // stabilise: hold marginal warnings, age them out (no flicker)
+		warningsView.Store(view)
 
+		aging := 0
+		for i := range view.Warnings {
+			if view.Warnings[i].Aging {
+				aging++
+			}
+		}
 		logger.Info("forecast cycle",
 			"targets", len(fin.targets), "invocations", res.Invocations,
-			"warnings", len(res.Candidates), "silences", len(res.Silences),
-			"unbudgeted", fin.unbudgeted, "clock_ready", ch.Ready)
+			"warnings", len(view.Warnings), "fresh", len(res.Candidates), "aging", aging,
+			"silences", len(view.Silences), "unbudgeted", fin.unbudgeted, "clock_ready", ch.Ready)
 	}
 }

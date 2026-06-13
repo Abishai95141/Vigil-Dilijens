@@ -147,7 +147,7 @@ type ForecastParams struct {
 	Quantiles    []float64 `yaml:"quantiles"`      // requested levels, ascending, within the model head [0.1, 0.9]
 	MinContext   int       `yaml:"min_context"`    // minimum history points before a target may run
 	FlatEpsilon  float64   `yaml:"flat_epsilon"`   // stddev/|level| below which the series is flat ⇒ silence (§3.6)
-	MaxBandRatio float64   `yaml:"max_band_ratio"` // (latest−earliest)/time-to-cross beyond which ⇒ silence (§3.6)
+	MaxBandRatio float64   `yaml:"max_band_ratio"` // max near-cone width (earliest→point) as a FRACTION of the horizon ⇒ silence (§3.6; ABSOLUTE, never vs time-to-cross — so an imminent crossing is not suppressed)
 
 	// Decomposition (doc 09 §3.4 / M5, Phase 3): splice the forecast context at the
 	// most recent KNOWN event boundary — an operator context window (10) or an

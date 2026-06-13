@@ -40,6 +40,28 @@ type FindingRow struct {
 	Unobservable       []byte    `json:"-"`
 	FirstSeen          time.Time `json:"firstSeen"`
 	LastSeen           time.Time `json:"lastSeen"`
+
+	// Stale + LastSeenAgoSeconds are DERIVED at serve time (LastSeen vs the
+	// response stamp) — never stored, off the deterministic digest. The findings
+	// store is durable (it survives restarts, doc 14 A7), so a finding it still
+	// holds may have last matched long ago. A surface must not present that as
+	// firing NOW: a finding whose last match is older than the freshness horizon
+	// is marked stale ("last seen Xs ago"), distinguishing a live match from a
+	// resolved one (the audit's cross-surface-disagreement fix).
+	Stale              bool    `json:"stale"`
+	LastSeenAgoSeconds float64 `json:"lastSeenAgoSeconds"`
+}
+
+// MarkFreshness stamps the derived Stale / LastSeenAgoSeconds on a row relative
+// to asOf and the freshness horizon (typically a few evaluation ticks). Pure;
+// serve-time only — the stored row is never mutated.
+func (r *FindingRow) MarkFreshness(asOf time.Time, staleAfter time.Duration) {
+	ago := asOf.Sub(r.LastSeen)
+	if ago < 0 {
+		ago = 0
+	}
+	r.LastSeenAgoSeconds = ago.Seconds()
+	r.Stale = staleAfter > 0 && ago > staleAfter
 }
 
 const schema = `
