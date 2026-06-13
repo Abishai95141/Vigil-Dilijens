@@ -35,6 +35,11 @@ type CycleInput struct {
 	Cadence      time.Duration // wall-clock per forecast step (the scrape interval)
 	GraphVersion string
 	P            params.ForecastParams
+	// SplicePoints are operator context-window boundaries (deploy/config, 10 M6)
+	// that decomposition (09 M5 §3.4) may cut the context at. Auto-detected gauge
+	// resets need no input; this carries the operator-declared boundaries. Empty on
+	// the backtest path (the corpus has no operator windows).
+	SplicePoints []time.Time
 	// Trace records the raw clock trajectories per invocation — the backtest
 	// substrate (11 M5: band coverage needs the quantile VALUES, not just the
 	// crossing times). Off by default; the live path never pays for it.
@@ -57,6 +62,10 @@ type InvocationTrace struct {
 	Bands         [][]float64 `json:"bands"` // [level][step], request order
 	Silence       string      `json:"silence,omitempty"`
 	Candidate     *Candidate  `json:"candidate,omitempty"`
+	// Decomposition records the splice decisions (09 M5) — present whenever the
+	// runner ran decomposition, so the backtest can see whether a verdict came from
+	// a spliced or full window.
+	Decomposition *DecompositionRecord `json:"decomposition,omitempty"`
 }
 
 // CycleResult is one cycle's honest accounting: candidates, every silence
@@ -108,9 +117,15 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 			silence(t, SilenceShortContext)
 			continue
 		}
-		series := make([]float64, len(samples))
-		for i, s := range samples {
-			series[i] = s.Value
+		// Decomposition (09 M5 §3.4): splice the context at the most recent known
+		// event boundary (an operator window or an auto-detected reset) so the clock
+		// forecasts only the clean post-event remainder. No-op on a clean series; an
+		// abort (too little clean data) silences this target with its reason. The
+		// basis stamp is the LAST sample either way (splicing only trims the head).
+		series, decomp := Decompose(samples, in.SplicePoints, in.P)
+		if decomp.Aborted {
+			silence(t, SilenceDecomposeAbort)
+			continue
 		}
 		last := series[len(series)-1]
 
@@ -137,13 +152,17 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 		}
 		basis := samples[len(samples)-1].At
 		cand, reason := Project(t, fc, basis, in.Now, in.Cadence, len(series), in.GraphVersion, in.P)
+		if cand != nil && decomp.Spliced() {
+			d := decomp
+			cand.Decomp = &d
+		}
 		if in.Trace {
 			tr := InvocationTrace{
 				EntityCEI: t.CEIKey, Metric: t.Metric, StreamUID: t.StreamUID, BasisAt: basis.UTC(),
 				ContextPoints: len(series), BarValue: t.BarValue, Direction: t.Direction,
 				Quantiles: append([]float64{}, in.P.Quantiles...),
 				Point:     fc.Point, Bands: fc.Quantiles,
-				Silence: reason, Candidate: cand,
+				Silence: reason, Candidate: cand, Decomposition: &decomp,
 			}
 			res.Traces = append(res.Traces, tr)
 		}

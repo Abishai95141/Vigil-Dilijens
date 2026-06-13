@@ -59,11 +59,12 @@ func run(args []string, out *os.File) error {
 		// REAL forecast pipeline "as of" every recorded tick against a live
 		// clock, writing raw trajectories + verdicts as JSONL — the backtest
 		// substrate. PROJECTED output: never digest-bearing, verifies nothing.
-		fcMode    = fs.Bool("forecast", false, "FORECAST-EVALUATION pass: run the forecast pipeline at every tick; verifies nothing")
-		fcClockd  = fs.String("forecast-clockd", "127.0.0.1:50051", "clockd target for the forecast pass")
-		fcOut     = fs.String("forecast-out", "", "JSONL file for per-tick forecast events (required with -forecast)")
-		fcHorizon = fs.Int("forecast-horizon", 0, "override forecast.horizon_steps for the pass (0 = params default)")
-		fcBudget  = fs.Int("forecast-budget", 0, "override Tier-B ceiling for the pass (0 = params default)")
+		fcMode     = fs.Bool("forecast", false, "FORECAST-EVALUATION pass: run the forecast pipeline at every tick; verifies nothing")
+		fcClockd   = fs.String("forecast-clockd", "127.0.0.1:50051", "clockd target for the forecast pass")
+		fcOut      = fs.String("forecast-out", "", "JSONL file for per-tick forecast events (required with -forecast)")
+		fcHorizon  = fs.Int("forecast-horizon", 0, "override forecast.horizon_steps for the pass (0 = params default)")
+		fcBudget   = fs.Int("forecast-budget", 0, "override Tier-B ceiling for the pass (0 = params default)")
+		fcNoDecomp = fs.Bool("forecast-no-decompose", false, "disable 09 M5 decomposition for the pass (for the A/B exit-gate comparison)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -118,6 +119,9 @@ func run(args []string, out *os.File) error {
 		regime := p.Forecast
 		if *fcHorizon > 0 {
 			regime.HorizonSteps = *fcHorizon
+		}
+		if *fcNoDecomp {
+			regime.Decompose = false // A/B: the pre-09-M5 behaviour (full polluted window)
 		}
 		budget := p.Selection.TierBBudgetPerCycle
 		if *fcBudget > 0 {

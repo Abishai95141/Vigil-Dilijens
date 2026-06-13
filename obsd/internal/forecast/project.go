@@ -47,12 +47,14 @@ type Candidate struct {
 	TimeToCross         time.Duration `json:"timeToCross"`
 	Confidence          string        `json:"confidence"` // tight | moderate | wide
 
-	// Decomposition record (doc 09 §3.9) — v1: context length only; footprint
-	// fields arrive with Phase 3.
-	ContextPoints int           `json:"contextPoints"`
-	HorizonSteps  int           `json:"horizonSteps"`
-	Cadence       time.Duration `json:"cadence"`
-	Quantiles     []float64     `json:"quantiles"`
+	// Decomposition record (doc 09 §3.9). ContextPoints is the length the clock
+	// actually saw; Decomp (when non-nil) records the splices applied to reach it
+	// (09 M5 / Phase 3 — the footprint(s) removed and the explained fraction).
+	ContextPoints int                  `json:"contextPoints"`
+	HorizonSteps  int                  `json:"horizonSteps"`
+	Cadence       time.Duration        `json:"cadence"`
+	Quantiles     []float64            `json:"quantiles"`
+	Decomp        *DecompositionRecord `json:"decomposition,omitempty"`
 }
 
 // Silence is one target that produced NO candidate this cycle, with the
@@ -76,6 +78,7 @@ const (
 	SilenceNoCrossing      = "no-crossing-within-horizon"
 	SilenceBandTooWide     = "band-too-wide"
 	SilenceClockDegraded   = "clock-degraded"
+	SilenceDecomposeAbort  = "decomposition-aborted" // too much of the window was an event footprint (09 M5 §3.4)
 )
 
 // Project judges one clock answer against the target's bar (doc 09 §3.3 step

@@ -111,11 +111,31 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 - [x] `clockd` TimesFM behind `model` extra — pin package version AND checkpoint revision (doc 14 A15); gRPC serving wired (done in 09 M1; stale checkbox flipped)
 - [x] 🔒 **Exit:** backtest gate passes for every shipped warning class **before any operator sees a warning** (09 M3 ✓) · register audit clean (11 M6 ✓, live sweep + committed battery) · **seeded bad release caught at canary + rolled back in exercise (12 M5 ✓, live: finding-volume 1→19 tripped canary, re-pinned to v0.3.0, returned to 0)**
 
-## Phase 3 — Decomposition
+## Phase 3 — Decomposition  (STARTED 2026-06-13)
 
-- [ ] **09 M5** Context-window splice points; per-event-class footprint models (level shift, transient, ramp); abort criterion
-- [ ] **10 M6–M8** Context-window + configuration surfaces complete; chat complete; mobile/on-call
-- [ ] 🔒 **Exit:** decomposition improves backtest error without degrading band coverage
+- [x] **09 M5 — CORE built + adversarially clean** `internal/forecast/decompose.go`: splice the
+  forecast context at the most recent KNOWN event boundary — an operator context window
+  (10 M6, deploy/config) or an auto-detected gauge RESET (a container restart) — and forecast
+  only the clean post-event remainder (the fix for the 09 M3 sawtooth failure, recall 0.022).
+  Per-event-class footprint kinds (reset / level-shift); abort criterion (`decomposition-aborted`
+  silence when the clean remainder is too short or too much is explained). Wired into RunCycle
+  (between context-fetch and the clock), cmd/obsd (operator splices from the context-window
+  store, relevance-filtered), cmd/replay (`-forecast-no-decompose` A/B toggle). **No-op on a
+  clean series — the structural basis for the exit gate.** A RESET requires a sharp drop +
+  magnitude-vs-range floor + persistence (a transient GC/cache dip is NOT a restart). **12
+  golden tests** incl. the exit-gate-critical no-false-positive regressions (transient dip /
+  oscillating / near-zero noise → no splice) + sawtooth-splice + abort + determinism.
+  **Adversarial review (4 dims, refute-by-default): 6 defects found + ALL fixed** (critical:
+  false-splice on a transient dip; near-zero noise; double-record; max-explained=0 footgun;
+  Splice.At; unfiltered splice list). Off the deterministic digest (non-gating). Evidence:
+  `corpus/labels/decomposition-09M5.md`.
+- [~] 🔒 **Exit:** decomposition improves backtest error without degrading band coverage —
+  mechanism unit-PROVEN (sawtooth→clean ramp; clean→no-op); the LIVE A/B measurement (sawtooth
+  leak-oom recall with vs without decompose, via `replay -forecast` ±`-forecast-no-decompose`
+  + `harness.forecast_gate`) is the empirical certification (runbook in the evidence log). The
+  sawtooth/cycling class stays NON-operator-visible until that gate passes (the gate rule holds).
+- [ ] **10 M6–M8** Context-window + configuration surfaces COMPLETE; chat COMPLETE; mobile/on-call
+  (M6/M7 begun in Phase 2; web surfaces + richer NL remain)
 
 ## Phase 4 — Known-future covariates
 

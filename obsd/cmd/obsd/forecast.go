@@ -38,10 +38,16 @@ type forecastInputs struct {
 // against clockd lock-free, attach the AUTHORED blast radius, publish the
 // PROJECTED surface. Clock trouble = a visible degraded state (doc 14 A13),
 // never a fabricated candidate and never a stalled tick.
+// spliceRelevanceWindow bounds which operator context windows are passed to
+// decomposition each cycle: a window older than the context's reach (≈ maxContextFetch
+// × scrape interval ≈ 4.3h at dev cadence) can never fall inside the frozen series, so
+// 8h covers the context + horizon envelope with margin (09 M5 §3.4).
+const spliceRelevanceWindow = 8 * time.Hour
+
 func forecastLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 	in *atomic.Pointer[forecastInputs], ingestor *observe.Ingestor,
 	graphVersion, graphRelease string, p params.Params,
-	warningsView *atomic.Pointer[vapi.WarningsView]) {
+	warningsView *atomic.Pointer[vapi.WarningsView], cwStore *vapi.ContextWindowStore) {
 
 	cl, err := clock.New(p.Forecast.ClockdTarget)
 	if err != nil {
@@ -80,10 +86,22 @@ func forecastLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 		snap := forecast.Snapshot(ingestor, fin.targets, 1024)
 		gate.RUnlock()
 
+		var splices []time.Time
+		if cwStore != nil {
+			// Only splice points within the context window's reach matter (a window
+			// holds ~maxContextFetch points; older operator windows can never fall
+			// inside it). Filter to bound the per-cycle list + scan cost (09 M5 §3.4).
+			cutoff := now.Add(-spliceRelevanceWindow)
+			for _, sp := range cwStore.SplicePoints() {
+				if sp.After(cutoff) {
+					splices = append(splices, sp)
+				}
+			}
+		}
 		res := forecast.RunCycle(ctx, cl, forecast.CycleInput{
 			Now: now, Targets: fin.targets, Reader: snap,
 			Cadence: p.Scrape.Interval.Duration(), GraphVersion: graphVersion,
-			P: p.Forecast,
+			P: p.Forecast, SplicePoints: splices,
 		})
 		if !healthy || res.Degraded {
 			if degradedSince.IsZero() {

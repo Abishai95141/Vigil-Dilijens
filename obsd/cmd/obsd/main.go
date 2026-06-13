@@ -311,6 +311,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 
 	go scrapeLoop(ctx, logger, &gate, ingestor, kube.NewProxyFetcher(client), watcher, p.Scrape.Interval.Duration())
 
+	// The operator context-window store (10 M6) is shared: the API serves/accepts
+	// windows, and the forecast loop reads their boundaries as decomposition splice
+	// points (09 M5 §3.4). Created once so both see the same windows.
+	cwStore := vapi.NewContextWindowStore()
+
 	var providers *vapi.Providers
 	if apiEnabled {
 		providers = &vapi.Providers{
@@ -343,7 +348,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			}
 		}
 		// Context windows (doc 10 M6, begun) + register-guarded chat (10 M7, begun).
-		providers.ContextWindows = vapi.NewContextWindowStore()
+		providers.ContextWindows = cwStore
 		providers.Chat = func() *vapi.ChatSnapshot {
 			snap := &vapi.ChatSnapshot{CoverageNote: "see /api/coverage for the full visibility map"}
 			if cv := coverage.Load(); cv != nil {
@@ -388,7 +393,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView)
 	if p.Forecast.Enabled {
-		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView)
+		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
 	}
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())

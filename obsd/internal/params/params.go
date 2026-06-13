@@ -148,6 +148,14 @@ type ForecastParams struct {
 	MinContext   int       `yaml:"min_context"`    // minimum history points before a target may run
 	FlatEpsilon  float64   `yaml:"flat_epsilon"`   // stddev/|level| below which the series is flat ⇒ silence (§3.6)
 	MaxBandRatio float64   `yaml:"max_band_ratio"` // (latest−earliest)/time-to-cross beyond which ⇒ silence (§3.6)
+
+	// Decomposition (doc 09 §3.4 / M5, Phase 3): splice the forecast context at the
+	// most recent KNOWN event boundary — an operator context window (10) or an
+	// auto-detected gauge RESET (a container restart) — so the clock forecasts only
+	// the clean post-event remainder, not a polluted sawtooth (ramp→kill→reset).
+	Decompose            bool    `yaml:"decompose"`              // enable splice-point decomposition
+	ResetDropFraction    float64 `yaml:"reset_drop_fraction"`    // a step drop below (1−this)×prior ⇒ a reset boundary
+	MaxExplainedFraction float64 `yaml:"max_explained_fraction"` // if splicing removes more than this fraction of the window ⇒ abort (untrustworthy)
 }
 
 // Default returns the embedded dev-profile parameters, validated.
@@ -275,6 +283,15 @@ func (p Params) Validate() error {
 	}
 	if f.MaxBandRatio < 0 {
 		errs = append(errs, fmt.Errorf("forecast.max_band_ratio must be >= 0, got %v", f.MaxBandRatio))
+	}
+	if f.Decompose && (f.ResetDropFraction <= 0 || f.ResetDropFraction >= 1) {
+		errs = append(errs, fmt.Errorf("forecast.reset_drop_fraction must be in (0,1) when decompose is enabled, got %v", f.ResetDropFraction))
+	}
+	// MaxExplainedFraction in (0,1] when enabled: 0 would SILENTLY DISABLE the
+	// "too much explained" abort (the abort is the safety valve, doc 09 §3.4) — a
+	// footgun where the most-conservative-looking value turns the check off.
+	if f.Decompose && (f.MaxExplainedFraction <= 0 || f.MaxExplainedFraction > 1) {
+		errs = append(errs, fmt.Errorf("forecast.max_explained_fraction must be in (0,1] when decompose is enabled, got %v", f.MaxExplainedFraction))
 	}
 	for i, q := range f.Quantiles {
 		if q <= 0 || q >= 1 {
