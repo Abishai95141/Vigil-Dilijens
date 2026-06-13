@@ -6,6 +6,7 @@ import { ContextWindows } from "./surfaces/ContextWindows";
 import { CoverageReport } from "./surfaces/CoverageReport";
 import { EarlyWarnings } from "./surfaces/EarlyWarnings";
 import { InsightFeed } from "./surfaces/InsightFeed";
+import { OnCall } from "./surfaces/OnCall";
 import { Timeline } from "./surfaces/Timeline";
 import { TopologyView } from "./surfaces/TopologyView";
 import { UnexplainedSurface } from "./surfaces/UnexplainedSurface";
@@ -25,6 +26,7 @@ type Tab =
   | "coverage"
   | "context"
   | "ask"
+  | "oncall"
   | "config";
 
 const TABS: { id: Tab; label: string }[] = [
@@ -36,6 +38,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "coverage", label: "Coverage" },
   { id: "context", label: "Context windows" },
   { id: "ask", label: "Ask" },
+  { id: "oncall", label: "On-call" },
   { id: "config", label: "Config" },
 ];
 
@@ -109,6 +112,7 @@ export default function App() {
         {tab === "coverage" && <CoverageReport />}
         {tab === "context" && <ContextWindows />}
         {tab === "ask" && <Chat />}
+        {tab === "oncall" && <OnCall />}
         {tab === "config" && <Config />}
       </main>
     </div>

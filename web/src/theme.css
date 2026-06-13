@@ -471,3 +471,22 @@ code,
   border-radius: 2px;
   display: inline-block;
 }
+
+/* On-call / mobile (doc 10 §3.7 / M8): the constrained form factor. A phone-width
+   frame so parity of marks + registers on a narrow viewport is demonstrable on a
+   desktop too; on a real phone the frame is full-bleed (it never exceeds 100%). */
+.oncall-frame {
+  width: 100%;
+  max-width: 390px;
+  padding: var(--space-md);
+  border: var(--border-hairline);
+  border-radius: 22px;
+  background: var(--surface-1);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.12);
+}
+.oncall-band {
+  margin-top: 6px;
+}
+.oncall-frame .v-prov-card {
+  padding: var(--space-sm);
+}
