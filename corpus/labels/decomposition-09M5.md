@@ -126,3 +126,70 @@ Status: the splice MECHANISM is unit-proven (sawtooth→clean ramp; clean→no-o
 code is adversarially clean; the live A/B is the remaining empirical certification, after
 which the sawtooth/cycling class may become gate-eligible (it is NOT operator-visible
 until then — the gate rule holds).
+
+## FULL-GATE PASS — slow sawtooth (2026-06-13, real cluster + real TimesFM)
+
+The fast `leak-oom` corpus could only show decomposition DIRECTIONALLY (recall stayed 0 —
+the ~6-min clean ramp is too short for the clock to project the crossing). A SLOWER
+sawtooth was authored — `corpus/chaos/leak-saw-slow.yaml` (python heap allocator,
+192Mi limit → 182.4Mi bar, ~1Mi/7s ≈ 8.6Mi/min → ~18-min ramps so the spliced post-reset
+remainder is ~70 points and forecast-able). Captured live on kind: **3 OOM cycles / 233
+ticks / 1,878,809 readings**; byte-identity held (all 233 ticks replayed byte-identically,
+live seal digest `1a1c627329a95a63…` == replay digest). The leaker's working_set sawtooths
+3.8→191.7Mi with **3 resets and 15 above-bar samples** (scrape-visible crossings).
+
+A/B = `replay -forecast` ±`-forecast-no-decompose`, swept over `-forecast-min-context`
+{32,48,64} × `-forecast-horizon 60`, scored by `harness.forecast_gate`:
+
+| config | gate | band cov | events (recall) | in-band | false | crossings HIDDEN by silence |
+|---|---|---|---|---|---|---|
+| mc32, decompose OFF | **PASS** | 0.809 | 3/3 (1.00) | 63/63 | 0/63 | 95 |
+| **mc32, decompose ON** | **PASS** | 0.806 | 3/3 (1.00) | 107/107 | 0/63 | **16** |
+| mc48, decompose OFF | **PASS** | 0.824 | 3/3 (1.00) | 47/47 | 0/47 | — |
+| mc48, decompose ON | INSUFFICIENT | 0.823 | 2/2 (1.00) | 41/41 | 0/41 | — |
+
+**Certified config: `min_context=32` + decompose.** The 09 M3 sawtooth failure (recall
+0.022 — the clock projected the RESET) is fixed: recall **1.00 over 3 genuine OOM events**,
+each warned ≥8 steps (≥2 min) ahead, with calibrated bands (cov 0.806 ≈ nominal 0.8; not
+ceiling-inflated). The A/B shows decomposition's causal effect: crossing-bearing forecasts
+that HID a crossing fell **95→16 (−83%)**, ttc |frac| 0.133→0.100, leads [23,36,40]→[40,40,41]
+— **band coverage unchanged** (0.809→0.806). That is the doc-13 Phase-3 exit-gate property
+(improve the forecast WITHOUT degrading the band) with POSITIVE recall — the certification
+the fast corpus could not produce. The A/B is real: yes-32 carries **61 decomposition-aborted
+silences + 85 gauge-reset splices** (atIndex 76, explainedFrac 0.49–0.83); no-32 carries 0/0.
+NOTE: decompose+min_context interact — at mc48 decompose's aborts drop an event below the
+3-event floor (INSUFFICIENT, not a fail); the certified config is mc32.
+
+### Adversarial verification (5 refuters, refute-by-default) — 4 HOLD, 1 refuted
+
+A workflow of 5 independent skeptics attacked the PASS on the real data:
+
+- **bands too wide? HOLDS** (high). Warned-candidate crossing windows median 0.22 of horizon,
+  crossings centred (median 0.46 inside the window), q10/q90 ~8–15% of magnitude; coverage
+  0.806 sits at nominal, not pinned to the 0.98 ceiling. Caveat (low): 38% of in-band hits
+  use `latestBeyondHorizon`'s open upper bound (one-sided) — the 66 two-sided cases pass alone.
+- **events genuine? HOLDS** (high, severity none). 3 distinct physical OOM crossings,
+  re-derived from the parquet AND from the gate's own event-keying (identical ns set);
+  32-back at 111/114/112Mi ≪ 173.3Mi at-threshold band ⇒ all eligible, non-hovering;
+  max lead 40/41/40 steps. recall 1.00 is real, not an artifact.
+- **false-warning blind spot? REFUTED** (high, **MEDIUM**). The monotonic single-leaker corpus
+  has **zero near-miss episodes** (only the leaker ever enters its band, and it crosses within
+  1–3 steps every time); the false-warning branch was reached 0 times. **0-false is UNTESTED,
+  not earned** — a corpus coverage gap (not a code bug). → task #75: add a near-miss/decoy
+  episode before the cycling class goes operator-visible.
+- **A/B real / decompose non-harmful? HOLDS** (high, none). Files differ exactly as expected
+  (61 aborts + 85 reset-splices vs 0/0); both read the same metric + same 3 events; decompose
+  is non-harmful on EVERY gated metric and improves the ungated ttc + leads.
+- **overfit to config? HOLDS** (low). Verdict stable across decompose on/off and mc 32→48
+  (all PASS where event-count suffices). But narrow: ONE leaker, ONE pod, 3 cycles, no held-out
+  split; worst per-event lead drops to 3 steps at mc48 (recall keeps only best-lead); ttc|frac|
+  0.10→0.46 across config. → task #76: cross-config reporting, gate worst-lead, held-out split.
+
+**Disposition (honest partial coverage).** The decomposition machinery + the cycling class's
+CROSSING-ANTICIPATION (recall + calibrated bands) are CERTIFIED on real TimesFM. But because
+false-warning suppression was not exercised (no near-miss in this corpus), the cycling class is
+**held one more gate cycle — NOT yet flipped operator-visible** — pending task #75. The gated
+claim, stated precisely: *a 3-cycle sawtooth on a single leaking container is anticipated ≥2 min
+ahead with calibrated bands, mc32+decompose* — true and reproducible; cross-phenomenon
+generalisation and false-positive suppression are asserted, not yet demonstrated. (Forecasting
+remains flag-off by default regardless — doc 11 §3.5.)

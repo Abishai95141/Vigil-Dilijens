@@ -129,18 +129,27 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
   false-splice on a transient dip; near-zero noise; double-record; max-explained=0 footgun;
   Splice.At; unfiltered splice list). Off the deterministic digest (non-gating). Evidence:
   `corpus/labels/decomposition-09M5.md`.
-- [~] 🔒 **Exit:** decomposition improves backtest error without degrading band coverage —
-  **LIVE A/B RUN** (real leak-oom sawtooth, 3 OOM cycles / 81 ticks, real TimesFM): WITH
-  decompose 16 splices + 29 honest aborts → crossing-bearing forecasts that HID a crossing
-  **50→22 (−56%)**, wrong reset-projections **38→14 (−63%)**, band coverage **0.656→0.649
-  (unchanged)** — the exit-gate property directionally demonstrated. HONEST LIMIT: positive
-  recall stays 0 on this FAST-cycling workload (short clean ramps → the model aborts honestly
-  rather than warns — correct charter behaviour); the formal ≥3-class-eligible-event PASS needs
-  a SLOWER sawtooth (longer clean ramps) or more cycles. The class stays NON-operator-visible
-  until that fuller gate passes (the gate rule holds). Live calibration: reset "recovered"
-  threshold = 0.9×pre-drop level (a fast restart climbs above (1−frac)×prev within the window).
-- [ ] **10 M6–M8** Context-window + configuration surfaces COMPLETE; chat COMPLETE; mobile/on-call
-  (M6/M7 begun in Phase 2; web surfaces + richer NL remain)
+- [x] 🔒 **Exit: PASSED** — decomposition improves backtest error without degrading band coverage,
+  now with POSITIVE recall. Authored a SLOWER sawtooth (`corpus/chaos/leak-saw-slow.yaml`, ~18-min
+  ramps so the spliced post-reset remainder is forecast-able); captured live (3 OOM cycles / 233
+  ticks / 1.88M readings; byte-identity held, live digest == replay digest). A/B swept mc{32,48,64}
+  ×±decompose, real TimesFM. **Certified config mc32+decompose: GATE PASSED — band coverage 0.806,
+  3/3 OOM events warned ≥8 steps (≥2 min) ahead (recall 1.00), in-band 107/107, 0 false, crossings
+  hidden by silence 95→16 (−83%) vs OFF, band coverage 0.809→0.806 unchanged.** The 09 M3 sawtooth
+  failure (recall 0.022, projected the reset) is FIXED. mc32-OFF + mc48-OFF also PASS; mc48-ON is
+  INSUFFICIENT (decompose abort drops an event at higher min_context → certified config is mc32).
+  **Adversarial verification (5 refuters): 4 HOLD** (events genuine + distinct + eligible; bands
+  genuinely tight not edge-padded; A/B real — 61 aborts + 85 reset-splices vs 0/0; robust across
+  config) **+ 1 MEDIUM refutation honestly recorded:** 0-false is UNTESTED (monotonic corpus has no
+  near-miss → false-warning suppression never exercised). **Disposition: crossing-anticipation
+  CERTIFIED; the cycling class is HELD one more gate cycle — NOT operator-visible — pending a
+  near-miss corpus (task #75)** + gate-hardening (worst-lead, cross-config ranges, held-out split,
+  task #76). Evidence: `corpus/labels/decomposition-09M5.md`.
+- [~] **10 M6–M8** Context-window + config + chat WEB surfaces DONE this session (commit 7f1f422):
+  `web ContextWindows` (list + add + splice-eligibility), `web Config` + new `/api/config` endpoint
+  (runtime config + forecast-lane gate posture + decompose regime, honest), `web Chat` over the
+  register-guarded `/api/chat` (refusals first-class). All built + typechecked + lint-clean + tested;
+  backends live-verified on kind. **REMAINING: M8 mobile/on-call + richer chat NL intent.**
 
 ## Phase 4 — Known-future covariates
 
