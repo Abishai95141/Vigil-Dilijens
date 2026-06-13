@@ -1,0 +1,50 @@
+# Phase A flow-lane collector (doc 15 §4): one conntrack-exposer per node.
+# hostNetwork so /proc/net/nf_conntrack is the node's own table; obsd scrapes it via
+# the API-server node proxy at nodes/<name>:9111/proxy/conntrack (same mechanism as
+# node-exporter :9100). Privileged for v1 (reads the host conntrack table); a later
+# revision tightens to CAP_NET_ADMIN.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: conntrack-agent
+  namespace: monitoring
+  labels:
+    app: conntrack-agent
+spec:
+  selector:
+    matchLabels:
+      app: conntrack-agent
+  template:
+    metadata:
+      labels:
+        app: conntrack-agent
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      containers:
+        - name: agent
+          image: vigil-flow-agent:v0
+          imagePullPolicy: IfNotPresent
+          args: ["-addr=:9111"]
+          ports:
+            - name: conntrack
+              containerPort: 9111
+              hostPort: 9111
+          securityContext:
+            privileged: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 9111
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi

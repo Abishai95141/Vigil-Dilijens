@@ -33,6 +33,7 @@ func main() {
 	fs := flag.NewFlagSet("flowprobe", flag.ExitOnError)
 	nodes := fs.String("nodes", "vigil-control-plane,vigil-worker,vigil-worker2", "comma-separated kind node container names")
 	conntrackDir := fs.String("conntrack-dir", "", "offline: read conntrack-<node>.txt from this dir instead of docker exec")
+	source := fs.String("conntrack-source", "exec", "exec=docker exec (dev) | proxy=API-server node proxy to the conntrack-agent DaemonSet (production)")
 	snapshots := fs.Int("snapshots", 1, "number of conntrack snapshots to fold in")
 	interval := fs.Duration("interval", 15*time.Second, "delay between live snapshots")
 	relationPath := fs.String("relation", "ontology/graph/overlays/experimental/flow-relation-v0.yaml", "authored relation YAML")
@@ -57,7 +58,7 @@ func main() {
 		lastAt = time.Now().UTC()
 		for _, n := range nodeList {
 			n = strings.TrimSpace(n)
-			raw, err := readConntrack(n, *conntrackDir)
+			raw, err := readConntrack(n, *conntrackDir, *source)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "flowprobe: conntrack %s: %v\n", n, err)
 				continue
@@ -139,11 +140,19 @@ func write(out string, b []byte) {
 	fmt.Fprintf(os.Stderr, "wrote %s\n", out)
 }
 
-func readConntrack(node, dir string) ([]byte, error) {
+func readConntrack(node, dir, source string) ([]byte, error) {
 	if dir != "" {
 		return os.ReadFile(filepath.Join(dir, "conntrack-"+node+".txt"))
 	}
-	cmd := exec.Command("docker", "exec", node, "cat", "/proc/net/nf_conntrack")
+	var cmd *exec.Cmd
+	if source == "proxy" {
+		// Production path: the API-server node proxy to the conntrack-agent DaemonSet
+		// (the same nodes/<name>:<port>/proxy mechanism obsd uses for node-exporter).
+		cmd = exec.Command("kubectl", "get", "--raw", "/api/v1/nodes/"+node+":9111/proxy/conntrack")
+	} else {
+		// Dev path: docker exec into the kind node container.
+		cmd = exec.Command("docker", "exec", node, "cat", "/proc/net/nf_conntrack")
+	}
 	var buf, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &errb
 	if err := cmd.Run(); err != nil {

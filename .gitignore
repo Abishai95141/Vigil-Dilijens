@@ -34,3 +34,6 @@ node_modules/
 
 # NOTE: proto/gen/ is intentionally NOT ignored — generated code is committed
 # (techstack §2.6) so it stays greppable.
+
+# Phase A flow-lane collector build artifact (built via just/docker, not committed)
+deploy/flow/conntrack-agent
