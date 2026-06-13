@@ -19,61 +19,51 @@ type Symptom struct {
 	Detail     string // the measured basis
 }
 
-// Walk runs the reverse traversal: for each MEASURED degraded callee, it follows
-// the observed-flow edges BACKWARD (callee → its callers) under the validity
-// contract, pairing each caller as a downstream-impacted node per the AUTHORED
-// relation. It then names the most-upstream degraded node as a STRUCTURAL position.
+// Walk runs the reverse traversal and produces the surfaced chain. Its STRUCTURE
+// (root + impacted pairs) comes from StructuralCascade — the digest-bearing core,
+// a pure function of the captured flow topology — so the operator-facing chain can
+// never disagree with what a replay would reproduce. Walk only DECORATES that core
+// with surfacing metadata (labels, ports, conn-depth) that stays off the digest.
 //
-// The walk emits a JOIN — MEASURED edge + AUTHORED why + structural position —
-// never a fused causal sentence. Cause is not asserted; it is the authored note.
+// The output is a JOIN — MEASURED edge + AUTHORED why + structural position — never
+// a fused causal sentence. Cause is not asserted; it is the authored note.
 func Walk(g *Graph, symptoms []Symptom, rel Relation, at time.Time) Chain {
 	window := identity.TimeWindow{Start: at, End: at}
 
-	degraded := make(map[string]Symptom) // callee role key -> its degradation symptom
+	degradedSym := make(map[string]Symptom) // callee role key -> its degradation symptom
+	var degradedKeys []string
 	for _, s := range symptoms {
 		if s.Phenomenon == rel.Trigger {
-			degraded[s.Workload.Key()] = s
+			degradedSym[s.Workload.Key()] = s
+			degradedKeys = append(degradedKeys, s.Workload.Key())
 		}
 	}
 
-	edges := g.Edges() // canonically sorted
-	// inbound-clean: a degraded callee T is "clean" iff T does not itself call
-	// another degraded callee (no flow edge T->T2 with T2 degraded). The cleanest
-	// degraded node is the most upstream in the observed chain.
-	callsAnotherDegraded := make(map[string]bool)
-	for _, e := range edges {
-		if _, fromDeg := degraded[e.From.Key()]; fromDeg {
-			if _, toDeg := degraded[e.To.Key()]; toDeg {
-				callsAnotherDegraded[e.From.Key()] = true
-			}
-		}
+	// The digest-bearing structural cascade (store-only, replay-identical).
+	sc := StructuralCascade(g.Store(), degradedKeys, window)
+
+	// Metadata lookups for decoration (off-digest).
+	edgeByPair := make(map[[2]string]*FlowEdge)
+	labelByKey := make(map[string]string)
+	for _, e := range g.Edges() {
+		edgeByPair[[2]string{e.From.Key(), e.To.Key()}] = e
+		labelByKey[e.From.Key()] = e.FromLabel
+		labelByKey[e.To.Key()] = e.ToLabel
 	}
 
 	var links []Link
-	impactedCallers := make(map[string]map[string]bool) // calleeKey -> set of caller keys
-	calleeLabel := make(map[string]string)
-	for _, e := range edges {
-		ds, ok := degraded[e.To.Key()]
-		if !ok {
+	for _, sl := range sc.Links {
+		e := edgeByPair[[2]string{sl.Impacted, sl.Degraded}]
+		if e == nil {
 			continue
 		}
-		tr := g.Store().Traverse(EdgeTypeFlow, e.From.Key(), e.To.Key(), window)
-		if tr == identity.TraversalAbsent {
-			continue // the validity contract: an absent/expired edge is not a co-occurrence
-		}
-		_ = ds
-		calleeLabel[e.To.Key()] = e.ToLabel
-		if impactedCallers[e.To.Key()] == nil {
-			impactedCallers[e.To.Key()] = make(map[string]bool)
-		}
-		impactedCallers[e.To.Key()][e.From.Key()] = true
 		links = append(links, Link{
 			Impacted:      e.FromLabel,
 			Degraded:      e.ToLabel,
 			EdgeClass:     "MEASURED observed flow",
 			ServicePorts:  sortedPorts(e.ServicePorts),
 			ConnDepth:     e.ConnCount,
-			EdgeTraversal: tr.String(),
+			EdgeTraversal: sl.Traversal,
 			Why:           rel.Why,
 			WhyClass:      "AUTHORED",
 			Temporal:      rel.Temporal,
@@ -81,47 +71,14 @@ func Walk(g *Graph, symptoms []Symptom, rel Relation, at time.Time) Chain {
 			Version:       rel.Version,
 		})
 	}
-	sort.Slice(links, func(i, j int) bool {
-		if links[i].Degraded != links[j].Degraded {
-			return links[i].Degraded < links[j].Degraded
-		}
-		return links[i].Impacted < links[j].Impacted
-	})
 
-	// Root = inbound-clean degraded callee reaching the most impacted callers.
-	// Deterministic tie-break by callee key.
-	rootKey, rootLabel, best := "", "", -1
-	keys := make([]string, 0, len(impactedCallers))
-	for k := range impactedCallers {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		if callsAnotherDegraded[k] {
-			continue // not the most-upstream degraded node
-		}
-		if n := len(impactedCallers[k]); n > best {
-			best, rootKey, rootLabel = n, k, calleeLabel[k]
-		}
-	}
-	if rootKey == "" { // no inbound-clean node (cyclic); fall back to max impacted
-		for _, k := range keys {
-			if n := len(impactedCallers[k]); n > best {
-				best, rootKey, rootLabel = n, k, calleeLabel[k]
-			}
-		}
-	}
-
-	// Symptoms out: the MEASURED degraded seeds, plus the DERIVED downstream-impact
+	// Symptoms out: the MEASURED degraded seeds, then the DERIVED downstream-impact
 	// callers (each backed by a MEASURED observed-flow edge).
 	var symOut []SymptomOut
-	dkeys := make([]string, 0, len(degraded))
-	for k := range degraded {
-		dkeys = append(dkeys, k)
-	}
+	dkeys := append([]string(nil), degradedKeys...)
 	sort.Strings(dkeys)
 	for _, k := range dkeys {
-		s := degraded[k]
+		s := degradedSym[k]
 		symOut = append(symOut, SymptomOut{Workload: s.Label, Phenomenon: s.Phenomenon, Class: s.Class, Detail: s.Detail})
 	}
 	for _, l := range links {
@@ -135,7 +92,7 @@ func Walk(g *Graph, symptoms []Symptom, rel Relation, at time.Time) Chain {
 
 	cov := g.Coverage()
 	return Chain{
-		MostUpstreamDegradedNode: rootLabel,
+		MostUpstreamDegradedNode: labelByKey[sc.Root],
 		NodeClass:                "MEASURED (structural fan-in over observed-flow edges)",
 		NodeBasis:                "degraded callee reaching the most impacted callers, with no inbound flow-symptom edge",
 		Links:                    links,
