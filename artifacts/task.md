@@ -157,6 +157,21 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
   with "2 at risk per the graph") render with parity on the narrow frame (M8 exit gate MET).**
   Residual enhancement (not a milestone): richer chat NL intent.
 
+- [x] **Robustness & value hardening (audit-driven, commit `8eaac3d`)** — a 6-dimension
+  adversarial "would an SRE trust + adopt this?" audit (workflow) found real issues; the
+  HIGH + key MED ones fixed + tested + LIVE-verified (`just ci` -race · clockd · harness ·
+  web all green; 09 M5 gate RE-PASSES). **Forecast FLICKER → `WarningDebouncer`** (holds a
+  marginal warning ~3 cycles as `aging`, off the digest; drops `already-crossed` at once);
+  **band-too-wide IMMINENCE BIAS → absolute near-cone-vs-horizon test** (was ÷time-to-cross,
+  silencing imminent crossings; re-gate: band-too-wide 13→0, warned-continuity 87%→97%);
+  **STALE findings → serve-time `stale`/`lastSeenAgo`** (a resolved match no longer reads
+  as firing-now); **Timeline "Phase 2" note → conditional**; chat citation + silence
+  grouping (MED). **Live E2E (mc32, the flicker-prone config): flips=1 — the card appeared
+  once and held stable ~17 cycles through the crossing, then cleared (PROJECTED→MEASURED
+  handoff); stale flipped False→True on plateau.** Evidence: `corpus/labels/robustness-audit.md`.
+  Deferred (tracked #82/#83): leak-plateau level-check (governance), Timeline PROJECTED-lane
+  render, criticality ranking, unexplained drill-down, slow-clockd surface decoupling.
+
 ## Phase 4 — Known-future covariates
 
 - [ ] **09 M6** Covariate admission (scheduled jobs, calendars); per-class lift evaluation
