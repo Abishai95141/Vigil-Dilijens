@@ -327,8 +327,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// v2 flow lane (doc 15): observe conntrack from the per-node agent and assert
 	// observed-flow edges into the same EdgeStore the tick snapshots. Off by default;
 	// non-gating; the matcher does not yet walk flow edges, so the digest is unchanged.
+	// The eval tick additionally composes a WARM-PATH cross-service cascade (phase D)
+	// from this tick's findings + the flow edges + the authored relation — off the
+	// digest, gated (logged, not yet a deterministic finding).
+	var flowRel flow.Relation
 	if flowEnabled {
-		go runFlowCollector(ctx, logger, &gate, client, edges, clusterID, flowInterval)
+		if r, rerr := flow.LoadRelation(flowRelationPath); rerr != nil {
+			logger.Warn("flow: authored relation unavailable; cross-service cascade off", "path", flowRelationPath, "err", rerr)
+		} else {
+			flowRel = r
+		}
+		go runFlowCollector(ctx, logger, &gate, client, store, edges, clusterID, flowInterval)
 	}
 
 	// The operator context-window store (10 M6) is shared: the API serves/accepts
@@ -446,10 +455,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/context-windows /api/chat /api/config")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
+	var crossSvcView atomic.Pointer[flow.Chain] // v2 cross-service cascade (warm path, gated)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets,
-		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView)
+		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView)
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
 	}
@@ -501,7 +511,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView]) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain]) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -628,6 +638,40 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// separate visual language added in M5/Phase 2).
 			if insightsView != nil {
 				insightsView.Store(vapi.BuildInsights(clusterID, graphVersion, graphRelease, now, findings, cascades))
+			}
+			// v2 cross-service cascade (doc 15 phase D), WARM PATH — off the digest,
+			// gated (logged, not yet a deterministic finding). Map this tick's findings
+			// to their workloads (the MEASURED degraded callees) via the identity store,
+			// then walk the observed-flow edges to the impacted callers + join the one
+			// AUTHORED relation. A pure consequence of (findings, captured flow topology),
+			// so it never perturbs the tick or the replay digest.
+			if flowEnabled && crossSvcView != nil {
+				var degraded []flow.DegradedWorkload
+				seen := map[string]bool{}
+				for i := range findings {
+					rec, ok := store.Get(findings[i].EntityCEI)
+					if !ok || rec.RoleCEI.RoleKey == "" {
+						continue
+					}
+					k := rec.RoleCEI.Key()
+					if seen[k] {
+						continue
+					}
+					seen[k] = true
+					degraded = append(degraded, flow.DegradedWorkload{
+						CEI: rec.RoleCEI, Label: flow.RoleLabel(rec.RoleCEI),
+						Phenomenon: findings[i].Phenomenon, Detail: findings[i].Phenomenon + " finding (degraded callee)",
+					})
+				}
+				if chain, ok := flow.CrossServiceChain(edges, degraded, flowRel, evalWindow, now); ok {
+					c := chain
+					crossSvcView.Store(&c)
+					logger.Info("cross-service cascade (v2 phase D, warm path)",
+						"root", chain.MostUpstreamDegradedNode, "impacted_callers", len(chain.Links),
+						"why_class", "AUTHORED", "edge_class", "MEASURED observed flow")
+				} else {
+					crossSvcView.Store(nil)
+				}
 			}
 			if topoView != nil {
 				// Predictive marks (10 M5): the warned set from the latest

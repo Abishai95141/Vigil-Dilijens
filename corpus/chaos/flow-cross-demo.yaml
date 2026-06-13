@@ -1,0 +1,84 @@
+# v2 cross-service cascade live demo (doc 15 phase D). A leaky CALLEE that keeps
+# serving while it leaks (so MEMORY_LEAK fires on the rising-slope-at-threshold
+# BEFORE OOM, with its listener still up) + a CALLER that holds a persistent TCP
+# connection to it (so conntrack carries a caller->callee flow edge). Result: obsd
+# fires MEMORY_LEAK on the callee (degraded), and the warm-path cross-service cascade
+# walks the observed-flow edge to name the callee as the degraded root and the caller
+# as downstream-impacted — all on a slow leak that does NOT instantly crash the callee.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaky-callee
+  namespace: chaos
+  labels: { app: leaky-callee }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: leaky-callee } }
+  template:
+    metadata: { labels: { app: leaky-callee } }
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              buf = [bytearray(1024*1024) for _ in range(60)]   # prefill ~60Mi
+              def leak():
+                  while True:
+                      buf.append(bytearray(1024*1024)); time.sleep(4)   # +1Mi / 4s
+              threading.Thread(target=leak, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 8080)); s.listen(32)
+              held = []
+              while True:
+                  c, _ = s.accept(); held.append(c)   # keep caller connections open
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits:   { cpu: 100m, memory: 96Mi }   # bar = 0.95*96 = ~91Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: leaky-callee
+  namespace: chaos
+spec:
+  selector: { app: leaky-callee }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flow-caller
+  namespace: chaos
+  labels: { app: flow-caller }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: flow-caller } }
+  template:
+    metadata: { labels: { app: flow-caller } }
+    spec:
+      containers:
+        - name: client
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, time
+              while True:
+                  try:
+                      s = socket.create_connection(("leaky-callee.chaos.svc.cluster.local", 8080), timeout=5)
+                      while True:
+                          time.sleep(8); s.sendall(b"ping")   # hold + keepalive
+                  except Exception:
+                      time.sleep(3)
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 32Mi }

@@ -12,6 +12,14 @@ type PodInfo struct {
 	IP        string
 	Workload  string // the role name, e.g. "productcatalogservice"
 	UID       string
+
+	// RoleKind/RoleKey, when set, are the AUTHORITATIVE role-CEI coordinates from
+	// the identity layer (e.g. Kind="Deployment", RoleKey="Deployment/foo"). obsd
+	// populates them so flow edges carry the SAME role CEIs the identity layer
+	// minted — the join key findings map to. Empty (spike/flowprobe, no identity
+	// layer) falls back to the standalone derivation (Kind="Pod").
+	RoleKind string
+	RoleKey  string
 }
 
 // Resolver maps a conntrack IP to a CEI, reusing the identity CEI scheme. Edges in
@@ -52,6 +60,14 @@ func (r *Resolver) Role(ip string) (identity.CEI, bool) {
 	if !ok {
 		return identity.CEI{}, false
 	}
+	// Authoritative identity-layer role CEI when obsd supplied it (no mis-join).
+	if p.RoleKind != "" && p.RoleKey != "" {
+		return identity.CEI{
+			Layer: identity.LayerRole, Cluster: r.cluster,
+			Namespace: p.Namespace, Kind: p.RoleKind, RoleKey: p.RoleKey,
+		}, true
+	}
+	// Standalone fallback (spike/flowprobe, no identity layer).
 	return identity.CEI{
 		Layer: identity.LayerRole, Cluster: r.cluster,
 		Namespace: p.Namespace, Kind: "Pod", RoleKey: "Deployment/" + p.Workload,

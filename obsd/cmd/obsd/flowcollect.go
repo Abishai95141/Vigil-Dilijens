@@ -22,6 +22,11 @@ import (
 // cadence is correct. NOT added to params.requiredEdgeBudgets — flow is OPTIONAL.
 const flowEdgeBudget = 90 * time.Second
 
+// flowRelationPath is the experimental AUTHORED cross-service relation surfaced
+// verbatim by the warm-path cross-service cascade (doc 15 phase C/D). It lives
+// outside the production overlay glob; obsd reads it directly only when --flow-enabled.
+const flowRelationPath = "ontology/graph/overlays/experimental/flow-relation-v0.yaml"
+
 // runFlowCollector is the Phase B flow lane (doc 15): it observes conntrack from the
 // per-node conntrack-agent (via the API-server node proxy, the same path obsd uses
 // for cAdvisor/node-exporter), reconstructs workload→workload "observed flow" edges
@@ -36,7 +41,7 @@ const flowEdgeBudget = 90 * time.Second
 // the topology capture for replay, but contribute nothing to fingerprints/findings/
 // cascades. Determinism therefore holds: a flow-on bundle replays byte-identically.
 func runFlowCollector(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
-	client kubernetes.Interface, edges *identity.EdgeStore, clusterID string, interval time.Duration) {
+	client kubernetes.Interface, store *identity.Store, edges *identity.EdgeStore, clusterID string, interval time.Duration) {
 
 	fetcher := kube.NewProxyFetcher(client)
 	t := time.NewTicker(interval)
@@ -47,15 +52,15 @@ func runFlowCollector(ctx context.Context, logger *slog.Logger, gate *sync.RWMut
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			collectFlowOnce(ctx, logger, gate, client, fetcher, edges, clusterID)
+			collectFlowOnce(ctx, logger, gate, client, store, fetcher, edges, clusterID)
 		}
 	}
 }
 
 func collectFlowOnce(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
-	client kubernetes.Interface, fetcher *kube.ProxyFetcher, edges *identity.EdgeStore, clusterID string) {
+	client kubernetes.Interface, store *identity.Store, fetcher *kube.ProxyFetcher, edges *identity.EdgeStore, clusterID string) {
 
-	pods, err := listPodInfo(ctx, client)
+	pods, err := listPodInfo(ctx, client, store, clusterID)
 	if err != nil {
 		logger.Warn("flow collector: list pods", "err", err)
 		return
@@ -90,8 +95,12 @@ func collectFlowOnce(ctx context.Context, logger *slog.Logger, gate *sync.RWMute
 		"snat_masked", cov.SnatMaskedFlows, "unresolved", cov.UnresolvedFlows)
 }
 
-// listPodInfo builds the IP→workload snapshot the resolver maps against.
-func listPodInfo(ctx context.Context, client kubernetes.Interface) ([]flow.PodInfo, error) {
+// listPodInfo builds the IP→workload snapshot the resolver maps against. It stamps
+// each pod with the AUTHORITATIVE identity-layer role CEI (Kind/RoleKey) when the
+// identity store has observed it, so flow edges carry the exact role CEIs findings
+// map to (no cross-service mis-join). Where the store has not seen the pod yet, it
+// falls back to the standalone workload derivation.
+func listPodInfo(ctx context.Context, client kubernetes.Interface, store *identity.Store, clusterID string) ([]flow.PodInfo, error) {
 	pl, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
@@ -102,10 +111,16 @@ func listPodInfo(ctx context.Context, client kubernetes.Interface) ([]flow.PodIn
 		if p.Status.PodIP == "" {
 			continue
 		}
-		out = append(out, flow.PodInfo{
+		pi := flow.PodInfo{
 			Namespace: p.Namespace, Name: p.Name, IP: p.Status.PodIP,
 			UID: string(p.UID), Workload: podWorkload(p.Labels, p.OwnerReferences, p.Name),
-		})
+		}
+		instKey := identity.CEI{Layer: identity.LayerInstance, Cluster: clusterID,
+			Namespace: p.Namespace, Kind: "Pod", Name: p.Name, UID: string(p.UID)}.Key()
+		if rec, ok := store.Get(instKey); ok && rec.RoleCEI.RoleKey != "" {
+			pi.RoleKind, pi.RoleKey = rec.RoleCEI.Kind, rec.RoleCEI.RoleKey
+		}
+		out = append(out, pi)
 	}
 	return out, nil
 }
