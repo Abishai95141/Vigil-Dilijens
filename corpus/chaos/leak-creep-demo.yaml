@@ -1,0 +1,57 @@
+# End-to-end DEMO creep (watch -> detect -> forecast -> reason). A clean, monotonic
+# memory creep on a bar-bearing container — the gate-PASSED working-set->OOM creep
+# class (09 M3) — so the forecast lane may be enabled for it (the gate rule is met).
+#
+# Unlike the sawtooth (leak-saw-slow), this NEVER OOMs: it creeps to a HELD plateau
+# just ABOVE its 0.95x320Mi = 304Mi bar (~312Mi, below the 320Mi limit) and holds.
+# That gives a CLEAN rising ramp the clock projects across the bar (PROJECTED/soon),
+# then a real bar crossing that fires PHEN_MEMORY_LEAK (MEASURED/now) and HOLDS
+# above-bar for minutes — the "soon" validated into the "now" on the same entity.
+# tmpfs-backed (emptyDir medium:Memory) so the pages charge the cgroup working_set
+# without a process-heap OOM (mirrors leak-plateau, the gate corpus).
+#
+# Timing (15s scrape; demo runs the lane with min_context=32 / interval=30s): fast
+# prefill to ~120Mi, then ~15Mi/min creep -> crosses 304Mi at ramp-minute ~12, so
+# with a 32-point (8-min) context the clock can project the crossing ~min 9-11
+# (minutes of lead), then plateau. The leak finding fires at the crossing.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaky-worker
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: leaky-worker}
+  template:
+    metadata:
+      labels: {app: leaky-worker}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vigil-worker
+      containers:
+        - name: worker
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "prefill ~120Mi, creep 3Mi/12s (~15Mi/min) to ~312Mi (above the 304Mi bar), plateau";
+              i=0;
+              while [ $i -lt 40 ]; do dd if=/dev/zero of=/leak/p$i bs=1M count=3 2>/dev/null; i=$((i+1)); done;
+              while [ $i -lt 104 ]; do dd if=/dev/zero of=/leak/p$i bs=1M count=3 2>/dev/null; i=$((i+1)); sleep 26; done;
+              echo "plateau above bar"; sleep 100000
+          volumeMounts:
+            - {name: leak, mountPath: /leak}
+          resources:
+            requests: {memory: "64Mi", cpu: "20m"}
+            # The declared limit IS the bar (borrowed normativity): the leak bar
+            # resolves to 0.95 x 320Mi = 304Mi; we plateau ~312Mi, below the limit.
+            limits: {memory: "320Mi", cpu: "200m"}
+      volumes:
+        - name: leak
+          emptyDir: {medium: Memory, sizeLimit: 360Mi}
