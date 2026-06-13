@@ -65,6 +65,7 @@ func run(args []string, out *os.File) error {
 		fcHorizon  = fs.Int("forecast-horizon", 0, "override forecast.horizon_steps for the pass (0 = params default)")
 		fcBudget   = fs.Int("forecast-budget", 0, "override Tier-B ceiling for the pass (0 = params default)")
 		fcNoDecomp = fs.Bool("forecast-no-decompose", false, "disable 09 M5 decomposition for the pass (for the A/B exit-gate comparison)")
+		fcMinCtx   = fs.Int("forecast-min-context", 0, "override forecast.min_context for the pass (0 = params default; lower for short-cycle classes)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -122,6 +123,9 @@ func run(args []string, out *os.File) error {
 		}
 		if *fcNoDecomp {
 			regime.Decompose = false // A/B: the pre-09-M5 behaviour (full polluted window)
+		}
+		if *fcMinCtx > 0 {
+			regime.MinContext = *fcMinCtx // per-class context (short-cycle classes need less)
 		}
 		budget := p.Selection.TierBBudgetPerCycle
 		if *fcBudget > 0 {

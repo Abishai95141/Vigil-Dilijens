@@ -70,7 +70,41 @@ Determinism: decomposition runs only on the warm/forecast path; it never touches
 deterministic detection digest (verified by the digest covering only fps/findings/
 cascades/unexplained — the forecast cycle is consumed by the events sink, never digested).
 
-## Live A/B exit-gate measurement — PENDING (runbook)
+## Live A/B exit-gate measurement — RUN (2026-06-13, real cluster + real TimesFM)
+
+Captured the sawtooth live: `leak-oom` (96Mi limit, bar 91.2Mi), 3 OOM cycles / 81 ticks /
+651,569 samples; byte-identity held in every replay pass. The leaker's working_set is ONE
+continuous CEI showing the sawtooth (resets `95→8`, `94→0`, `95→0`). A/B via
+`replay -forecast` ±`-forecast-no-decompose`, scored by `harness.forecast_gate`
+(`-forecast-min-context 16`, fitting the ~25-point fast cycles — doc 09 §3.7 per-class
+envelope; the production 64 spans multiple cycles so the spliced remainder always aborts):
+
+| | crossing-bearing forecasts that HID a crossing | wrong "no-crossing" (reset) projections | band coverage |
+|---|---|---|---|
+| WITHOUT decompose | 50 | 38 | 0.656 (38,953 pts) |
+| WITH decompose    | **22** (−56%) | **14** (−63%) | **0.649** (38,038 pts) |
+
+WITH decompose: **16 splices + 29 `decomposition-aborted` honest silences** on the sawtooth
+(0 splices when disabled — the A/B flag is real). **Result: decomposition cut the
+forecaster's wrong-projection error by >half — fewer forecasts hid a real crossing, far
+fewer wrongly projected the reset — WITHOUT degrading band coverage (0.656→0.649, within
+noise).** That is the doc-13 Phase-3 exit-gate property directionally demonstrated on the
+real model.
+
+**Honest limits of this capture:** positive event recall stays 0.00 both ways — on this
+FAST-cycling workload the spliced clean ramp (~16–25 pts) is short, so the model honestly
+ABORTS (or says band-too-wide) rather than warning; that is correct charter behaviour
+(silence beats a wrong reset-projection), but it does not yet produce a POSITIVE warning.
+The formal gate verdict is INSUFFICIENT (2 class-eligible crossing events < the 3 required —
+a corpus-size limit, not a decomposition defect). FULL CERTIFICATION (positive recall +
+≥3 events) needs either a SLOWER sawtooth (longer clean ramps so a spliced ramp is forecast-
+able) or more cycles — the live calibration finding. A new calibration was made FROM this
+live data: the reset "recovered" threshold is `0.9×prev` (not `(1−frac)×prev`) — a fast-
+ramping restart climbs above `(1−frac)×prev` within the persistence window but stays below
+`0.9×prev`, so the looser threshold mistook real restarts for transient dips (0 splices →
+16 splices after the fix). Pinned by `TestDecomposeFastRampingRestartDetected`.
+
+## Live A/B exit-gate measurement — original runbook (re-run / extend)
 
 The empirical certification (sawtooth recall improves; plateau band coverage unchanged)
 requires the kind cluster + clockd + a multi-cycle sawtooth capture. Procedure:

@@ -121,13 +121,19 @@ func Decompose(samples []qss.Sample, splicePoints []time.Time, p params.Forecast
 	return values(remainder), rec
 }
 
-// resetPersistWindow is how many points after a drop must stay low to confirm a
+// resetPersistWindow is how many points after a drop are inspected to confirm a
 // RESET rather than a transient dip. A container restart drops the cgroup gauge and
 // then ramps SLOWLY from the new baseline; a GC free / cache eviction / single noisy
-// scrape drops and RECOVERS within a scrape or two. Requiring the level to stay down
-// for a few points distinguishes them — without it, a transient dip on a CLEAN series
-// would falsely splice and degrade band coverage (the exit gate forbids this).
+// scrape drops and RECOVERS toward the pre-drop level within a scrape or two.
 const resetPersistWindow = 4
+
+// resetRecoverFraction is the "recovered" threshold: a TRANSIENT dip climbs back to
+// at least this fraction of the PRE-DROP level within resetPersistWindow points; a
+// RESTART ramps from baseline and stays well below it (even a fast leaker reaches only
+// a fraction of its former peak in a minute). Comparing against the pre-drop level
+// (not (1−frac)×it) is what distinguishes a fast-ramping restart — whose post-reset
+// climb can exceed (1−frac)×prev quickly — from a true recovery near the old peak.
+const resetRecoverFraction = 0.9
 
 // lastReset returns the index (and time) of the LAST confirmed gauge RESET (a
 // container restart). A reset must satisfy ALL of:
@@ -177,8 +183,8 @@ func lastReset(samples []qss.Sample, frac float64) (int, time.Time) {
 			end = len(samples)
 		}
 		for j := i + 1; j < end; j++ {
-			if samples[j].Value >= prev*(1-frac) {
-				recovered = true
+			if samples[j].Value >= prev*resetRecoverFraction {
+				recovered = true // climbed back NEAR the pre-drop level ⇒ a transient dip, not a restart
 				break
 			}
 		}

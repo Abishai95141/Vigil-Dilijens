@@ -144,6 +144,20 @@ func TestDecomposeTransientDipNoSplice(t *testing.T) {
 	}
 }
 
+// TestDecomposeFastRampingRestartDetected pins the live-discovered calibration: a
+// container that restarts and then ramps FAST (a leaker reaching a fraction of its
+// former peak within a minute) is still a RESET — its post-restart climb exceeds
+// (1−frac)×prev quickly but stays below the pre-drop level, so it must be spliced.
+func TestDecomposeFastRampingRestartDetected(t *testing.T) {
+	// peak ramp to 96, OOM, then a fast post-restart ramp that climbs back toward 95.
+	vals := rampVals(1, 1, 96)
+	vals = append(vals, 10, 25, 40, 55, 64, 70, 76, 80, 84, 88, 92, 95)
+	_, rec := Decompose(samplesFrom(vals), nil, decParams())
+	if !rec.Spliced() || rec.Splices[0].Kind != FootprintReset || rec.Splices[0].AtIndex != 96 {
+		t.Fatalf("a fast-ramping restart (96→10→fast-climb) must be spliced at the reset, got %+v", rec.Splices)
+	}
+}
+
 // TestDecomposeOscillatingNoSplice: a healthy oscillating gauge (cache churn — rises,
 // dips, recovers, repeats) must NOT splice (every dip recovers).
 func TestDecomposeOscillatingNoSplice(t *testing.T) {
