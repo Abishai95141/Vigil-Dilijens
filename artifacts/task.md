@@ -130,10 +130,15 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
   Splice.At; unfiltered splice list). Off the deterministic digest (non-gating). Evidence:
   `corpus/labels/decomposition-09M5.md`.
 - [~] 🔒 **Exit:** decomposition improves backtest error without degrading band coverage —
-  mechanism unit-PROVEN (sawtooth→clean ramp; clean→no-op); the LIVE A/B measurement (sawtooth
-  leak-oom recall with vs without decompose, via `replay -forecast` ±`-forecast-no-decompose`
-  + `harness.forecast_gate`) is the empirical certification (runbook in the evidence log). The
-  sawtooth/cycling class stays NON-operator-visible until that gate passes (the gate rule holds).
+  **LIVE A/B RUN** (real leak-oom sawtooth, 3 OOM cycles / 81 ticks, real TimesFM): WITH
+  decompose 16 splices + 29 honest aborts → crossing-bearing forecasts that HID a crossing
+  **50→22 (−56%)**, wrong reset-projections **38→14 (−63%)**, band coverage **0.656→0.649
+  (unchanged)** — the exit-gate property directionally demonstrated. HONEST LIMIT: positive
+  recall stays 0 on this FAST-cycling workload (short clean ramps → the model aborts honestly
+  rather than warns — correct charter behaviour); the formal ≥3-class-eligible-event PASS needs
+  a SLOWER sawtooth (longer clean ramps) or more cycles. The class stays NON-operator-visible
+  until that fuller gate passes (the gate rule holds). Live calibration: reset "recovered"
+  threshold = 0.9×pre-drop level (a fast restart climbs above (1−frac)×prev within the window).
 - [ ] **10 M6–M8** Context-window + configuration surfaces COMPLETE; chat COMPLETE; mobile/on-call
   (M6/M7 begun in Phase 2; web surfaces + richer NL remain)
 
