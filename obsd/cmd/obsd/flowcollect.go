@@ -1,0 +1,147 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
+)
+
+// flowEdgeBudget is the staleness budget for observed-flow edges (doc 15 §3.4).
+// Long-lived gRPC channels sit at ttl ~86400s; the suspicion judgement here is only
+// about a snapshot's own window, so a budget generous relative to the collector
+// cadence is correct. NOT added to params.requiredEdgeBudgets — flow is OPTIONAL.
+const flowEdgeBudget = 90 * time.Second
+
+// runFlowCollector is the Phase B flow lane (doc 15): it observes conntrack from the
+// per-node conntrack-agent (via the API-server node proxy, the same path obsd uses
+// for cAdvisor/node-exporter), reconstructs workload→workload "observed flow" edges
+// (internal/flow), and asserts them as EdgeType("flow") into the SAME production
+// EdgeStore the eval tick snapshots. It writes under the store gate, exactly like
+// the scrape loop, so a tick reads a whole flow snapshot, never a half-applied one.
+//
+// Non-gating + non-disruption: this runs ONLY when --flow-enabled. With it off, no
+// flow edges exist, no flow budget is pinned, and obsd is byte-identical to before.
+// Even with it on, the matcher does not yet walk flow edges (no flow span until the
+// governance release lands), so the per-tick DIGEST is unchanged — flow edges ride
+// the topology capture for replay, but contribute nothing to fingerprints/findings/
+// cascades. Determinism therefore holds: a flow-on bundle replays byte-identically.
+func runFlowCollector(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
+	client kubernetes.Interface, edges *identity.EdgeStore, clusterID string, interval time.Duration) {
+
+	fetcher := kube.NewProxyFetcher(client)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	logger.Info("flow collector started (doc 15 phase A/B)", "interval", interval.String(), "agent_port", "9111")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			collectFlowOnce(ctx, logger, gate, client, fetcher, edges, clusterID)
+		}
+	}
+}
+
+func collectFlowOnce(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
+	client kubernetes.Interface, fetcher *kube.ProxyFetcher, edges *identity.EdgeStore, clusterID string) {
+
+	pods, err := listPodInfo(ctx, client)
+	if err != nil {
+		logger.Warn("flow collector: list pods", "err", err)
+		return
+	}
+	nodes, err := listNodeNames(ctx, client)
+	if err != nil {
+		logger.Warn("flow collector: list nodes", "err", err)
+		return
+	}
+	now := time.Now().UTC()
+	g := flow.NewGraph(flow.NewResolver(clusterID, pods), time.Now)
+	for _, node := range nodes {
+		raw, _, err := fetcher.NodeMetrics(ctx, node+":9111", "conntrack")
+		if err != nil {
+			logger.Warn("flow collector: fetch conntrack", "node", node, "err", err)
+			continue
+		}
+		conns, _ := flow.ParseConntrack(bytes.NewReader(raw))
+		g.Observe(conns, now)
+	}
+	// Assert observed-flow edges into the production EdgeStore under the write lock,
+	// so an eval tick snapshots a whole flow update (never a partial one).
+	flowEdges := g.Edges()
+	gate.Lock()
+	for _, e := range flowEdges {
+		edges.Assert(flow.EdgeTypeFlow, e.From, e.To, now)
+	}
+	gate.Unlock()
+	cov := g.Coverage()
+	logger.Info("flow collector: observed-flow edges asserted",
+		"edges", len(flowEdges), "resolvable", cov.ResolvableFlows,
+		"snat_masked", cov.SnatMaskedFlows, "unresolved", cov.UnresolvedFlows)
+}
+
+// listPodInfo builds the IP→workload snapshot the resolver maps against.
+func listPodInfo(ctx context.Context, client kubernetes.Interface) ([]flow.PodInfo, error) {
+	pl, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]flow.PodInfo, 0, len(pl.Items))
+	for i := range pl.Items {
+		p := &pl.Items[i]
+		if p.Status.PodIP == "" {
+			continue
+		}
+		out = append(out, flow.PodInfo{
+			Namespace: p.Namespace, Name: p.Name, IP: p.Status.PodIP,
+			UID: string(p.UID), Workload: podWorkload(p.Labels, p.OwnerReferences, p.Name),
+		})
+	}
+	return out, nil
+}
+
+func listNodeNames(ctx context.Context, client kubernetes.Interface) ([]string, error) {
+	nl, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(nl.Items))
+	for i := range nl.Items {
+		out = append(out, nl.Items[i].Name)
+	}
+	return out, nil
+}
+
+// podWorkload derives the durable workload (role) name: app label, then the
+// ReplicaSet owner with its pod-template-hash stripped, then the pod-name prefix.
+func podWorkload(labels map[string]string, owners []metav1.OwnerReference, name string) string {
+	if v := labels["app"]; v != "" {
+		return v
+	}
+	if v := labels["app.kubernetes.io/name"]; v != "" {
+		return v
+	}
+	for _, o := range owners {
+		if o.Kind == "ReplicaSet" {
+			return stripLastSeg(o.Name)
+		}
+	}
+	return stripLastSeg(stripLastSeg(name))
+}
+
+func stripLastSeg(s string) string {
+	if i := strings.LastIndex(s, "-"); i > 0 {
+		return s[:i]
+	}
+	return s
+}

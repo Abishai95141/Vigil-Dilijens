@@ -29,6 +29,7 @@ import (
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
@@ -81,6 +82,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		dbPath       = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
 		apiEnabled   = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
 		dumpBindings = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
+		flowEnabled  = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
+		flowInterval = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -142,7 +145,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval)
 }
 
 // sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
@@ -151,7 +154,7 @@ const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -174,6 +177,13 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	budgets := make(map[identity.EdgeType]time.Duration, len(p.Identity.EdgeBudgets))
 	for k, v := range p.Identity.EdgeBudgets {
 		budgets[identity.EdgeType(k)] = v.Duration()
+	}
+	// v2 (doc 15 §3.4): the OPTIONAL flow edge budget is injected here, never via
+	// params.requiredEdgeBudgets (which validates the fixed structural set every
+	// cluster must have). When --flow-enabled it is pinned into the EdgeStore and the
+	// replay manifest; when off, flow is wholly absent and obsd is unchanged.
+	if flowEnabled {
+		budgets[flow.EdgeTypeFlow] = flowEdgeBudget
 	}
 	edges := identity.NewEdgeStore(time.Now, budgets, p.Identity.RetractedEdgeHorizon.Duration())
 
@@ -234,6 +244,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			stringBudgets := make(map[string]time.Duration, len(p.Identity.EdgeBudgets))
 			for k, v := range p.Identity.EdgeBudgets {
 				stringBudgets[k] = v.Duration()
+			}
+			if flowEnabled { // pin the flow budget so replay walks under the capture's budget
+				stringBudgets[string(flow.EdgeTypeFlow)] = flowEdgeBudget
 			}
 			if err := c.WriteManifest(replay.Manifest{
 				CreatedAt: time.Now().UTC(), ClusterID: clusterID,
@@ -310,6 +323,13 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var gate sync.RWMutex
 
 	go scrapeLoop(ctx, logger, &gate, ingestor, kube.NewProxyFetcher(client), watcher, p.Scrape.Interval.Duration())
+
+	// v2 flow lane (doc 15): observe conntrack from the per-node agent and assert
+	// observed-flow edges into the same EdgeStore the tick snapshots. Off by default;
+	// non-gating; the matcher does not yet walk flow edges, so the digest is unchanged.
+	if flowEnabled {
+		go runFlowCollector(ctx, logger, &gate, client, edges, clusterID, flowInterval)
+	}
 
 	// The operator context-window store (10 M6) is shared: the API serves/accepts
 	// windows, and the forecast loop reads their boundaries as decomposition splice
