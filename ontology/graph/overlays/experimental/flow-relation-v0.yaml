@@ -1,0 +1,20 @@
+# EXPERIMENTAL — not loaded by the production overlay loader (it lives under
+# overlays/experimental/, outside the production glob, and the production schema
+# discards phenomenon_relation blocks). Parsed ONLY by internal/flow's own reader
+# for the hypothesis-validation spike. ONE authored cross-service relation.
+#
+# Provenance: AUTHORED. Surfaced verbatim, attributed. It is the only "why" the
+# spike emits; the flow edge it travels is MEASURED, never fused into it.
+phenomenon_relation:
+  trigger: PHEN_UPSTREAM_DEGRADATION      # the observed-flow CALLEE whose own signal degrades (T0)
+  downstream: PHEN_DOWNSTREAM_IMPACT      # its direct CALLERS, impacted along the call edge (T0+)
+  role: downstream
+  temporal_order: "T0->T0+"
+  why: >-
+    Per the curated ontology: a service whose own latency or error signal degrades
+    propagates impact to its direct callers along the observed call edge; the
+    caller's degradation is downstream of, not independent of, the callee's. Impact
+    travels against the call arrow (callee -> caller).
+  author: vigil-engineering
+  version: v0
+  status: experimental
