@@ -145,11 +145,17 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
   CERTIFIED; the cycling class is HELD one more gate cycle — NOT operator-visible — pending a
   near-miss corpus (task #75)** + gate-hardening (worst-lead, cross-config ranges, held-out split,
   task #76). Evidence: `corpus/labels/decomposition-09M5.md`.
-- [~] **10 M6–M8** Context-window + config + chat WEB surfaces DONE this session (commit 7f1f422):
-  `web ContextWindows` (list + add + splice-eligibility), `web Config` + new `/api/config` endpoint
-  (runtime config + forecast-lane gate posture + decompose regime, honest), `web Chat` over the
-  register-guarded `/api/chat` (refusals first-class). All built + typechecked + lint-clean + tested;
-  backends live-verified on kind. **REMAINING: M8 mobile/on-call + richer chat NL intent.**
+- [x] **10 M6–M8 COMPLETE** — the doc-10 surfacing series (M1–M8) is done. M6/M7 WEB
+  (commit 7f1f422): `web ContextWindows` (list + add + splice-eligibility), `web Config` + new
+  `/api/config` endpoint (runtime config + forecast-lane gate posture + decompose regime, honest),
+  `web Chat` over the register-guarded `/api/chat` (refusals first-class). **M8 mobile/on-call**
+  (commit f06a3b1): a constrained 390px frame delivering the critical few — PROJECTED early warnings
+  (band always, modal phrasing) + highest-impact MEASURED findings (cascade/at-risk/full-quality),
+  each carrying the SAME ProvChip mark + SAME register (re-laid-out, never re-worded); minimum-useful
+  mobile band rendering. All built + typechecked + lint-clean + tested; **live-verified on kind via
+  the preview render — both class marks (violet PROJECTED off-gate card + green MEASURED leak card
+  with "2 at risk per the graph") render with parity on the narrow frame (M8 exit gate MET).**
+  Residual enhancement (not a milestone): richer chat NL intent.
 
 ## Phase 4 — Known-future covariates
 
