@@ -68,18 +68,19 @@ func run(args []string, stdout, stderr *os.File) error {
 	fs := flag.NewFlagSet("obsd", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		paramsPath  = fs.String("params", "", "path to a parameters override file (overlays embedded dev defaults)")
-		showVersion = fs.Bool("version", false, "print version and exit")
-		logFormat   = fs.String("log", "json", "log format: json|text")
-		kubeconfig  = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
-		inCluster   = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
-		healthAddr  = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
-		ontology    = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
-		overlays    = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
-		releases    = fs.String("releases", "ontology/releases", "graph release manifests (doc 12 M1); the loaded graph self-identifies its release by hash")
-		storeDir    = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
-		dbPath      = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
-		apiEnabled  = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
+		paramsPath   = fs.String("params", "", "path to a parameters override file (overlays embedded dev defaults)")
+		showVersion  = fs.Bool("version", false, "print version and exit")
+		logFormat    = fs.String("log", "json", "log format: json|text")
+		kubeconfig   = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
+		inCluster    = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
+		healthAddr   = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
+		ontology     = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
+		overlays     = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
+		releases     = fs.String("releases", "ontology/releases", "graph release manifests (doc 12 M1); the loaded graph self-identifies its release by hash")
+		storeDir     = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
+		dbPath       = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
+		apiEnabled   = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
+		dumpBindings = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -141,7 +142,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings)
 }
 
 // sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
@@ -150,7 +151,7 @@ const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -341,12 +342,49 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				return vapi.BuildTimeline(time.Now().UTC(), fr, ur, pw), nil
 			}
 		}
-		logger.Info("operator surfacing API enabled (doc 10 M1–M5)",
-			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings")
+		// Context windows (doc 10 M6, begun) + register-guarded chat (10 M7, begun).
+		providers.ContextWindows = vapi.NewContextWindowStore()
+		providers.Chat = func() *vapi.ChatSnapshot {
+			snap := &vapi.ChatSnapshot{CoverageNote: "see /api/coverage for the full visibility map"}
+			if cv := coverage.Load(); cv != nil {
+				snap.GraphRelease = cv.GraphRelease
+				snap.CoverageTierA = cv.Summary.TierA
+				snap.CoverageNote = fmt.Sprintf("%d full / %d partial / %d none phenomena observable.",
+					cv.Summary.PhenomenaFull, cv.Summary.PhenomenaPartial, cv.Summary.PhenomenaNone)
+			}
+			if iv := insightsView.Load(); iv != nil {
+				for _, f := range iv.Findings {
+					m := vapi.ChatMatch{Phenomenon: f.Phenomenon, Label: f.Label, Entity: f.Name, Quality: f.Quality}
+					if len(f.Members) > 0 {
+						m.AuthoredNote = f.Members[0].Note
+					}
+					// NOTE: blast radius is the DOWNSTREAM (T0+) at-risk set, not
+					// precursors (T0-) — feeding it into Precursors would mislabel a
+					// consequence as a cause. Precursors are an authored T0- relation
+					// the insight card does not currently carry; left empty (the chat
+					// then cites the authored note, never an invented precursor).
+					snap.Matches = append(snap.Matches, m)
+				}
+			}
+			if wv := warningsView.Load(); wv != nil && wv.Enabled {
+				for _, c := range wv.Warnings {
+					snap.Warnings = append(snap.Warnings, vapi.ChatWarning{
+						Entity: c.Name, Metric: c.Metric, EarliestAt: c.EarliestAt, LatestAt: c.LatestAt,
+						OpenEnded: c.LatestBeyondHorizon, Confidence: c.Confidence,
+					})
+				}
+			}
+			if uv := unexpView.Load(); uv != nil {
+				snap.UnexplainedN = len(uv.OpenCards)
+			}
+			return snap
+		}
+		logger.Info("operator surfacing API enabled (doc 10 M1–M7-begun)",
+			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/context-windows /api/chat")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
-		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams},
+		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView)
 	if p.Forecast.Enabled {

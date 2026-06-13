@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"log/slog"
+	"os"
 	"sort"
 	"time"
 
@@ -41,6 +43,13 @@ type binder struct {
 	lastObs     *binding.ObservabilityReport
 	lastFinger  string
 	ticksUnseen int
+
+	// dumpPath, when set (--dump-bindings), writes the compiled binding.Result as
+	// JSON once after the first successful compile — the governance migration
+	// exercise (doc 12 M4) reads two such dumps (one per release) and diffs them
+	// with the real governance.BindingDiff. Off the hot path; written once.
+	dumpPath string
+	dumped   bool
 
 	matcher *detect.Matcher        // the phenomenon matcher (doc 07 M1–M3), built once
 	tracker *detect.CascadeTracker // windowed cascade memory (doc 07 M5); reset = process restart
@@ -193,7 +202,28 @@ func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecor
 		"default_bars", res.Coverage.DefaultBars,
 		"qa_verified", qa.Verified, "qa_suspect", qa.Suspect, "qa_failed", qa.Failed,
 	)
+	b.maybeDumpBindings(res)
 	return snapshot()
+}
+
+// maybeDumpBindings writes the compiled binding.Result as JSON once (--dump-bindings),
+// for the governance migration exercise (doc 12 M4). It is best-effort and off the
+// hot path: a write failure is logged, never fatal.
+func (b *binder) maybeDumpBindings(res *binding.Result) {
+	if b.dumpPath == "" || b.dumped {
+		return
+	}
+	raw, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		b.logger.Warn("dump-bindings: marshal failed", "err", err)
+		return
+	}
+	if err := os.WriteFile(b.dumpPath, raw, 0o644); err != nil {
+		b.logger.Warn("dump-bindings: write failed", "path", b.dumpPath, "err", err)
+		return
+	}
+	b.dumped = true
+	b.logger.Info("dump-bindings: wrote bound customer graph", "path", b.dumpPath, "bindings", len(res.Bindings))
 }
 
 // evidenceAdapter exposes the observation layer to binding QA (the interface is

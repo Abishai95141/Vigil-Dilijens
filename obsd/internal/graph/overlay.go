@@ -162,6 +162,26 @@ type OverlayInfo struct {
 // no overlay files, yields the base graph unchanged (gaps then stay visible to
 // graphlint — never silently defaulted).
 func LoadWithOverlays(kgPath, overlayDir string) (*Graph, error) {
+	if overlayDir == "" {
+		return loadWithOverlayPaths(kgPath, nil)
+	}
+	paths, err := overlayPaths(overlayDir)
+	if err != nil {
+		return nil, err
+	}
+	return loadWithOverlayPaths(kgPath, paths)
+}
+
+// LoadWithOverlayPaths loads the base graph and merges EXACTLY the overlay files
+// named in `paths`, in the order given (callers pass sorted-path order to match the
+// cut-time hash). Unlike LoadWithOverlays (which globs the whole dir), this lets a
+// caller reconstruct a HISTORICAL release from just the overlays its manifest pins —
+// essential for governance, which must load arbitrary past releases to diff them.
+func LoadWithOverlayPaths(kgPath string, paths []string) (*Graph, error) {
+	return loadWithOverlayPaths(kgPath, paths)
+}
+
+func loadWithOverlayPaths(kgPath string, paths []string) (*Graph, error) {
 	raw, err := os.ReadFile(kgPath)
 	if err != nil {
 		return nil, fmt.Errorf("read ontology graph %q: %w", kgPath, err)
@@ -170,13 +190,8 @@ func LoadWithOverlays(kgPath, overlayDir string) (*Graph, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse ontology graph %q: %w", kgPath, err)
 	}
-	if overlayDir == "" {
+	if len(paths) == 0 {
 		return g, nil
-	}
-
-	paths, err := overlayPaths(overlayDir)
-	if err != nil {
-		return nil, err
 	}
 	hash := sha256.New()
 	hash.Write(raw)
@@ -191,9 +206,7 @@ func LoadWithOverlays(kgPath, overlayDir string) (*Graph, error) {
 		hash.Write([]byte{0})
 		hash.Write(oraw)
 	}
-	if len(paths) > 0 {
-		g.Version = "sha256:" + hex.EncodeToString(hash.Sum(nil))
-	}
+	g.Version = "sha256:" + hex.EncodeToString(hash.Sum(nil))
 	if err := g.finalizeOverlays(); err != nil {
 		return nil, err
 	}

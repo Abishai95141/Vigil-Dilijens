@@ -86,6 +86,34 @@ func LoadRelease(manifestPath, baseDir string) (*Graph, *Release, error) {
 	return g, r, nil
 }
 
+// LoadReleasePinned loads EXACTLY the overlays the manifest names (resolved under
+// the base graph's overlays dir, in sorted-path order to match the cut-time hash),
+// so a HISTORICAL release reconstructs byte-identically to its pin even after the
+// overlays directory has moved forward with newer releases. LoadRelease globs the
+// whole overlays dir and therefore only reconstructs the LATEST release; governance
+// (doc 12 M2/M4) must load arbitrary PAST releases to diff and migrate between them.
+func LoadReleasePinned(manifestPath, baseDir string) (*Graph, *Release, error) {
+	r, err := LoadReleaseManifest(manifestPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	overlayDir := filepath.Join(baseDir, filepath.Dir(r.Base), "overlays")
+	paths := make([]string, 0, len(r.Overlays))
+	for _, name := range r.Overlays {
+		paths = append(paths, filepath.Join(overlayDir, name))
+	}
+	sort.Strings(paths) // match overlayPaths() cut-time order (same dir ⇒ filename order)
+	g, err := LoadWithOverlayPaths(filepath.Join(baseDir, r.Base), paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := g.VerifyRelease(r); err != nil {
+		return nil, nil, err
+	}
+	g.Release = r.Name
+	return g, r, nil
+}
+
 // IdentifyRelease returns the release NAME whose pin matches the graph's content
 // hash, or "" if the loaded graph corresponds to no committed release (a dev
 // build). It never fails the load — identity is informational here; the

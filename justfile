@@ -104,6 +104,22 @@ graphlint *ARGS:
 graph-version:
     @go run ./tools/graphlint -print-version
 
+# --- Graph governance (doc 12) ----------------------------------------------
+
+# Derive the change class + diff between two releases (doc 12 M2).
+govern-classify from to:
+    @go run ./obsd/cmd/govern classify --from {{from}} --to {{to}}
+
+# Run the review workflow over a proposal; non-zero exit if blocked (doc 12 M2/M3).
+# Pass a harness ledger (just govern-gates) to make the regression gates binding.
+govern-verify proposal ledger="":
+    @go run ./obsd/cmd/govern verify --proposal {{proposal}} {{ if ledger != "" { "--ledger " + ledger } else { "" } }}
+
+# Run the harness-wired regression gates for a proposal, writing the ledger the
+# workflow consumes (doc 12 M3). The harness BLOCKS on any failed gate; never approves.
+govern-gates proposal out:
+    cd harness && uv run --extra analytics python -m harness.governance run-gates --proposal {{proposal}} --out {{out}}
+
 # Fail if generated code is stale relative to the protos (CI guard).
 gen-check:
     #!/usr/bin/env bash

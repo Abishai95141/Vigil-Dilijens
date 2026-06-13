@@ -29,6 +29,12 @@ type Providers struct {
 	// Warnings returns the early-warning surface snapshot (doc 10 M5 / 09 M4);
 	// may be nil — the handler then serves the honest OFF state (gate rule).
 	Warnings func() *WarningsView
+	// ContextWindows is the operator-defined context-window store (doc 10 M6,
+	// begun); nil = the routes are not mounted.
+	ContextWindows *ContextWindowStore
+	// Chat returns the read-only snapshot the register-guarded chat answers from
+	// (doc 10 M7, begun); nil = the route is not mounted.
+	Chat func() *ChatSnapshot
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -162,7 +168,66 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		writeJSON(w, v)
 	})
+
+	// Context windows (doc 10 M6, begun): GET lists; POST defines an operator
+	// window (which doubles as a Phase-3 splice point). Off the deterministic path.
+	if p.ContextWindows != nil {
+		mux.HandleFunc("/api/context-windows", func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				list := p.ContextWindows.List()
+				splice := 0
+				for _, cw := range list {
+					if cw.SpliceEligible {
+						splice++
+					}
+				}
+				writeJSON(w, &ContextWindowsView{
+					GeneratedAt: timeNowUTC(), Windows: list, SpliceCount: splice,
+					Note: "operator annotations (no provenance class); splice-eligible windows are Phase-3 forecasting context boundaries (doc 09 §3.4)",
+				})
+			case http.MethodPost:
+				var cw ContextWindow
+				if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody)).Decode(&cw); err != nil {
+					http.Error(w, "bad context window: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+				stored, err := p.ContextWindows.Add(cw, timeNowUTC())
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				writeJSON(w, stored)
+			default:
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			}
+		})
+	}
+
+	// Chat (doc 10 M7, begun): POST a question; the register-guarded responder
+	// answers ONLY from the structured snapshot, refusing any draft that would
+	// cross the charter.
+	if p.Chat != nil {
+		mux.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			var req struct {
+				Question string `json:"question"`
+			}
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody)).Decode(&req); err != nil {
+				http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, AnswerChat(req.Question, p.Chat()))
+		})
+	}
 }
+
+// maxRequestBody caps POST bodies on the operator surface (context windows + chat) —
+// these are small operator inputs; a large body is rejected rather than buffered.
+const maxRequestBody = 64 * 1024
 
 type findingsResponse struct {
 	GeneratedAt time.Time          `json:"generatedAt"`
