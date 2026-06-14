@@ -66,6 +66,17 @@ type Params struct {
 	Binding     BindingParams     `yaml:"binding"`
 	Selection   SelectionParams   `yaml:"selection"`
 	Forecast    ForecastParams    `yaml:"forecast"`
+	Incident    IncidentParams    `yaml:"incident"`
+}
+
+// IncidentParams — v3 T-B (doc 03 + 14 §1.4): the durable cross-run phenomenon
+// memory. Both are off the deterministic path (surfacing-only). ResolveGap MUST
+// exceed the evaluation tick so a continuous condition's consecutive ticks are not
+// counted as recurrences; WindowBucket is the week-scale baseline window the
+// incident key buckets on.
+type IncidentParams struct {
+	ResolveGap   Duration `yaml:"resolve_gap"`
+	WindowBucket Duration `yaml:"window_bucket"`
 }
 
 // ScrapeParams — doc 14 §5/A1.
@@ -232,6 +243,14 @@ func (p Params) Validate() error {
 	positive("store.segment_duration", p.Store.SegmentDuration)
 	positive("store.fsync_batch", p.Store.FsyncBatch)
 	positive("binding.bar_reresolution", p.Binding.BarReResolution)
+	positive("incident.resolve_gap", p.Incident.ResolveGap)
+	positive("incident.window_bucket", p.Incident.WindowBucket)
+	// The resolve gap must exceed the evaluation tick, or a continuous condition's
+	// consecutive ticks would each be counted as a separate recurrence (doc 14 §1.4).
+	if p.Incident.ResolveGap.Duration() > 0 && p.Incident.ResolveGap.Duration() <= p.Observation.EvaluationTick.Duration() {
+		errs = append(errs, fmt.Errorf("incident.resolve_gap (%s) must exceed observation.evaluation_tick (%s)",
+			p.Incident.ResolveGap, p.Observation.EvaluationTick))
+	}
 
 	for _, edge := range requiredEdgeBudgets {
 		d, ok := p.Identity.EdgeBudgets[edge]

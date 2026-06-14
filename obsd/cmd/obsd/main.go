@@ -86,6 +86,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		flowEnabled  = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
 		flowInterval = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
 		mcpEnabled   = fs.Bool("mcp-enabled", false, "v3 T-A: serve the read-only MCP harness at /mcp (coverage, silence-ledger, warnings, emit_advisory). OFF by default; off = byte-identical to no MCP. Auth is a separate (later) track — do not expose this beyond an isolated cluster.")
+		incidentMem  = fs.Bool("incident-memory", false, "v3 T-B: fold findings into the durable cross-run incident memory (recurrence counting). OFF by default; off = byte-identical. Needs --db (a persistent store) to survive restarts.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -147,7 +148,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -162,7 +163,7 @@ const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -499,11 +500,19 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		logger.Info("MCP read-only harness enabled (v3 T-A)", "route", "/mcp",
 			"tools", "get_coverage get_silence_ledger get_warnings emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
 	}
+	if incidentMemory {
+		if findingsStore == nil {
+			logger.Warn("incident memory enabled but no --db: incidents fold in memory and reset on restart (pass --db for the durable cross-run memory)")
+		} else {
+			logger.Info("incident memory enabled (v3 T-B)", "resolve_gap", p.Incident.ResolveGap.String(), "window_bucket", p.Incident.WindowBucket.String())
+		}
+	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers, mcpHandler)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
-		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView)
+		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView,
+		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration())
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
 	}
@@ -559,7 +568,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain]) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -804,6 +813,23 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 				// 10 M4) survives restarts and shows closed aging spans.
 				if err := findingsStore.UpsertUnexplained(now, unexp); err != nil {
 					logger.Error("findings store: unexplained upsert failed (surfacing only)", "err", err)
+				}
+				// v3 T-B: fold this tick's findings into the durable incident memory
+				// (cross-run phenomenon recurrence). Keyed on the DURABLE role CEI
+				// (doc 03) — when the role is unresolvable the incident is recorded
+				// under the instance key, stated, never assigned a guessed role.
+				// Off the deterministic path; the replay digest never reads it.
+				if incidentEnabled {
+					for i := range findings {
+						roleKey, unresolved := findings[i].EntityCEI, true
+						if rec, ok := store.Get(findings[i].EntityCEI); ok && rec.RoleCEI.RoleKey != "" {
+							roleKey, unresolved = rec.RoleCEI.Key(), false
+						}
+						if err := findingsStore.UpsertIncident(now, findings[i].Phenomenon, roleKey,
+							unresolved, graphVersion, incidentResolveGap, incidentBucket); err != nil {
+							logger.Error("incident memory: upsert failed (surfacing only)", "err", err)
+						}
+					}
 				}
 			}
 			if capture != nil {
