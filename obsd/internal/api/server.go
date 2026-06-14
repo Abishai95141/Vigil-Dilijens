@@ -42,6 +42,9 @@ type Providers struct {
 	// Config returns the runtime configuration view (doc 10 M6) — cadences,
 	// graph release, and the forecast lane's gate posture; nil = not mounted.
 	Config func() *ConfigView
+	// CrossService returns the v2 cross-service cascade surface (doc 15 phase F);
+	// nil = the route serves the honest OFF state (flow discovery not running).
+	CrossService func() *CrossServiceView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -159,6 +162,23 @@ func Register(mux *http.ServeMux, p Providers) {
 				Enabled: false, GateNote: gateNote,
 				Warnings: []WarningCard{}, Silences: []SilenceRow{},
 			}
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/cross-service", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *CrossServiceView
+		if p.CrossService != nil {
+			v = p.CrossService()
+		}
+		if v == nil {
+			// Flow discovery is not running: state WHY the lane is dark (the gate
+			// rule's honesty), never imply there is no cross-service dependency.
+			v = BuildCrossService(nil, false, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

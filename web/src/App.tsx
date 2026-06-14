@@ -4,6 +4,7 @@ import { Chat } from "./surfaces/Chat";
 import { Config } from "./surfaces/Config";
 import { ContextWindows } from "./surfaces/ContextWindows";
 import { CoverageReport } from "./surfaces/CoverageReport";
+import { CrossService } from "./surfaces/CrossService";
 import { EarlyWarnings } from "./surfaces/EarlyWarnings";
 import { InsightFeed } from "./surfaces/InsightFeed";
 import { OnCall } from "./surfaces/OnCall";
@@ -21,6 +22,7 @@ type Tab =
   | "insights"
   | "warnings"
   | "topology"
+  | "crossservice"
   | "unexplained"
   | "timeline"
   | "coverage"
@@ -33,6 +35,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "insights", label: "Insights" },
   { id: "warnings", label: "Early warnings" },
   { id: "topology", label: "Topology" },
+  { id: "crossservice", label: "Cross-service" },
   { id: "unexplained", label: "Unexplained" },
   { id: "timeline", label: "Timeline" },
   { id: "coverage", label: "Coverage" },
@@ -107,6 +110,7 @@ export default function App() {
         {tab === "insights" && <InsightFeed />}
         {tab === "warnings" && <EarlyWarnings />}
         {tab === "topology" && <TopologyView />}
+        {tab === "crossservice" && <CrossService />}
         {tab === "unexplained" && <UnexplainedSurface />}
         {tab === "timeline" && <Timeline />}
         {tab === "coverage" && <CoverageReport />}

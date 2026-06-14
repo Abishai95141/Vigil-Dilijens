@@ -373,3 +373,57 @@ export interface ChatResponse {
 export function isZeroTime(t: string): boolean {
   return !t || t.startsWith("0001-01-01");
 }
+
+// --- Cross-service cascade (doc 15 phase F) — mirrors
+// obsd/internal/api/crossservice.go CrossServiceView + the flow.Chain it embeds.
+// The JOIN, never the fusion: each part wears its provenance label.
+
+export interface CrossServiceView {
+  generatedAt: string;
+  class: string; // "MEASURED ⋈ AUTHORED (joined, never fused)"
+  enabled: boolean; // flow discovery (doc 15) running
+  active: boolean; // a cross-service cascade is firing this tick
+  note: string; // honest lane state (off / quiet / active)
+  gateNote: string; // the doc 11 §3.5 gate posture
+  chain?: CrossServiceChain; // present only when active
+}
+
+export interface CrossServiceChain {
+  most_upstream_degraded_node: string; // namespace/workload (structural position)
+  node_class: string; // "MEASURED (structural fan-in over observed-flow edges)"
+  node_basis: string;
+  chain: CrossServiceLink[];
+  symptoms: CrossServiceSymptom[];
+  coverage_gaps: CrossServiceCoverage;
+  generated_at: string;
+}
+
+export interface CrossServiceLink {
+  impacted: string; // namespace/workload of the caller
+  degraded: string; // namespace/workload of the degraded callee
+  edge_class: string; // "MEASURED observed flow"
+  service_ports: number[] | null;
+  conn_depth: number;
+  edge_traversal: string; // "valid" | "suspect"
+  why: string; // verbatim AUTHORED note
+  why_class: string; // "AUTHORED"
+  temporal: string; // "T0->T0+"
+  author: string;
+  version: string;
+}
+
+export interface CrossServiceSymptom {
+  workload: string;
+  phenomenon: string;
+  class: string; // "MEASURED"
+  detail: string;
+}
+
+export interface CrossServiceCoverage {
+  resolvable_flows: number;
+  snat_masked_flows: number;
+  unresolved_flows: number;
+  infra_flows: number;
+  unreplied_flows: number;
+  snapshots: number;
+}

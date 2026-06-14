@@ -91,6 +91,25 @@ cascade rooted at `leaky-callee` (the degraded callee with a caller) and named e
   `corpus/chaos/flow-cross-demo.yaml` (then `flow-fanin-demo.yaml`), seal, then
   `replay -bundle=<dir> -crossservice -crossservice-out=<events.jsonl>`, then the gate.
 
+## Phase F — operator surface (live, 2026-06-14)
+
+The gate cleared the class for operator visibility, so it is now surfaced:
+
+- **`/api/cross-service`** (`obsd/internal/api/crossservice.go` + `server.go` route;
+  wired in `cmd/obsd/main.go` off the `crossSvcView` warm-path pointer). Three honest,
+  distinct lane states: **OFF** (flow discovery not running — states why, never implies
+  quiet), **quiet** (flow on, no degraded callee has an impacted caller this tick), and
+  **active** (the joined chain). Read-only; POST → 405. Unit-tested (states, charter
+  audit via `flow.HasForbiddenToken`, route).
+- **Web surface** `web/src/surfaces/CrossService.tsx` + a "Cross-service" tab — the JOIN
+  rendered: MEASURED structural root + MEASURED observed-flow edges + the AUTHORED "why"
+  attributed (italic, per-graph), each wearing its provenance chip, never fused.
+- **Live-proven end-to-end**: OFF/quiet/active all verified via curl; the ACTIVE state
+  caught a REAL boutique cascade — `online-boutique/currencyservice` genuinely degraded
+  (PHEN_MEMORY_LEAK) with `checkoutservice` + `frontend` as impacted callers — rendered
+  in the browser through the dev proxy, charter-clean (zero forbidden tokens). This is
+  the surface doing its job on an unscripted, real degradation.
+
 ## Standing notes / carry-forwards
 
 - The cascade's COVERAGE rides the underlying finding coverage: the #82 plateau-

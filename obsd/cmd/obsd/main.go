@@ -311,6 +311,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// — the gate rule (no class is operator-visible before its backtest gate,
 	// doc 11 §3.5) is enforced by configuration, stated by the surface.
 	var warningsView atomic.Pointer[vapi.WarningsView]
+	// v2 cross-service cascade (doc 15 phase D/F), warm path: published each tick
+	// off the deterministic digest, surfaced (gated) at /api/cross-service.
+	var crossSvcView atomic.Pointer[flow.Chain]
 	var fcIn *atomic.Pointer[forecastInputs]
 	if p.Forecast.Enabled {
 		fcIn = new(atomic.Pointer[forecastInputs])
@@ -353,6 +356,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			Insights:    func() *vapi.InsightsView { return insightsView.Load() },
 			Topology:    func() *vapi.TopologyView { return topoView.Load() },
 			Warnings:    func() *vapi.WarningsView { return warningsView.Load() },
+			// v2 cross-service cascade surface (doc 15 phase F): the warm-path chain,
+			// or the honest OFF/quiet state. flowEnabled drives the OFF-vs-quiet split.
+			CrossService: func() *vapi.CrossServiceView {
+				return vapi.BuildCrossService(crossSvcView.Load(), flowEnabled, time.Now().UTC())
+			},
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
@@ -451,11 +459,10 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					"Detection runs every evaluation tick regardless of the forecast lane (non-gating, doc 01).",
 			}
 		}
-		logger.Info("operator surfacing API enabled (doc 10 M1–M7-begun)",
-			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/context-windows /api/chat /api/config")
+		logger.Info("operator surfacing API enabled (doc 10 M1–M7-begun + doc 15 F)",
+			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/cross-service /api/context-windows /api/chat /api/config")
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers)
-	var crossSvcView atomic.Pointer[flow.Chain] // v2 cross-service cascade (warm path, gated)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets,
