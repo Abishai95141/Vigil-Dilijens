@@ -85,6 +85,9 @@ func run(args []string, out *os.File) error {
 		// substrate. Implies -forecast (it consumes the forecast cycle). Off the digest.
 		pcsMode = fs.Bool("projected-crossservice", false, "ANTICIPATORY cross-service pass (phase E): forecast-seeded PROJECTED cascade + the same-tick measured cascade; implies -forecast; verifies nothing")
 		pcsOut  = fs.String("projected-crossservice-out", "", "JSONL file for per-tick anticipatory+measured cascade events (required with -projected-crossservice)")
+
+		incMode = fs.Bool("incidents", false, "INCIDENT-MEMORY pass (v3 T-B): fold per-tick findings into durable cross-run incidents (recurrence); verifies nothing (off the digest)")
+		incOut  = fs.String("incidents-out", "", "JSONL file for per-tick incident-memory state (required with -incidents)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -228,6 +231,28 @@ func run(args []string, out *os.File) error {
 		}
 	}
 
+	var incFile *os.File
+	if *incMode {
+		if *incOut == "" {
+			return fmt.Errorf("-incidents requires -incidents-out")
+		}
+		p, err := params.Default()
+		if err != nil {
+			return fmt.Errorf("load params for the incident pass: %w", err)
+		}
+		incFile, err = os.Create(*incOut)
+		if err != nil {
+			return err
+		}
+		defer incFile.Close()
+		incEnc := json.NewEncoder(incFile)
+		opts.Incident = &replay.IncidentEval{
+			ResolveGap: p.Incident.ResolveGap.Duration(),
+			Bucket:     p.Incident.WindowBucket.Duration(),
+			Events:     func(ti replay.TickIncident) { _ = incEnc.Encode(ti) },
+		}
+	}
+
 	rep, err := replay.Run(opts)
 	if err != nil {
 		return err
@@ -264,6 +289,9 @@ func run(args []string, out *os.File) error {
 		}
 		fmt.Fprintf(out, "  ANTICIPATORY PASS (phase E): forecast re-ran at clockd=%s; PROJECTED cascade + same-tick MEASURED cascade -> %s (verifies nothing)%s\n",
 			*fcClockd, *pcsOut, note)
+	}
+	if *incMode {
+		fmt.Fprintf(out, "  INCIDENT-MEMORY PASS (v3 T-B): per-tick findings folded into durable cross-run incidents -> %s (MEASURED, off the digest; verifies nothing)\n", *incOut)
 	}
 	if !*quiet {
 		for _, tk := range rep.Ticks {

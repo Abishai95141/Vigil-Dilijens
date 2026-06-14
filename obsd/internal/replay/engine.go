@@ -15,6 +15,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/incident"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
@@ -70,6 +71,16 @@ type Options struct {
 	// digest-bearing: the forecast is non-deterministic BY CLASS; this pass verifies
 	// the JOIN (which IS deterministic) and the lead/confirm relationship, not the digest.
 	ProjectedCrossService *ProjectedCrossServiceEval
+
+	// Incident switches on the cross-run incident-memory evaluation pass (v3 T-B,
+	// the deterministic incident-gate substrate). At every recorded tick this tick's
+	// findings are folded — through the SAME incident.Accumulator obsd's durable
+	// store uses — into incidents keyed on the role CEI (instance key + unresolved
+	// flag when the role is unresolvable). The accumulator persists across
+	// FrameRunStart (unlike the cascade tracker) — that IS the restart-invariance the
+	// gate asserts. MEASURED output, off the digest (it confirms the digest is
+	// unperturbed and says so).
+	Incident *IncidentEval
 }
 
 // CrossServiceEval configures the cross-service cascade evaluation pass.
@@ -84,6 +95,31 @@ type CrossServiceEval struct {
 type ProjectedCrossServiceEval struct {
 	Relation flow.Relation                   // the one AUTHORED cross-service relation, surfaced verbatim
 	Events   func(TickProjectedCrossService) // sink for per-tick anticipatory+measured events (the gate substrate)
+}
+
+// IncidentEval configures the incident-memory evaluation pass (v3 T-B).
+type IncidentEval struct {
+	ResolveGap time.Duration      // a gap longer than this between fires of one (phenomenon, role) = a new recurrence
+	Bucket     time.Duration      // the window-bucket size the incident key buckets on
+	Events     func(TickIncident) // sink for per-tick incident state (the gate substrate)
+}
+
+// TickIncident is one tick's incident-memory state: the resolved observations this
+// tick plus the accumulator snapshot AFTER folding them. The substrate the
+// incident-gate (harness incident_memory_gate.py) grades for grouping, recurrence,
+// key-purity, separation, and restart-invariance.
+type TickIncident struct {
+	EvalNow      time.Time           `json:"evalNow"`
+	Observations []IncidentObs       `json:"observations"`
+	Incidents    []incident.Incident `json:"incidents"`
+}
+
+// IncidentObs is one resolved finding observation this tick.
+type IncidentObs struct {
+	Phenomenon     string `json:"phenomenon"`
+	RoleCEI        string `json:"roleCei"`
+	RoleUnresolved bool   `json:"roleUnresolved"`
+	Key            string `json:"key"`
 }
 
 // TickProjectedCrossService is one tick's anticipatory-cascade output joined with
@@ -276,6 +312,16 @@ func Run(opts Options) (*Report, error) {
 	// and resets at the same boundary; both are part of the digest.
 	unexpTracker := unexplained.NewTracker(opts.Graph.Version)
 
+	// The incident accumulator (v3 T-B) is created ONCE and — unlike the tracker —
+	// is NEVER reset at a FrameRunStart: an incident is durable and survives a
+	// process restart. Folding the same finding stream with a run-start in a gap
+	// must yield the same incidents as without it (the restart-invariance the gate
+	// asserts). nil when the pass is off.
+	var incAcc *incident.Accumulator
+	if opts.Incident != nil {
+		incAcc = incident.NewAccumulator(opts.Incident.ResolveGap, opts.Incident.Bucket)
+	}
+
 	segs, err := qss.ListSegments(filepath.Join(opts.BundleDir, segmentsDir))
 	if err != nil {
 		return nil, err
@@ -322,7 +368,7 @@ func Run(opts Options) (*Report, error) {
 				if err := json.Unmarshal(f.Payload, &rec); err != nil {
 					return fmt.Errorf("tick frame: %w", err)
 				}
-				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets, tracker, unexpTracker, regime, rep.EvaluationMode)
+				outcome, err := evalTick(rec, bars, opts, rules, matcher, reader, m, budgets, tracker, unexpTracker, incAcc, regime, rep.EvaluationMode)
 				if err != nil {
 					return err
 				}
@@ -359,7 +405,7 @@ type barsEpoch struct {
 func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 	rules map[string]*graph.ThresholdRule, matcher *detect.Matcher, reader *bundleReader, m Manifest,
 	budgets map[identity.EdgeType]time.Duration, tracker *detect.CascadeTracker, unexpTracker *unexplained.Tracker,
-	regime observe.FPParams, evalMode bool) (TickOutcome, error) {
+	incAcc *incident.Accumulator, regime observe.FPParams, evalMode bool) (TickOutcome, error) {
 
 	var fps []observe.Fingerprint
 	var findings []detect.Finding
@@ -467,6 +513,14 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		if opts.CrossService != nil && opts.CrossService.Events != nil {
 			opts.CrossService.Events(crossServiceTick(rec, findings, flowStore, ep.res.Bindings, opts.CrossService.Relation, w))
 		}
+
+		// Incident-memory evaluation pass (v3 T-B): fold this tick's findings into
+		// the durable accumulator — keyed on the role CEI via the captured bindings,
+		// exactly as obsd's store does — and emit the per-tick state. MEASURED, off
+		// the digest; the accumulator persists across run-starts (restart-invariance).
+		if opts.Incident != nil && opts.Incident.Events != nil && incAcc != nil {
+			opts.Incident.Events(incidentTick(incAcc, rec, findings, ep.res.Bindings, m.GraphVersion))
+		}
 	}
 	digest, canonical, err := Digest(rec.EvalNow, fps, findings, cascades, unexp)
 	if err != nil {
@@ -562,6 +616,36 @@ func crossServiceTick(rec TickRecord, findings []detect.Finding, flowStore *iden
 			out.CharterClean, out.CharterToken = false, tok
 		}
 	}
+	return out
+}
+
+// incidentTick folds this tick's findings into the durable incident accumulator and
+// returns the per-tick state — the SAME role-resolution obsd's store wiring uses
+// (instance CEI key -> role CEI key via the captured bindings; instance key +
+// roleUnresolved when the role is unresolvable, never a guessed role). A pure
+// function of (findings, bindings, graph version) given the accumulator's prior
+// state, which persists across run-starts. MEASURED, off the digest.
+func incidentTick(acc *incident.Accumulator, rec TickRecord, findings []detect.Finding,
+	bindings []binding.Binding, graphVersion string) TickIncident {
+
+	roleByInstance := make(map[string]string, len(bindings))
+	for i := range bindings {
+		if bindings[i].RoleKey != "" {
+			roleByInstance[bindings[i].CEIKey] = bindings[i].RoleKey
+		}
+	}
+	out := TickIncident{EvalNow: rec.EvalNow}
+	for i := range findings {
+		roleKey, unresolved := findings[i].EntityCEI, true
+		if rk := roleByInstance[findings[i].EntityCEI]; rk != "" {
+			roleKey, unresolved = rk, false
+		}
+		key := acc.Observe(findings[i].Phenomenon, roleKey, unresolved, graphVersion, rec.EvalNow)
+		out.Observations = append(out.Observations, IncidentObs{
+			Phenomenon: findings[i].Phenomenon, RoleCEI: roleKey, RoleUnresolved: unresolved, Key: key,
+		})
+	}
+	out.Incidents = acc.Snapshot()
 	return out
 }
 

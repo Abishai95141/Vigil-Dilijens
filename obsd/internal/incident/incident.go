@@ -77,16 +77,16 @@ func mod(a, m int64) int64 {
 // (counts, timestamps) or an AUTHORED phenomenon label surfaced verbatim — never a
 // cause, never a projection.
 type Incident struct {
-	Key             string        // the deterministic identity
-	Phenomenon      string        // authored phenomenon id (verbatim)
-	RoleCEI         string        // the role this incident is keyed on
-	RoleUnresolved  bool          // true when keyed on an instance because the role was unresolvable (stated, not guessed)
-	WindowBucket    time.Time     // the bucket boundary in the key
-	FirstSeen       time.Time     // earliest observation in this incident
-	LastSeen        time.Time     // latest observation
-	RecurrenceCount int           // distinct fire-episodes (increments ONLY across a resolve gap)
-	Lifespan        time.Duration // LastSeen - FirstSeen
-	GraphVersion    string        // attribute, NOT part of the key (a graph bump must not split an incident)
+	Key             string        `json:"key"`             // the deterministic identity
+	Phenomenon      string        `json:"phenomenon"`      // authored phenomenon id (verbatim)
+	RoleCEI         string        `json:"roleCei"`         // the role this incident is keyed on
+	RoleUnresolved  bool          `json:"roleUnresolved"`  // true when keyed on an instance because the role was unresolvable (stated, not guessed)
+	WindowBucket    time.Time     `json:"windowBucket"`    // the bucket boundary in the key
+	FirstSeen       time.Time     `json:"firstSeen"`       // earliest observation in this incident
+	LastSeen        time.Time     `json:"lastSeen"`        // latest observation
+	RecurrenceCount int           `json:"recurrenceCount"` // distinct fire-episodes (increments ONLY across a resolve gap)
+	Lifespan        time.Duration `json:"lifespanNanos"`   // LastSeen - FirstSeen
+	GraphVersion    string        `json:"graphVersion"`    // attribute, NOT part of the key (a graph bump must not split an incident)
 }
 
 // Accumulator folds a stream of finding observations into incidents. The SAME logic

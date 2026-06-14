@@ -1,0 +1,6 @@
+{
+  "bundle": "continuous",
+  "expectDistinct": 1,
+  "expectRecurrence": 1,
+  "scenario": "continuous"
+}

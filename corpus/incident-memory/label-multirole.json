@@ -1,0 +1,6 @@
+{
+  "bundle": "multirole",
+  "expectDistinct": 3,
+  "expectRecurrence": 1,
+  "scenario": "separation"
+}

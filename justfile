@@ -200,6 +200,20 @@ mcp-gate:
       --ledger ../corpus/mcp/silence-ledger.json \
       --advisory ../corpus/mcp/advisory-drafts.jsonl
 
+# Incident-memory gate (v3 T-B / doc 11 §3.5) over the frozen corpus in
+# corpus/incident-memory/ — certifies the durable cross-run recurrence semantics
+# (key-purity, grouping N->1 count==N, continuous-span no-inflation, restart-
+# invariance, separation) deterministically, offline. Runs the Go unit gate (the
+# incident core + store cross-check + engine fold) and the Python corpus gate.
+# Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+incident-gate:
+    go test -race ./obsd/internal/incident/
+    go test -race ./obsd/internal/store/ -run Incident
+    go test -race ./obsd/internal/replay/ -run Incident
+    cd harness && uv run python -m harness.incident_memory_gate \
+      --events ../corpus/incident-memory/events-recurring.jsonl ../corpus/incident-memory/events-restart.jsonl ../corpus/incident-memory/events-continuous.jsonl ../corpus/incident-memory/events-multirole.jsonl \
+      --labels ../corpus/incident-memory/label-recurring.json ../corpus/incident-memory/label-restart.json ../corpus/incident-memory/label-continuous.json ../corpus/incident-memory/label-multirole.json
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:
