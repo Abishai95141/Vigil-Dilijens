@@ -282,5 +282,21 @@ isolated cluster until then.
   folds findings through the same `incident.Accumulator` the store uses, off the digest. (A live
   recurrence *climb* wasn't reproducible on kind — cAdvisor `container_oom_events_total=0`, node OOM
   continuous — so it's certified deterministically by the gate instead.)
-- [ ] **T-C** k8s events (+KSM) · [ ] **T-D** validate_claim referee · companions: PVC dark-bar
-  **fix**, auth/RBAC (LAST). See `memory/vigil-tracks-build-plan.md`.
+- [x] **T-C** k8s events ingestion 🔒 — DONE end-to-end: NEW `internal/events` (typed MEASURED
+  `EventFinding`, `ResolveEventRole` real-store CEI resolution, `Corroborate` exact-CEI join — events
+  do **NOT** go through the fingerprint matcher, the load-bearing critic correction) + AUTHORED
+  corroboration overlay (`overlays/experimental/event-conditions-v1.yaml`, outside the release hash →
+  zero blast radius; promotion is a governed follow-up) + collector (`cmd/obsd/eventcollect.go`, two
+  sources: the Events stream **and** pod containerStatuses) + `/api/events` + MCP `get_events` +
+  inventoryLoop join. The **events-gate** (`just events-gate` PASSED: JOIN-FIDELITY==1.0 vs a label
+  oracle — identity-mismatch MUST NOT corroborate — no-phantom, standalone-visibility, digest-
+  invariance, charter; `corpus/labels/events-gate.md`). Behind `--events-enabled` (default off;
+  MEASURED class ⇒ no gate-passed withholding const, like incident-memory). **Live-verified on
+  kind-vigil**: a real boutique `OOMKilled` (currencyservice) + chaos OOM/CrashLoop all surfaced as
+  role-resolved MEASURED findings, standalone-visible — the OOM the gauge path missed
+  (`container_oom_events_total=0`) is now visible (blind spot closed). Live finding that shaped the
+  collector: on kind an OOM emits NO `OOMKilled` Event — the fact is in pod `lastState.terminated`, so
+  the collector reads pod status too. (Corroboration *firing* not reproducible live — needs a gauge OOM
+  finding that can't exist on kind — certified by the gate instead.)
+- [ ] **T-D** validate_claim referee · companions: PVC dark-bar **fix**, auth/RBAC (LAST).
+  See `memory/vigil-tracks-build-plan.md`.

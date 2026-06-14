@@ -1,0 +1,11 @@
+{
+  "bundle": "events-healthy-negative",
+  "scenario": "healthy-negative",
+  "events": null,
+  "digestBefore": "6a4ccab9a642d639be32a9d0f339c6ef6ae4998b6108a801c202b9566d694a34",
+  "digestAfter": "6a4ccab9a642d639be32a9d0f339c6ef6ae4998b6108a801c202b9566d694a34",
+  "expectCorroborated": 0,
+  "expectStandalone": 0,
+  "expectUnresolved": 0,
+  "note": "gauge findings exist but NO events occurred -\u003e zero event rows, nothing manufactured."
+}

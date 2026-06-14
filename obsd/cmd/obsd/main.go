@@ -29,6 +29,7 @@ import (
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/events"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
@@ -87,6 +88,9 @@ func run(args []string, stdout, stderr *os.File) error {
 		flowInterval = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
 		mcpEnabled   = fs.Bool("mcp-enabled", false, "v3 T-A: serve the read-only MCP harness at /mcp (coverage, silence-ledger, warnings, emit_advisory). OFF by default; off = byte-identical to no MCP. Auth is a separate (later) track — do not expose this beyond an isolated cluster.")
 		incidentMem  = fs.Bool("incident-memory", false, "v3 T-B: fold findings into the durable cross-run incident memory (recurrence counting). OFF by default; off = byte-identical. Needs --db (a persistent store) to survive restarts.")
+		eventsOn     = fs.Bool("events-enabled", false, "v3 T-C: ingest discrete k8s Events (OOMKilled, CrashLoopBackOff) as MEASURED findings joined by CEI to gauge phenomena. OFF by default; off = byte-identical (events ride off the digest).")
+		eventsConds  = fs.String("events-conditions", "ontology/graph/overlays/experimental/event-conditions-v1.yaml", "v3 T-C: the authored event-corroboration conditions overlay (experimental until the events-gate promotes it)")
+		eventsInt    = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -148,7 +152,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -163,7 +167,7 @@ const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -333,6 +337,14 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// the MEASURED flow edges. Computed-but-DARK until its own backtest gate passes
 	// (doc 11 §3.5): a new PROJECTED class is not operator-visible before its gate.
 	var projectedCrossSvcView atomic.Pointer[flow.Chain]
+	// v3 T-C discrete-event lane: the collector publishes a role-resolved EventFinding
+	// snapshot (eventsSnap); the eval tick JOINS it to the gauge findings into
+	// eventsView. Both ride OFF the deterministic digest. Unavailable until
+	// --events-enabled; loaded conditions are validated against the graph below.
+	var eventsSnap atomic.Pointer[eventsSnapshot]
+	var eventsView atomic.Pointer[vapi.EventsView]
+	eventsView.Store(vapi.BuildEvents(graphVersion, time.Now(), nil))
+	var eventsConds []events.Corroboration
 	var fcIn *atomic.Pointer[forecastInputs]
 	if p.Forecast.Enabled {
 		fcIn = new(atomic.Pointer[forecastInputs])
@@ -367,6 +379,32 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		go runFlowCollector(ctx, logger, &gate, client, store, edges, clusterID, flowInterval)
 	}
 
+	// v3 T-C discrete-event lane (doc 03 join by CEI): load the AUTHORED corroboration
+	// conditions and, when --events-enabled, start the collector. Honest degradation:
+	// a condition that corroborates a phenomenon absent from the released graph has no
+	// authored basis — the lane stays off rather than surface it (mirrors
+	// flow.RelationFromGraph's ok=false). Events ride off the digest; non-gating.
+	if eventsEnabled {
+		cs, err := events.LoadEventConditions(eventsCondsPath)
+		if err != nil {
+			logger.Warn("events lane: conditions not loadable; discrete-event lane off", "path", eventsCondsPath, "err", err)
+		} else {
+			valid := true
+			for _, target := range events.CorroborationTargets(cs) {
+				if ontologyGraph == nil || ontologyGraph.Phenomena[target] == nil {
+					logger.Warn("events lane: condition corroborates a phenomenon absent from the graph; lane off", "phenomenon", target)
+					valid = false
+				}
+			}
+			if valid {
+				eventsConds = cs
+				go runEventCollector(ctx, logger, &gate, client, store, clusterID, eventsConds, &eventsSnap, eventsInterval)
+				logger.Info("events lane enabled (v3 T-C)", "route", "/api/events",
+					"reasons", events.Reasons(cs), "conditions", eventsCondsPath)
+			}
+		}
+	}
+
 	// The operator context-window store (10 M6) is shared: the API serves/accepts
 	// windows, and the forecast loop reads their boundaries as decomposition splice
 	// points (09 M5 §3.4). Created once so both see the same windows.
@@ -385,6 +423,14 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			// or the honest OFF/quiet state. flowEnabled drives the OFF-vs-quiet split.
 			CrossService: func() *vapi.CrossServiceView {
 				return vapi.BuildCrossService(crossSvcView.Load(), projectedCrossSvcView.Load(), flowEnabled, phaseECrossServiceGatePassed, time.Now().UTC())
+			},
+			// v3 T-C discrete-event lane: the joined EventsView, or the honest
+			// unavailable state when --events-enabled is off.
+			Events: func() *vapi.EventsView {
+				if !eventsEnabled {
+					return nil
+				}
+				return eventsView.Load()
 			},
 		}
 		if findingsStore != nil {
@@ -512,9 +558,10 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				v, _ := providers.Incidents()
 				return v
 			},
+			Events: providers.Events,
 		}, mcpAdvisoryGatePassed, "vigil-obsd", graphRelease).HTTPHandler()
 		logger.Info("MCP read-only harness enabled (v3 T-A)", "route", "/mcp",
-			"tools", "get_coverage get_silence_ledger get_warnings get_incidents emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
+			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
 	}
 	if incidentMemory {
 		if findingsStore == nil {
@@ -528,7 +575,8 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView,
-		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration())
+		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
+		eventsEnabled, eventsConds, &eventsSnap, &eventsView)
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
 	}
@@ -584,7 +632,8 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration,
+	eventsEnabled bool, eventsConds []events.Corroboration, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView]) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -847,6 +896,32 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 						}
 					}
 				}
+			}
+			// v3 T-C discrete-event lane: JOIN this tick's gauge findings to the
+			// collected events on the shared role CEI (corroborate, never fuse) and
+			// publish the EventsView. Each gauge finding is resolved to its role CEI
+			// exactly as the incident upsert does (store.Get); the collector resolved
+			// the events the same way. Runs whether or not a db is present — events do
+			// not persist. OFF the deterministic digest: the events snapshot never
+			// touched fps/findings, so this cannot perturb the tick's output.
+			if eventsEnabled && eventsView != nil {
+				gaugeRoles := make(map[string]map[string]bool)
+				for i := range findings {
+					rec, ok := store.Get(findings[i].EntityCEI)
+					if !ok || rec.RoleCEI.RoleKey == "" {
+						continue
+					}
+					roleKey := rec.RoleCEI.Key()
+					if gaugeRoles[findings[i].Phenomenon] == nil {
+						gaugeRoles[findings[i].Phenomenon] = make(map[string]bool)
+					}
+					gaugeRoles[findings[i].Phenomenon][roleKey] = true
+				}
+				var raw []events.EventFinding
+				if snap := eventsSnap.Load(); snap != nil {
+					raw = snap.findings
+				}
+				eventsView.Store(vapi.BuildEvents(graphVersion, now, events.Corroborate(raw, gaugeRoles, eventsConds)))
 			}
 			if capture != nil {
 				epoch, err := capture.SetBars(now, bd.Result.Bindings)

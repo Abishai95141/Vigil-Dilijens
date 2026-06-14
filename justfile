@@ -214,6 +214,19 @@ incident-gate:
       --events ../corpus/incident-memory/events-recurring.jsonl ../corpus/incident-memory/events-restart.jsonl ../corpus/incident-memory/events-continuous.jsonl ../corpus/incident-memory/events-multirole.jsonl \
       --labels ../corpus/incident-memory/label-recurring.json ../corpus/incident-memory/label-restart.json ../corpus/incident-memory/label-continuous.json ../corpus/incident-memory/label-multirole.json
 
+# Events-corroboration gate (v3 T-C / doc 11 §3.5) over the frozen corpus in
+# corpus/events/ — certifies the discrete-event JOIN deterministically, offline:
+# JOIN-FIDELITY==1.0 vs a label oracle (a deliberate identity-mismatch MUST NOT
+# corroborate), no-phantom, standalone-visibility, digest-invariance (join read-only
+# w.r.t. the digest), charter. Runs the Go unit gate (events pkg incl. the join +
+# resolution + digest-invariance) and the Python corpus gate. Exit 0 = PASSED; 1 =
+# FAILED/INSUFFICIENT.
+events-gate:
+    go test -race ./obsd/internal/events/ ./obsd/internal/api/ -run 'Events|Corroborate|ResolveEventRole|LoadEventConditions|EventConditions'
+    cd harness && uv run python -m harness.events_corroboration_gate \
+      --events ../corpus/events/events-corroborated-oom.jsonl ../corpus/events/events-multi-role.jsonl ../corpus/events/events-identity-mismatch.jsonl ../corpus/events/events-standalone-crashloop.jsonl ../corpus/events/events-healthy-negative.jsonl \
+      --labels ../corpus/events/label-corroborated-oom.json ../corpus/events/label-multi-role.json ../corpus/events/label-identity-mismatch.json ../corpus/events/label-standalone-crashloop.json ../corpus/events/label-healthy-negative.json
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

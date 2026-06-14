@@ -1,0 +1,18 @@
+{
+  "bundle": "events-identity-mismatch",
+  "scenario": "identity-mismatch",
+  "events": [
+    {
+      "entityCei": "i|cl|online-boutique|Pod|currency-abc|u-currency",
+      "oracleRole": "r|cl|online-boutique|Deployment|Deployment/currency",
+      "oracleResolved": true,
+      "shouldCorroborate": false
+    }
+  ],
+  "digestBefore": "f194469d87aa9e16b1454177e99305e027a3d95e71de3d71a6088fdb0bd3535f",
+  "digestAfter": "f194469d87aa9e16b1454177e99305e027a3d95e71de3d71a6088fdb0bd3535f",
+  "expectCorroborated": 0,
+  "expectStandalone": 1,
+  "expectUnresolved": 0,
+  "note": "OOMKilled on currency but the only cgroup-OOM gauge finding is on cart -\u003e MUST NOT corroborate (identity mis-join trap)."
+}

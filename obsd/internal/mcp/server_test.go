@@ -47,6 +47,16 @@ func testSources() Sources {
 				Incidents: []api.IncidentCard{{Phenomenon: "PHEN_MEMORY_LEAK", RecurrenceCount: 3, Summary: "seen 3 times"}},
 			}
 		},
+		Events: func() *api.EventsView {
+			return &api.EventsView{
+				Class: "MEASURED", Available: true, GeneratedAt: now,
+				Summary: api.EventsSummary{Total: 1, Corroborated: 1},
+				Events: []api.EventCard{{
+					Reason: "OOMKilled", Class: "MEASURED", Corroborates: "PHEN_OOM_KILL_CGROUP",
+					Corroborated: true, CorroborationWhy: "co-occurs with the cgroup-OOM phenomenon on the same role",
+				}},
+			}
+		},
 	}
 }
 
@@ -169,6 +179,22 @@ func TestIncidentsRoundTripsClassed(t *testing.T) {
 	}
 	if v.Class != "MEASURED" || v.Summary.Recurring != 1 {
 		t.Errorf("incidents corrupted across the wire: class %q recurring %d", v.Class, v.Summary.Recurring)
+	}
+}
+
+func TestEventsRoundTripsClassed(t *testing.T) {
+	s := New(testSources(), false, "vigil-test", "v3")
+	resp := call(t, s, "tools/call", `{"name":"get_events"}`)
+	text, isErr := toolText(t, resp)
+	if isErr {
+		t.Fatal("events tool returned isError")
+	}
+	var v api.EventsView
+	if err := json.Unmarshal([]byte(text), &v); err != nil {
+		t.Fatalf("events did not round-trip: %v", err)
+	}
+	if v.Class != "MEASURED" || v.Summary.Corroborated != 1 || !v.Events[0].Corroborated {
+		t.Errorf("events corrupted across the wire: %+v", v)
 	}
 }
 

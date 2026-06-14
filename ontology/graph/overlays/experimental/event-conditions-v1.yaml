@@ -1,0 +1,55 @@
+# EXPERIMENTAL — authored event-corroboration conditions (v3 T-C).
+#
+# NOT loaded by the production overlay loader: it lives under overlays/experimental/
+# (outside the production glob, exactly like flow-relation-v0.yaml), so it does NOT
+# change the released graph's content hash. It is parsed ONLY by internal/events'
+# own reader (events.LoadEventConditions) while the events lane runs behind
+# --events-enabled and its events-gate proves the join faithful. Promotion into the
+# released ontology graph is a governed follow-up (mirroring the cross-service
+# relation's Phase A→C promotion, doc 15).
+#
+# Provenance: AUTHORED. Each `why` is curated prose, surfaced verbatim with author +
+# version. The mapping below is the ONLY thing that says "this event reason
+# corroborates that gauge phenomenon"; it is never inferred by code, never learned.
+#
+# Epistemic discipline (doc 01): an event is MEASURED and a CO-OCCURRENCE on a
+# shared role CEI — it corroborates, it never proves cause. role is always
+# `corroborating`; an event is never a trigger.
+overlay: event-conditions-v1
+version: v1
+author: vigil-engineering
+status: experimental
+event_conditions:
+  # OOMKilled (Pod) -> corroborates the cgroup-OOM phenomenon on the SAME role.
+  # This closes a real blind spot: on a cluster whose cAdvisor reports
+  # container_oom_events_total == 0 the gauge phenomenon never fires, yet the
+  # kubelet still emits a discrete OOMKilled event. The event is the bar (>=1 kill).
+  - reason: OOMKilled
+    involved_kind: Pod
+    corroborates: PHEN_OOM_KILL_CGROUP
+    role: corroborating
+    temporal_order: "T0"
+    why: >-
+      Per the curated ontology: a kubelet-recorded OOMKilled on a pod (its container
+      lastState, or an OOMKilled event) is a MEASURED co-occurrence with the cgroup
+      out-of-memory phenomenon on the same workload role. It corroborates that
+      phenomenon — it does not prove it, and it asserts nothing about why the memory
+      was exhausted. The fact is recorded even when the cgroup OOM counter is
+      unavailable, so it is the more reliable signal of the two; the two are surfaced
+      adjacently, each labelled MEASURED.
+
+  # CrashLoopBackOff (Pod) -> STANDALONE-visible: a MEASURED restart-loop fact with
+  # no gauge phenomenon to corroborate yet. corroborates is intentionally empty: the
+  # event is surfaced as a visible MEASURED finding, never upgraded to a match it
+  # lacks the required members for.
+  - reason: CrashLoopBackOff
+    involved_kind: Pod
+    corroborates: ""
+    role: corroborating
+    temporal_order: "T0"
+    why: >-
+      Per the curated ontology: a CrashLoopBackOff event on a pod is a MEASURED fact
+      that its container is restart-looping. No gauge phenomenon corroborates it on
+      this signal set, so it is surfaced standalone — a visible MEASURED finding,
+      never inferred into an explanation and never auto-upgraded to a phenomenon
+      match it lacks the required members for.

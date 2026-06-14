@@ -1,0 +1,24 @@
+{
+  "bundle": "events-multi-role",
+  "scenario": "multi-role",
+  "events": [
+    {
+      "entityCei": "i|cl|online-boutique|Pod|currency-abc|u-currency",
+      "oracleRole": "r|cl|online-boutique|Deployment|Deployment/currency",
+      "oracleResolved": true,
+      "shouldCorroborate": true
+    },
+    {
+      "entityCei": "i|cl|online-boutique|Pod|cart-xyz|u-cart",
+      "oracleRole": "r|cl|online-boutique|Deployment|Deployment/cart",
+      "oracleResolved": true,
+      "shouldCorroborate": true
+    }
+  ],
+  "digestBefore": "1df38d8f06fe1a68921c530a3b799e9d1c9ac8a4e9e43ec544eca8c180424d09",
+  "digestAfter": "1df38d8f06fe1a68921c530a3b799e9d1c9ac8a4e9e43ec544eca8c180424d09",
+  "expectCorroborated": 2,
+  "expectStandalone": 0,
+  "expectUnresolved": 0,
+  "note": "two OOMKilled events on two roles, two same-role gauge findings -\u003e two corroborations, no cross-role join (separation)."
+}

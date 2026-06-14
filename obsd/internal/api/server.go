@@ -52,6 +52,9 @@ type Providers struct {
 	// CrossService returns the v2 cross-service cascade surface (doc 15 phase F);
 	// nil = the route serves the honest OFF state (flow discovery not running).
 	CrossService func() *CrossServiceView
+	// Events returns the v3 T-C discrete-event lane surface (OOMKilled,
+	// CrashLoopBackOff joined by CEI); nil ⇒ the honest "not enabled" state.
+	Events func() *EventsView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -106,6 +109,23 @@ func Register(mux *http.ServeMux, p Providers) {
 		if err != nil {
 			http.Error(w, "incidents unavailable", http.StatusServiceUnavailable)
 			return
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *EventsView
+		if p.Events != nil {
+			v = p.Events()
+		}
+		if v == nil {
+			// The events lane is not enabled — say so honestly rather than imply no
+			// events occurred.
+			v = unavailableEvents("", timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

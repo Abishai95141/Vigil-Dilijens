@@ -1,0 +1,30 @@
+{
+  "bundle": "events-standalone-crashloop",
+  "scenario": "standalone-crashloop",
+  "events": [
+    {
+      "entityCei": "i|cl|online-boutique|Pod|cart-xyz|u-cart",
+      "oracleRole": "r|cl|online-boutique|Deployment|Deployment/cart",
+      "oracleResolved": true,
+      "shouldCorroborate": false
+    },
+    {
+      "entityCei": "i|cl|online-boutique|Pod|currency-abc|u-currency",
+      "oracleRole": "r|cl|online-boutique|Deployment|Deployment/currency",
+      "oracleResolved": true,
+      "shouldCorroborate": false
+    },
+    {
+      "entityCei": "i|cl||Node|vigil-worker|u-node",
+      "oracleRole": "i|cl||Node|vigil-worker|u-node",
+      "oracleResolved": false,
+      "shouldCorroborate": false
+    }
+  ],
+  "digestBefore": "6eb20c4ba264525c31696aa45dd8eefe2ddb9a01b9ab8a995fca0b2529cb1cb7",
+  "digestAfter": "6eb20c4ba264525c31696aa45dd8eefe2ddb9a01b9ab8a995fca0b2529cb1cb7",
+  "expectCorroborated": 0,
+  "expectStandalone": 2,
+  "expectUnresolved": 1,
+  "note": "CrashLoopBackOff + an OOMKilled with no gauge + a role-less node OOM -\u003e all visible, none corroborated, node unresolved."
+}

@@ -1,0 +1,18 @@
+{
+  "bundle": "events-corroborated-oom",
+  "scenario": "corroborated-oom",
+  "events": [
+    {
+      "entityCei": "i|cl|online-boutique|Pod|currency-abc|u-currency",
+      "oracleRole": "r|cl|online-boutique|Deployment|Deployment/currency",
+      "oracleResolved": true,
+      "shouldCorroborate": true
+    }
+  ],
+  "digestBefore": "6a4ccab9a642d639be32a9d0f339c6ef6ae4998b6108a801c202b9566d694a34",
+  "digestAfter": "6a4ccab9a642d639be32a9d0f339c6ef6ae4998b6108a801c202b9566d694a34",
+  "expectCorroborated": 1,
+  "expectStandalone": 0,
+  "expectUnresolved": 0,
+  "note": "OOMKilled on currency + a cgroup-OOM gauge finding on the same role -\u003e corroborated (the blind-spot-closing join)."
+}

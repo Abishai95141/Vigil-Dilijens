@@ -25,6 +25,7 @@ type Sources struct {
 	SilenceLedger func() *api.SilenceLedgerView
 	Warnings      func() *api.WarningsView
 	Incidents     func() *api.IncidentsView
+	Events        func() *api.EventsView
 }
 
 // Server is a READ-ONLY MCP adapter. See doc.go for the charter contract.
@@ -131,6 +132,7 @@ const (
 	toolSilenceLedger = "get_silence_ledger"
 	toolWarnings      = "get_warnings"
 	toolIncidents     = "get_incidents"
+	toolEvents        = "get_events"
 	toolEmitAdvisory  = "emit_advisory"
 )
 
@@ -156,6 +158,11 @@ func toolDefs() []toolDef {
 		{
 			Name:        toolIncidents,
 			Description: "MEASURED. The durable cross-run incident memory: each phenomenon joined across time on its role, with how many distinct episodes (recurrence) it has had and over what span. Use this for 'has this happened before / how often'. Recurrence is a count, never a cause or a forecast.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolEvents,
+			Description: "MEASURED. The discrete-event lane: k8s Events (OOMKilled, CrashLoopBackOff) ingested as findings and JOINED by shared role CEI to gauge phenomena (corroborate, never fuse). A corroboration carries an AUTHORED why verbatim; a standalone event is visible but never upgraded to a match. An event is a co-occurrence, never a cause.",
 			InputSchema: emptyObjectSchema,
 		},
 		{
@@ -195,6 +202,8 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.Warnings), "early-warning lane not running (off pending its gate)"), nil
 	case toolIncidents:
 		return toolJSON(orNil(s.src.Incidents), "incident memory not enabled (needs --incident-memory + --db)"), nil
+	case toolEvents:
+		return toolJSON(orNil(s.src.Events), "events lane not enabled (needs --events-enabled)"), nil
 	case toolEmitAdvisory:
 		var args struct {
 			Text string `json:"text"`
