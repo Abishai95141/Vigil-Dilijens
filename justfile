@@ -189,6 +189,17 @@ xsvc-projected-gate:
       --events ../corpus/crossservice-projected/events-pos1.jsonl ../corpus/crossservice-projected/events-pos2.jsonl ../corpus/crossservice-projected/events-negative.jsonl \
       --labels ../corpus/crossservice-projected/label-pos1.json ../corpus/crossservice-projected/label-pos2.json ../corpus/crossservice-projected/label-negative.json
 
+# MCP read-only harness gate (v3 T-A / doc 11 §3.5) over the frozen corpus in
+# corpus/mcp/ — certifies silence-ledger determinism + absence-completeness +
+# reconciliation with per-rule coverage + ADVISORY refusal teeth (no content leak).
+# Runs BOTH halves: the Go unit gate (no-write-back, non-gating, class round-trip,
+# teeth) and the offline Python corpus gate. Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+mcp-gate:
+    go test -race ./obsd/internal/mcp/ ./obsd/internal/api/ -run 'MCP|Silence|Advisory|NoWriteBack|Warnings|Initialize|ToolsList|LaneOff|Notification|Malformed|Dispatch|HTTPTransport'
+    cd harness && uv run python -m harness.mcp_gate \
+      --ledger ../corpus/mcp/silence-ledger.json \
+      --advisory ../corpus/mcp/advisory-drafts.jsonl
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

@@ -242,3 +242,35 @@ then trace interdependent failures across the call graph. Built on the `main` ep
   - **Backtest GATE PASSED** (`just xsvc-projected-gate`): `replay -projected-crossservice` re-runs the forecast per tick + derives the anticipatory chain joined with the same-tick measured chain; `projected_crossservice_gate.py` grades lead-time + confirm/refute + structural fidelity + no-false-anticipation + charter. Two INDEPENDENT live forecast-led leaks (9.5 / 12.5 min lead, separate bundles) + a healthy negative (0 false). The scorer was **hardened against 5 adversarial-review exploits** (12 tests). `phaseECrossServiceGatePassed` flipped true; projected chain now operator-visible (live-verified). Evidence: `corpus/labels/flow-gate-projected-crossservice.md`.
 
 A 20-agent adversarial review over Phase C + E found **0** charter / determinism / non-gating / identity-join issues (only the 5 scorer holes, all fixed).
+
+---
+
+## 🟡 v3 forward tracks — LLM harness + identity-memory + events (branch `v3`, off `v2`)
+
+The four prioritized tracks (MCP server · incident identity · k8s events · validate_claim)
++ companions, planned in `memory/vigil-tracks-build-plan.md`. Isolated: new branch, behind
+flags, never touching `main` (frozen) or `v2`-production until each gate passes. **Auth/RBAC
+deferred to the LAST track** (per the techstack), so the MCP surface ships default-off in an
+isolated cluster until then.
+
+- [x] **T-A first prototype** 🔒 — the read-only **MCP server** + the deterministic
+  **silence ledger** + the **ADVISORY-shell**. New `internal/mcp` (pure-Go JSON-RPC over
+  HTTP, mounted at `/mcp` behind `--mcp-enabled`, default off; imports only `internal/api`
+  view types + the charter linter — no writer in scope) exposing `get_coverage`,
+  `get_silence_ledger`, `get_warnings`, `emit_advisory`. New `internal/api` `BuildSilenceLedger`
+  — a total, deterministic partition of every binding into watched-or-silent-with-reason,
+  built from the SAME `binding.Result` as Coverage (so the two surfaces can never disagree),
+  surfacing the PVC **dark-bar** honestly as a `no-stream-key` silence. ADVISORY is the 4th
+  class: charter-guarded (banned drafts REFUSED), gate-WITHHELD (`mcpAdvisoryGatePassed=false`),
+  never written back.
+  - **Gate PASSED** (`just mcp-gate`, exit 0) — both halves: the Go unit gate (class-integrity
+    round-trip keeps the PROJECTED band; no-write-back digest; ADVISORY refusal-recall 1.0;
+    JSON-RPC determinism + transport) and the Python corpus gate (silence-ledger determinism;
+    **absence-completeness**; **reconciliation against the real compiler's per-rule coverage** —
+    the anti-shallow core; advisory teeth + no-content-leak; charter). 27-binding frozen corpus
+    (synthetic-fixture, real `binding.Compile`); 9 silent incl. the dark-bar. Evidence:
+    `corpus/labels/mcp-gate.md`. Non-gating proven structurally (the lane is outside the
+    eval/replay path; full `go test -race ./obsd/...` byte-identical). **Auth + ADVISORY-content
+    release are separate later gates.**
+- [ ] **T-B** incident identity / time spine · [ ] **T-C** k8s events (+KSM) · [ ] **T-D**
+  validate_claim referee · companions: PVC dark-bar **fix**, auth/RBAC (LAST). See the build plan.

@@ -1,0 +1,238 @@
+{
+  "source": "synthetic-fixture: real binding.Compile over the released ontology, SYNTHETIC boutique inventory (not a live-cluster capture). The gate's claims (determinism, completeness, reconciliation) are fully deterministic and do not depend on cluster realism.",
+  "ledgerA": {
+    "class": "MEASURED",
+    "generatedAt": "2026-06-14T12:00:00Z",
+    "graphVersion": "gv-corpus",
+    "graphRelease": "v-corpus",
+    "available": true,
+    "summary": {
+      "totalPairs": 27,
+      "watched": 18,
+      "silent": 9,
+      "byReason": {
+        "no-stream-key": 1,
+        "out-of-scope": 1,
+        "unbounded": 2,
+        "unresolved": 5
+      }
+    },
+    "silent": [
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_CPU_THROTTLE_RATIO",
+        "metric": "container_cpu_cfs_throttled_periods_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_CPU_USAGE_VS_LIMIT",
+        "metric": "container_cpu_usage_seconds_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT",
+        "metric": "container_memory_working_set_bytes",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_OOM_EVENTS",
+        "metric": "container_oom_events_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_RESTARTS_RATE",
+        "metric": "kube_pod_container_status_restarts_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|payment-x|uid-p",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/payment",
+        "entity": "Container",
+        "container": "server",
+        "ruleId": "THR_CONTAINER_CPU_THROTTLE_RATIO",
+        "metric": "container_cpu_cfs_throttled_periods_total",
+        "state": "out-of-scope",
+        "reasonClass": "out-of-scope",
+        "reason": "out-of-scope: no CPU limit declared, CFS throttling cannot occur (eligibility: container.resources.limits.cpu)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|payment-x|uid-p",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/payment",
+        "entity": "Container",
+        "container": "server",
+        "ruleId": "THR_CONTAINER_CPU_USAGE_VS_LIMIT",
+        "metric": "container_cpu_usage_seconds_total",
+        "state": "bound",
+        "reasonClass": "unbounded",
+        "reason": "unbounded: no early-warning eligibility (container.resources.limits.cpu not declared)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|payment-x|uid-p",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/payment",
+        "entity": "Container",
+        "container": "server",
+        "ruleId": "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT",
+        "metric": "container_memory_working_set_bytes",
+        "state": "bound",
+        "reasonClass": "unbounded",
+        "reason": "unbounded: no early-warning eligibility (container.resources.limits.memory not declared)"
+      },
+      {
+        "entityCei": "pvc|shop|data-0",
+        "entity": "PVC",
+        "ruleId": "THR_PVC_USED_VS_REQUESTED",
+        "metric": "kubelet_volume_stats_used_bytes",
+        "state": "bound",
+        "reasonClass": "no-stream-key",
+        "reason": "bar resolves but no observation stream is ingested for this pair yet (no stream key)"
+      }
+    ],
+    "note": "Deterministic absence: every (entity,variable) pair the binding produced is either watched or listed here with a reason. MEASURED about the system's own coverage — no bar is invented, no value is learned, no cause is asserted."
+  },
+  "ledgerB": {
+    "class": "MEASURED",
+    "generatedAt": "2026-06-14T12:00:00Z",
+    "graphVersion": "gv-corpus",
+    "graphRelease": "v-corpus",
+    "available": true,
+    "summary": {
+      "totalPairs": 27,
+      "watched": 18,
+      "silent": 9,
+      "byReason": {
+        "no-stream-key": 1,
+        "out-of-scope": 1,
+        "unbounded": 2,
+        "unresolved": 5
+      }
+    },
+    "silent": [
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_CPU_THROTTLE_RATIO",
+        "metric": "container_cpu_cfs_throttled_periods_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_CPU_USAGE_VS_LIMIT",
+        "metric": "container_cpu_usage_seconds_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT",
+        "metric": "container_memory_working_set_bytes",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_OOM_EVENTS",
+        "metric": "container_oom_events_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|ghost-x|uid-g",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/ghost",
+        "entity": "Container",
+        "ruleId": "THR_CONTAINER_RESTARTS_RATE",
+        "metric": "kube_pod_container_status_restarts_total",
+        "state": "unresolved",
+        "reasonClass": "unresolved",
+        "reason": "pod config not readable at compile time (inventory/config list skew)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|payment-x|uid-p",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/payment",
+        "entity": "Container",
+        "container": "server",
+        "ruleId": "THR_CONTAINER_CPU_THROTTLE_RATIO",
+        "metric": "container_cpu_cfs_throttled_periods_total",
+        "state": "out-of-scope",
+        "reasonClass": "out-of-scope",
+        "reason": "out-of-scope: no CPU limit declared, CFS throttling cannot occur (eligibility: container.resources.limits.cpu)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|payment-x|uid-p",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/payment",
+        "entity": "Container",
+        "container": "server",
+        "ruleId": "THR_CONTAINER_CPU_USAGE_VS_LIMIT",
+        "metric": "container_cpu_usage_seconds_total",
+        "state": "bound",
+        "reasonClass": "unbounded",
+        "reason": "unbounded: no early-warning eligibility (container.resources.limits.cpu not declared)"
+      },
+      {
+        "entityCei": "i|silence-test-cluster|shop|Pod|payment-x|uid-p",
+        "roleKey": "r|silence-test-cluster|shop|Deployment|Deployment/payment",
+        "entity": "Container",
+        "container": "server",
+        "ruleId": "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT",
+        "metric": "container_memory_working_set_bytes",
+        "state": "bound",
+        "reasonClass": "unbounded",
+        "reason": "unbounded: no early-warning eligibility (container.resources.limits.memory not declared)"
+      },
+      {
+        "entityCei": "pvc|shop|data-0",
+        "entity": "PVC",
+        "ruleId": "THR_PVC_USED_VS_REQUESTED",
+        "metric": "kubelet_volume_stats_used_bytes",
+        "state": "bound",
+        "reasonClass": "no-stream-key",
+        "reason": "bar resolves but no observation stream is ingested for this pair yet (no stream key)"
+      }
+    ],
+    "note": "Deterministic absence: every (entity,variable) pair the binding produced is either watched or listed here with a reason. MEASURED about the system's own coverage — no bar is invented, no value is learned, no cause is asserted."
+  },
+  "perRule": {
+    "totalBindings": 27,
+    "instantiated": 21,
+    "configBound": 6,
+    "defaultBound": 13,
+    "unbounded": 2,
+    "outOfScope": 1,
+    "unresolved": 5
+  }
+}

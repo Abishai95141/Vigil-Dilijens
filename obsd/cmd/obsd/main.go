@@ -34,6 +34,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/mcp"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
@@ -84,6 +85,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		dumpBindings = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
 		flowEnabled  = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
 		flowInterval = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
+		mcpEnabled   = fs.Bool("mcp-enabled", false, "v3 T-A: serve the read-only MCP harness at /mcp (coverage, silence-ledger, warnings, emit_advisory). OFF by default; off = byte-identical to no MCP. Auth is a separate (later) track — do not expose this beyond an isolated cluster.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -145,8 +147,14 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled)
 }
+
+// mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
+// is surfaced to the caller. FALSE until the advisory backtest gate passes (doc 11
+// §3.5) — the class still REFUSES banned drafts while withheld. Flip only with the
+// gate's passing evidence cited, mirroring phaseECrossServiceGatePassed.
+const mcpAdvisoryGatePassed = false
 
 // sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
 // the Result and the coverage report.
@@ -154,7 +162,7 @@ const sha256PreviewLen = len("sha256:") + 12
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -302,6 +310,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	}
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
+	// The deterministic absence ledger (v3 T-A): built from the SAME binding.Result
+	// as coverage, each tick, off the deterministic path. The MCP harness's lead
+	// feature — a provable account of what is NOT watched and why.
+	var silenceView atomic.Pointer[vapi.SilenceLedgerView]
+	silenceView.Store(vapi.BuildSilenceLedger(graphVersion, graphRelease, time.Now(), nil))
 	// The operator surfaces (doc 10 M2–M4), published each tick like coverage —
 	// off the deterministic path, race-free via atomics.
 	var unexpView atomic.Pointer[vapi.UnexplainedView]
@@ -361,11 +374,12 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var providers *vapi.Providers
 	if apiEnabled {
 		providers = &vapi.Providers{
-			Coverage:    func() *vapi.CoverageView { return coverage.Load() },
-			Unexplained: func() *vapi.UnexplainedView { return unexpView.Load() },
-			Insights:    func() *vapi.InsightsView { return insightsView.Load() },
-			Topology:    func() *vapi.TopologyView { return topoView.Load() },
-			Warnings:    func() *vapi.WarningsView { return warningsView.Load() },
+			Coverage:      func() *vapi.CoverageView { return coverage.Load() },
+			SilenceLedger: func() *vapi.SilenceLedgerView { return silenceView.Load() },
+			Unexplained:   func() *vapi.UnexplainedView { return unexpView.Load() },
+			Insights:      func() *vapi.InsightsView { return insightsView.Load() },
+			Topology:      func() *vapi.TopologyView { return topoView.Load() },
+			Warnings:      func() *vapi.WarningsView { return warningsView.Load() },
 			// v2 cross-service cascade surface (doc 15 phase F): the warm-path chain,
 			// or the honest OFF/quiet state. flowEnabled drives the OFF-vs-quiet split.
 			CrossService: func() *vapi.CrossServiceView {
@@ -472,10 +486,23 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		logger.Info("operator surfacing API enabled (doc 10 M1–M7-begun + doc 15 F)",
 			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/cross-service /api/context-windows /api/chat /api/config")
 	}
-	go serveHealth(ctx, logger, ln, registry, watcher, providers)
+	var mcpHandler http.Handler
+	if mcpEnabled && providers != nil {
+		// v3 T-A: the read-only MCP harness reuses the SAME provider snapshot funcs —
+		// no new computation, no writer in scope (non-gating + no-write-back by
+		// construction). Auth is a later track; keep this to an isolated cluster.
+		mcpHandler = mcp.New(mcp.Sources{
+			Coverage:      providers.Coverage,
+			SilenceLedger: providers.SilenceLedger,
+			Warnings:      providers.Warnings,
+		}, mcpAdvisoryGatePassed, "vigil-obsd", graphRelease).HTTPHandler()
+		logger.Info("MCP read-only harness enabled (v3 T-A)", "route", "/mcp",
+			"tools", "get_coverage get_silence_ledger get_warnings emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
+	}
+	go serveHealth(ctx, logger, ln, registry, watcher, providers, mcpHandler)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
-		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets,
+		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView)
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
@@ -488,13 +515,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 // serveHealth exposes /metrics (Prometheus), /healthz (liveness), and /readyz
 // (informer sync) — the health-metrics endpoints of doc 03 §6 — on an already-bound
 // listener (so bind failures are surfaced by the caller, not swallowed here).
-func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, registry *prometheus.Registry, watcher *identity.Watcher, providers *vapi.Providers) {
+func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, registry *prometheus.Registry, watcher *identity.Watcher, providers *vapi.Providers, mcpHandler http.Handler) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	if providers != nil {
 		// The operator surfacing API (doc 10) shares the health listener so the web
 		// app's /api proxy target is the one bound port.
 		vapi.Register(mux, *providers)
+	}
+	if mcpHandler != nil {
+		// v3 T-A: the read-only MCP harness (JSON-RPC over HTTP), behind --mcp-enabled.
+		mux.Handle("/mcp", mcpHandler)
 	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -528,7 +559,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain]) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain]) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -639,6 +670,10 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// path — failures are logged, never allowed to perturb the tick.
 			if coverage != nil {
 				coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, now, bd.Result, bnd.lastObs, selResult))
+			}
+			if silenceView != nil {
+				// Same binding.Result, same tick — the two surfaces can never disagree.
+				silenceView.Store(vapi.BuildSilenceLedger(graphVersion, graphRelease, now, bd.Result))
 			}
 			// The unexplained-channel snapshot (doc 08): open cards + curation
 			// candidates + the residual blind-spot notice, surfaced to /api.

@@ -15,6 +15,10 @@ import (
 type Providers struct {
 	// Coverage returns the current Coverage Report view (never nil).
 	Coverage func() *CoverageView
+	// SilenceLedger returns the deterministic absence ledger (the MCP harness's
+	// lead feature): every (entity,variable) pair watched-or-silent-with-reason.
+	// Built from the SAME binding.Result as Coverage. nil ⇒ honest unavailable state.
+	SilenceLedger func() *SilenceLedgerView
 	// Findings returns the persisted findings feed (may be nil/empty).
 	Findings func(limit int) ([]store.FindingRow, error)
 	// FindingsStaleAfter is the freshness horizon for the findings feed (doc 14
@@ -67,6 +71,23 @@ func Register(mux *http.ServeMux, p Providers) {
 			return
 		}
 		writeJSON(w, p.Coverage())
+	})
+
+	mux.HandleFunc("/api/silence-ledger", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *SilenceLedgerView
+		if p.SilenceLedger != nil {
+			v = p.SilenceLedger()
+		}
+		if v == nil {
+			// Binding has not compiled — say so honestly rather than implying a
+			// fully-watched cluster.
+			v = BuildSilenceLedger("", "", timeNowUTC(), nil)
+		}
+		writeJSON(w, v)
 	})
 
 	mux.HandleFunc("/api/findings", func(w http.ResponseWriter, r *http.Request) {

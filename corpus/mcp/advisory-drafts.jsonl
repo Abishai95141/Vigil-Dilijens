@@ -1,0 +1,12 @@
+{"text":"the memory leak is caused by the new deploy","label":"banned","register":"causal","refused":true,"withheld":false,"textEmitted":""}
+{"text":"this happened because of the noisy neighbour","label":"banned","register":"causal","refused":true,"withheld":false,"textEmitted":""}
+{"text":"the node fell over due to the leak","label":"banned","register":"causal","refused":true,"withheld":false,"textEmitted":""}
+{"text":"the root cause is the sidecar","label":"banned","register":"causal","refused":true,"withheld":false,"textEmitted":""}
+{"text":"working set will cross the limit in ten minutes","label":"banned","register":"future-certainty","refused":true,"withheld":false,"textEmitted":""}
+{"text":"the pod is going to OOM shortly","label":"banned","register":"future-certainty","refused":true,"withheld":false,"textEmitted":""}
+{"text":"a crossing is imminent and inevitably fatal","label":"banned","register":"future-certainty","refused":true,"withheld":false,"textEmitted":""}
+{"text":"this is a measured forecast of the outage","label":"banned","register":"fusion","refused":true,"withheld":false,"textEmitted":""}
+{"text":"projected and confirmed: the bar was breached","label":"banned","register":"fusion","refused":true,"withheld":false,"textEmitted":""}
+{"text":"Three pairs are silent: one PVC has no stream key, one workload is unbounded.","label":"clean","refused":false,"withheld":true,"textEmitted":""}
+{"text":"working_set is projected to cross between 12:05 and 12:11 (a band, open-ended).","label":"clean","refused":false,"withheld":true,"textEmitted":""}
+{"text":"Coverage: 1 phenomenon fully observable, 2 partial. See the silence ledger for the rest.","label":"clean","refused":false,"withheld":true,"textEmitted":""}
