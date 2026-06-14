@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func sampleChain() *flow.Chain {
 
 func TestBuildCrossServiceStates(t *testing.T) {
 	// OFF: flow discovery not running — the honest dark state, no chain.
-	off := BuildCrossService(nil, false, csAt)
+	off := BuildCrossService(nil, nil, false, false, csAt)
 	if off.Enabled || off.Active || off.Chain != nil {
 		t.Errorf("OFF state must be disabled+inactive with no chain: %+v", off)
 	}
@@ -43,7 +44,7 @@ func TestBuildCrossServiceStates(t *testing.T) {
 	}
 
 	// QUIET: flow on, but no cascade firing this tick — distinct from OFF.
-	quiet := BuildCrossService(nil, true, csAt)
+	quiet := BuildCrossService(nil, nil, true, false, csAt)
 	if !quiet.Enabled || quiet.Active || quiet.Chain != nil {
 		t.Errorf("QUIET state must be enabled, inactive, no chain: %+v", quiet)
 	}
@@ -52,7 +53,7 @@ func TestBuildCrossServiceStates(t *testing.T) {
 	}
 
 	// ACTIVE: a chain is firing — surfaced verbatim.
-	act := BuildCrossService(sampleChain(), true, csAt)
+	act := BuildCrossService(sampleChain(), nil, true, false, csAt)
 	if !act.Enabled || !act.Active || act.Chain == nil {
 		t.Fatalf("ACTIVE state must carry the chain: %+v", act)
 	}
@@ -71,9 +72,9 @@ func TestBuildCrossServiceStates(t *testing.T) {
 // applied to the full /api/cross-service payload including the framing notes.
 func TestCrossServiceSurfaceCharterClean(t *testing.T) {
 	for _, v := range []*CrossServiceView{
-		BuildCrossService(nil, false, csAt),
-		BuildCrossService(nil, true, csAt),
-		BuildCrossService(sampleChain(), true, csAt),
+		BuildCrossService(nil, nil, false, false, csAt),
+		BuildCrossService(nil, nil, true, false, csAt),
+		BuildCrossService(sampleChain(), nil, true, false, csAt),
 	} {
 		raw, err := json.Marshal(v)
 		if err != nil {
@@ -107,7 +108,7 @@ func TestCrossServiceRoute(t *testing.T) {
 	// Provider returning an active chain → surfaced.
 	mux2 := http.NewServeMux()
 	Register(mux2, Providers{CrossService: func() *CrossServiceView {
-		return BuildCrossService(sampleChain(), true, csAt)
+		return BuildCrossService(sampleChain(), nil, true, false, csAt)
 	}})
 	rr2 := httptest.NewRecorder()
 	mux2.ServeHTTP(rr2, httptest.NewRequest(http.MethodGet, "/api/cross-service", nil))
@@ -124,5 +125,64 @@ func TestCrossServiceRoute(t *testing.T) {
 	mux.ServeHTTP(rr3, httptest.NewRequest(http.MethodPost, "/api/cross-service", nil))
 	if rr3.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST status = %d, want 405", rr3.Code)
+	}
+}
+
+// projectedChain is a sample anticipatory (PROJECTED) chain as Phase E produces it.
+func projectedChain() *flow.Chain {
+	return &flow.Chain{
+		MostUpstreamDegradedNode: "ob/productcatalogservice",
+		NodeClass:                "PROJECTED (structural fan-in over observed-flow edges, forecast-seeded)",
+		Links: []flow.Link{{
+			Impacted: "ob/frontend", Degraded: "ob/productcatalogservice",
+			EdgeClass: "MEASURED observed flow", EdgeTraversal: "valid",
+			Why:      "the caller's degradation is downstream of, not independent of, the callee's",
+			WhyClass: "AUTHORED", Temporal: "T0->T0+", Author: "vigil-engineering", Version: "v0.4.0",
+		}},
+		Symptoms: []flow.SymptomOut{
+			{Workload: "ob/productcatalogservice", Phenomenon: "PHEN_UPSTREAM_DEGRADATION", Class: "PROJECTED",
+				Detail: "projected to cross its working_set bar ~10:13Z (band 10:09Z–10:22Z, moderate)"},
+			{Workload: "ob/frontend", Phenomenon: "PHEN_DOWNSTREAM_IMPACT", Class: "PROJECTED",
+				Detail: "projected-impact via observed-flow edge to ob/productcatalogservice (upstream forecast ~10:13Z (band 10:09Z–10:22Z, moderate))"},
+		},
+		GeneratedAt: csAt,
+	}
+}
+
+func TestBuildCrossServiceProjectedLane(t *testing.T) {
+	// Gate PENDING: computed but WITHHELD — ProjectedActive false, no chain surfaced.
+	pend := BuildCrossService(nil, projectedChain(), true, false, csAt)
+	if pend.ProjectedActive || pend.ProjectedChain != nil {
+		t.Errorf("gate-pending must withhold the projected chain: active=%v chain=%v", pend.ProjectedActive, pend.ProjectedChain != nil)
+	}
+	if pend.ProjectedNote == "" || !strings.Contains(pend.ProjectedNote, "gate") {
+		t.Errorf("gate-pending note must state the gate: %q", pend.ProjectedNote)
+	}
+
+	// Gate PASSED, quiet: no projected cascade this tick.
+	quiet := BuildCrossService(nil, nil, true, true, csAt)
+	if quiet.ProjectedActive || quiet.ProjectedChain != nil {
+		t.Errorf("quiet projected lane must be inactive: %+v", quiet)
+	}
+
+	// Gate PASSED, active: the projected chain is surfaced.
+	act := BuildCrossService(nil, projectedChain(), true, true, csAt)
+	if !act.ProjectedActive || act.ProjectedChain == nil {
+		t.Fatalf("gate-passed active must surface the projected chain: %+v", act)
+	}
+	if act.ProjectedChain.MostUpstreamDegradedNode != "ob/productcatalogservice" {
+		t.Errorf("projected root not surfaced: %+v", act.ProjectedChain)
+	}
+
+	// OFF: flow off → the anticipatory lane is dark with its own note.
+	off := BuildCrossService(nil, nil, false, true, csAt)
+	if off.ProjectedActive || !strings.Contains(off.ProjectedNote, "OFF") {
+		t.Errorf("flow-off projected note: %q", off.ProjectedNote)
+	}
+
+	// Charter: the surfaced projected payload carries no causal-claim token.
+	raw, _ := json.Marshal(act)
+	if tok, bad := flow.HasForbiddenToken(string(raw)); bad {
+		t.Errorf("charter violation: token %q in projected payload:\n%s", tok, raw)
 	}
 }

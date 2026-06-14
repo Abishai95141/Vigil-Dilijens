@@ -314,6 +314,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// v2 cross-service cascade (doc 15 phase D/F), warm path: published each tick
 	// off the deterministic digest, surfaced (gated) at /api/cross-service.
 	var crossSvcView atomic.Pointer[flow.Chain]
+	// v2 ANTICIPATORY cross-service cascade (doc 15 phase E): seeded from the gated
+	// early-warning lane, propagating a PROJECTED downstream-impact hypothesis along
+	// the MEASURED flow edges. Computed-but-DARK until its own backtest gate passes
+	// (doc 11 §3.5): a new PROJECTED class is not operator-visible before its gate.
+	var projectedCrossSvcView atomic.Pointer[flow.Chain]
 	var fcIn *atomic.Pointer[forecastInputs]
 	if p.Forecast.Enabled {
 		fcIn = new(atomic.Pointer[forecastInputs])
@@ -364,7 +369,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			// v2 cross-service cascade surface (doc 15 phase F): the warm-path chain,
 			// or the honest OFF/quiet state. flowEnabled drives the OFF-vs-quiet split.
 			CrossService: func() *vapi.CrossServiceView {
-				return vapi.BuildCrossService(crossSvcView.Load(), flowEnabled, time.Now().UTC())
+				return vapi.BuildCrossService(crossSvcView.Load(), projectedCrossSvcView.Load(), flowEnabled, phaseECrossServiceGatePassed, time.Now().UTC())
 			},
 		}
 		if findingsStore != nil {
@@ -471,7 +476,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &unexpView, &insightsView, &topoView, findingsStore, budgets,
-		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView)
+		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView)
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
 	}
@@ -523,7 +528,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain]) {
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain]) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -683,6 +688,47 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 						"why_class", "AUTHORED", "edge_class", "MEASURED observed flow")
 				} else {
 					crossSvcView.Store(nil)
+				}
+			}
+			// v2 ANTICIPATORY cross-service cascade (doc 15 phase E), WARM PATH — seeded
+			// from the GATED early-warning lane (warningsView.Warnings, never raw
+			// forecasts), so it inherits the forecast lane's own gate. Each upstream
+			// callee FORECAST to cross soon propagates a PROJECTED downstream-impact
+			// hypothesis to its callers over the MEASURED flow edge + the AUTHORED
+			// relation (weakest-input rule). Off the digest; computed every tick;
+			// surfaced only once its own backtest gate passes (doc 11 §3.5).
+			if flowEnabled && projectedCrossSvcView != nil {
+				var projected []flow.ProjectedDegradedWorkload
+				if wv := warningsView.Load(); wv != nil && wv.Enabled {
+					seen := map[string]bool{}
+					for i := range wv.Warnings {
+						c := &wv.Warnings[i]
+						rec, ok := store.Get(c.EntityCEI)
+						if !ok || rec.RoleCEI.RoleKey == "" {
+							continue
+						}
+						k := rec.RoleCEI.Key()
+						if seen[k] {
+							continue
+						}
+						seen[k] = true
+						projected = append(projected, flow.ProjectedDegradedWorkload{
+							CEI: rec.RoleCEI, Label: flow.RoleLabel(rec.RoleCEI), Metric: c.Metric,
+							PrecursorPhenomena: c.PrecursorPhenomena, Confidence: c.Confidence,
+							CrossAt: c.CrossAt, EarliestAt: c.EarliestAt, LatestAt: c.LatestAt,
+							LatestBeyondHorizon: c.LatestBeyondHorizon,
+						})
+					}
+				}
+				if chain, ok := flow.ProjectedCrossServiceChain(edges, projected, flowRel, evalWindow, now); ok {
+					c := chain
+					projectedCrossSvcView.Store(&c)
+					logger.Info("anticipatory cross-service cascade (v2 phase E, warm path)",
+						"root", chain.MostUpstreamDegradedNode, "projected_callers", len(chain.Links),
+						"class", "PROJECTED upstream+downstream · MEASURED edge · AUTHORED why",
+						"surfaced", phaseECrossServiceGatePassed)
+				} else {
+					projectedCrossSvcView.Store(nil)
 				}
 			}
 			if topoView != nil {

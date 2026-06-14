@@ -22,6 +22,13 @@ import (
 // cadence is correct. NOT added to params.requiredEdgeBudgets — flow is OPTIONAL.
 const flowEdgeBudget = 90 * time.Second
 
+// phaseECrossServiceGatePassed gates the SURFACING of the anticipatory cross-service
+// cascade (doc 15 phase E). Per doc 11 §3.5 a new PROJECTED class is not operator-
+// visible until its backtest gate (lead-time + confirm/refute calibration) passes.
+// The lane COMPUTES every tick regardless (logged, off the digest); this flag controls
+// only whether /api/cross-service surfaces the projected chain. Flip to true on a pass.
+const phaseECrossServiceGatePassed = false
+
 // The cross-service AUTHORED relation surfaced by the warm-path cascade is now
 // CURATED into the released ontology graph (doc 15 Phase C) and read via
 // flow.RelationFromGraph in main.go — no longer from an experimental file path.

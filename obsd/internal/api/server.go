@@ -178,7 +178,7 @@ func Register(mux *http.ServeMux, p Providers) {
 		if v == nil {
 			// Flow discovery is not running: state WHY the lane is dark (the gate
 			// rule's honesty), never imply there is no cross-service dependency.
-			v = BuildCrossService(nil, false, timeNowUTC())
+			v = BuildCrossService(nil, nil, false, false, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

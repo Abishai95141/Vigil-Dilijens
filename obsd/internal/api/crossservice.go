@@ -31,6 +31,16 @@ type CrossServiceView struct {
 	// nil when the lane is OFF or quiet. Surfaced verbatim from the warm path so
 	// the operator sees exactly what a replay of the captured topology reproduces.
 	Chain *flow.Chain `json:"chain,omitempty"`
+
+	// --- Phase E: the ANTICIPATORY (PROJECTED) lane (doc 15 phase E) ---
+	// The cascade seeded from the gated early-warning lane: an upstream callee
+	// FORECAST to cross soon, propagating a PROJECTED downstream-impact hypothesis
+	// to its callers over the MEASURED flow edge + AUTHORED relation. A NEW PROJECTED
+	// class, so it is NOT operator-visible until its own backtest gate passes (doc 11
+	// §3.5): ProjectedActive stays false (and ProjectedChain nil) while gate-pending.
+	ProjectedActive bool        `json:"projectedActive"`
+	ProjectedNote   string      `json:"projectedNote"`
+	ProjectedChain  *flow.Chain `json:"projectedChain,omitempty"`
 }
 
 const (
@@ -48,12 +58,27 @@ const (
 	crossServiceActiveNote = "A cross-service cascade is firing: a degraded callee reaches " +
 		"impacted callers over observed-flow edges. Each provenance class is shown side by " +
 		"side, never fused into a single claim."
+
+	// Phase E (anticipatory) lane notes.
+	projectedOffNote = "Flow discovery is OFF: the anticipatory cross-service lane needs " +
+		"observed-flow edges to propagate a forecast along."
+	projectedGatePendingNote = "Anticipatory cross-service cascade (doc 15 phase E) is COMPUTED " +
+		"every tick but NOT yet operator-visible: a new PROJECTED class ships only after its own " +
+		"backtest gate (lead-time + confirm/refute calibration, doc 11 §3.5) passes."
+	projectedQuietNote = "No anticipatory cross-service cascade: no upstream callee is currently " +
+		"forecast to cross its bar with an impacted caller over an observed-flow edge."
+	projectedActiveNote = "An anticipatory cross-service cascade is projected: an upstream callee " +
+		"is FORECAST to cross its bar soon, so its callers are PROJECTED to be impacted soon — the " +
+		"upstream forecast and downstream impact are PROJECTED (with bands), the flow edge MEASURED, " +
+		"the why AUTHORED; each labelled, never fused, and no band collapses to a line."
 )
 
-// BuildCrossService renders the cross-service surface from the warm-path chain
-// pointer (nil = quiet) and the flow-enabled flag. It never invents a cascade: an
-// OFF lane and a quiet lane are distinct, stated states.
-func BuildCrossService(chain *flow.Chain, enabled bool, now time.Time) *CrossServiceView {
+// BuildCrossService renders the cross-service surface: the MEASURED lane (Phase D,
+// gate-passed) from `chain`, and the PROJECTED anticipatory lane (Phase E) from
+// `projected`. It never invents a cascade and never upgrades a class: OFF, quiet,
+// gate-pending, and active are distinct, stated states. The projected chain is
+// withheld (ProjectedActive=false, no ProjectedChain) until projectedGatePassed.
+func BuildCrossService(chain *flow.Chain, projected *flow.Chain, enabled, projectedGatePassed bool, now time.Time) *CrossServiceView {
 	v := &CrossServiceView{
 		GeneratedAt: now, Class: crossServiceClass, Enabled: enabled,
 		GateNote: crossServiceGateNote,
@@ -67,6 +92,21 @@ func BuildCrossService(chain *flow.Chain, enabled bool, now time.Time) *CrossSer
 		v.Active = true
 		v.Note = crossServiceActiveNote
 		v.Chain = chain
+	}
+	// The anticipatory (PROJECTED) lane — gated separately from the MEASURED lane.
+	switch {
+	case !enabled:
+		v.ProjectedNote = projectedOffNote
+	case !projectedGatePassed:
+		// Gate-pending: the lane is computed but withheld from the operator (the
+		// chain content is NOT surfaced — a new class is not visible before its gate).
+		v.ProjectedNote = projectedGatePendingNote
+	case projected == nil:
+		v.ProjectedNote = projectedQuietNote
+	default:
+		v.ProjectedActive = true
+		v.ProjectedNote = projectedActiveNote
+		v.ProjectedChain = projected
 	}
 	return v
 }
