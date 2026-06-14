@@ -29,10 +29,16 @@ spec:
           args:
             - |
               import socket, threading, time
-              buf = [bytearray(1024*1024) for _ in range(60)]   # prefill ~60Mi
+              # bytearray(1MiB) is allocated+zeroed by CPython -> immediately RSS. Prefill
+              # BELOW the bar, then leak SLOWLY so the working-set is still RISING when it
+              # enters the at-threshold band [bar=365Mi, limit=384Mi] and the 5-min slope
+              # window (rate_window) is already full of clean rising data -> PHEN_MEMORY_LEAK
+              # (rising slope + at-threshold) fires for several ticks BEFORE OOM (the only
+              # shape it fires on: not a sawtooth, not a plateau).
+              buf = [bytearray(1024*1024) for _ in range(340)]   # ~340Mi
               def leak():
                   while True:
-                      buf.append(bytearray(1024*1024)); time.sleep(4)   # +1Mi / 4s
+                      buf.append(bytearray(1024*1024)); time.sleep(10)   # +1Mi / 10s
               threading.Thread(target=leak, daemon=True).start()
               s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
               s.bind(("0.0.0.0", 8080)); s.listen(32)
@@ -41,8 +47,8 @@ spec:
                   c, _ = s.accept(); held.append(c)   # keep caller connections open
           ports: [{ containerPort: 8080 }]
           resources:
-            requests: { cpu: 20m, memory: 64Mi }
-            limits:   { cpu: 100m, memory: 96Mi }   # bar = 0.95*96 = ~91Mi
+            requests: { cpu: 20m, memory: 256Mi }
+            limits:   { cpu: 100m, memory: 384Mi }   # bar = 0.95*384 = ~365Mi
 ---
 apiVersion: v1
 kind: Service

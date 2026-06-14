@@ -36,13 +36,29 @@ experimental overlay, charter-clean.
 - **Negative control (LIVE):** 4 real findings fired (on no-caller workloads, e.g.
   `leaky-worker`) and the cross-service cascade correctly produced **no false chain**.
 
-## Honestly NOT yet demonstrated live (the one gap, with the cause + the fix)
-The POSITIVE live path — a finding AND a flow-caller on the SAME workload — was not
-captured: `leaky-callee`'s leak OOM-resets (~144s) before it sustains the rising slope
-`PHEN_MEMORY_LEAK` requires, so the finding never coincided with the (captured) flow
-edge. This is a detection-INPUT timing characteristic, not a cascade defect — the cascade
-logic is unit-proven and every other half is live-verified. The clean live proof needs a
-SLOW, non-OOMing sustained leak on the callee (the validated 09 M5 leak-creep pattern,
-~6-8 min) OR the Phase C "degraded-but-alive" throttle phenomenon. Either fires
-`PHEN_MEMORY_LEAK`/a degradation finding while the callee keeps serving → the cross-service
-cascade names it root with the caller impacted. That run is the immediate next step.
+## POSITIVE live proof — DONE (2026-06-14), two independent scenarios
+Root cause of the earlier non-fire: my first leak workload was too fast for its small
+limit (96Mi) — it OOM-sawtoothed every ~144s, so the working-set never held the SUSTAINED
+rising slope `PHEN_MEMORY_LEAK` needs (the slope window is `rate_window: 5m`). Note the
+twin trap: a PLATEAU above the bar also does not fire (rising-slope only — the #82 blind
+spot; `leaky-worker` at 313/320Mi is the live example). The robust fix is a leak that
+rises STEADILY through the at-threshold band `[bar, limit]` for longer than the 5-min
+window without OOMing (`corpus/chaos/flow-cross-demo.yaml`: 384Mi limit, prefill 340Mi,
++1Mi/10s).
+
+With that, the cross-service cascade FIRED LIVE, correctly, every tick:
+- **Boutique fan-in** (productcatalog accidentally left squeezed to 18Mi → OOM-cycling,
+  genuinely degraded): root = `online-boutique/productcatalogservice`, **3 impacted callers**
+  (frontend, checkout, recommendation), `why_class=AUTHORED`, `edge_class=MEASURED observed
+  flow`. Replay **byte-identical (33 ticks)**.
+- **Chaos pair** (productcatalog healthy; leaky-callee the sole degraded callee): root =
+  `chaos/leaky-callee`, **1 impacted caller** (flow-caller). Replay **byte-identical (8 ticks)**.
+- The identity role-CEI join (Kind="Deployment") works for boutique AND chaos pods — no
+  mis-join. The root selection is correct (higher-fan-in hub wins when several are degraded).
+
+**Verdict: Phase D cross-service cascade is functionally complete and LIVE-PROVEN** —
+discovers the call graph, ingests it into obsd's deterministic core (replay byte-identical),
+and names the degraded cross-service root + impacted callers on the warm path, charter-clean.
+The remaining lane work is E (forecast propagation along flow edges) and F (surfacing); and a
+broader note: the cross-service cascade's COVERAGE rides the underlying finding coverage, so
+the #82 plateau-blindness and a durable-OOM lane would widen which degradations it can trace.
