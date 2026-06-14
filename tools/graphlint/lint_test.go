@@ -114,8 +114,8 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadOverlays: %v", err)
 	}
-	if len(ovls) != 7 {
-		t.Fatalf("overlays = %d, want 7", len(ovls))
+	if len(ovls) != 8 {
+		t.Fatalf("overlays = %d, want 8", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {
@@ -125,8 +125,9 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 		t.Errorf("merged lint should be clean: schema=%v ref=%v overlay=%v", res.schemaErrors, res.refErrors, res.overlayErrors)
 	}
 	g := res.gap
-	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 38 {
-		t.Errorf("merged spans = with %d / missing %d, want 38/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
+	// 40 after v0.4.0 (doc 15 Phase C): the cross-service overlay adds 2 spanned phenomena.
+	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 40 {
+		t.Errorf("merged spans = with %d / missing %d, want 40/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
 	}
 	if g.ThresholdRulesStructured != 12 {
 		t.Errorf("structured rules = %d, want 12", g.ThresholdRulesStructured)

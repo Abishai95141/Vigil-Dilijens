@@ -6,17 +6,19 @@ import (
 	"testing"
 )
 
-// Per-phenomenon observability on the kind cluster: every one of the 38 phenomena
+// Per-phenomenon observability on the kind cluster: every one of the 40 phenomena
 // gets a verdict; nothing is full unless every required member is cleanly
 // obtainable; reasons travel with every degraded verdict. Conservative by
-// construction: indeterminate members can only degrade, never promote.
+// construction: indeterminate members can only degrade, never promote. v0.4.0
+// (doc 15 Phase C) added the two cross-service relation roles — they have no
+// resolvable members on this cluster, so they verdict "none" (honest).
 func TestPhenomenonObservabilityKind(t *testing.T) {
 	g := loadGraph(t)
 	avail := GateSignals(g, kindFacts())
 	rep := PhenomenonObservability(g, avail)
 
-	if got := rep.Full + rep.Partial + rep.None; got != 38 || len(rep.PerPhenomenon) != 38 {
-		t.Fatalf("verdicts = %d (full %d partial %d none %d), want 38", got, rep.Full, rep.Partial, rep.None)
+	if got := rep.Full + rep.Partial + rep.None; got != 40 || len(rep.PerPhenomenon) != 40 {
+		t.Fatalf("verdicts = %d (full %d partial %d none %d), want 40", got, rep.Full, rep.Partial, rep.None)
 	}
 	for _, p := range rep.PerPhenomenon {
 		if p.Observability != "full" && len(p.MissingReasons) == 0 {

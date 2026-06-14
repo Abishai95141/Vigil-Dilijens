@@ -151,8 +151,11 @@ func TestMatchDeterministic(t *testing.T) {
 func TestOnlyEntityLocalPhenomena(t *testing.T) {
 	g := loadGraph(t)
 	m := NewMatcher(g)
-	if m.EntityLocalCount() != 17 {
-		t.Errorf("entity-local phenomena = %d, want 17", m.EntityLocalCount())
+	// 18 after v0.4.0 (doc 15 Phase C): + PHEN_UPSTREAM_DEGRADATION (entity-local).
+	// It carries no detection condition, so it sits in the matcher's set but never
+	// fires (proven detection-neutral); this count is a graph-structure assertion.
+	if m.EntityLocalCount() != 18 {
+		t.Errorf("entity-local phenomena = %d, want 18", m.EntityLocalCount())
 	}
 	// OOM is first-order — must not be in the matcher's set.
 	for _, p := range m.entityLoc {

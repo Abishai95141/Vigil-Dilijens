@@ -335,10 +335,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// digest, gated (logged, not yet a deterministic finding).
 	var flowRel flow.Relation
 	if flowEnabled {
-		if r, rerr := flow.LoadRelation(flowRelationPath); rerr != nil {
-			logger.Warn("flow: authored relation unavailable; cross-service cascade off", "path", flowRelationPath, "err", rerr)
-		} else {
+		// doc 15 Phase C: the cross-service relation is now CURATED into the released
+		// ontology graph (a phenomenon_relation edge), read here from the loaded graph
+		// — not the experimental overlay file. Surfaced verbatim with graph provenance.
+		if r, ok := flow.RelationFromGraph(ontologyGraph); ok {
 			flowRel = r
+			logger.Info("flow: cross-service relation loaded from curated graph (doc 15 phase C)",
+				"trigger", r.Trigger, "downstream", r.Downstream, "graph", r.Version)
+		} else {
+			logger.Warn("flow: curated cross-service relation absent in graph; cross-service cascade off")
 		}
 		go runFlowCollector(ctx, logger, &gate, client, store, edges, clusterID, flowInterval)
 	}

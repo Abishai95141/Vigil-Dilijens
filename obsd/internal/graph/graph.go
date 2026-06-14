@@ -282,12 +282,7 @@ func Parse(raw []byte) (*Graph, error) {
 	}
 
 	g.Edges = f.Edges
-	for i := range g.Edges {
-		e := &g.Edges[i]
-		g.edgesByType[e.Type] = append(g.edgesByType[e.Type], e)
-		g.edgesBySrc[e.Src] = append(g.edgesBySrc[e.Src], e)
-		g.edgesByDst[e.Dst] = append(g.edgesByDst[e.Dst], e)
-	}
+	g.reindexEdges()
 	g.resolvePhenomena()
 	if err := g.checkStats(); err != nil {
 		return nil, err
@@ -372,6 +367,21 @@ func (g *Graph) addNode(typ string, raw json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+// reindexEdges rebuilds the by-type/src/dst pointer indexes from g.Edges. Called
+// after the base load and again whenever an overlay appends edges (doc 15 Phase C),
+// since a slice growth re-homes the backing array and would dangle stale pointers.
+func (g *Graph) reindexEdges() {
+	g.edgesByType = map[string][]*Edge{}
+	g.edgesBySrc = map[string][]*Edge{}
+	g.edgesByDst = map[string][]*Edge{}
+	for i := range g.Edges {
+		e := &g.Edges[i]
+		g.edgesByType[e.Type] = append(g.edgesByType[e.Type], e)
+		g.edgesBySrc[e.Src] = append(g.edgesBySrc[e.Src], e)
+		g.edgesByDst[e.Dst] = append(g.edgesByDst[e.Dst], e)
+	}
 }
 
 // resolvePhenomena attaches members (participates_in) and relations

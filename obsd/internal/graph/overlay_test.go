@@ -23,8 +23,8 @@ func loadKGWithOverlays(t *testing.T) *Graph {
 // their traversal edge types — the doc 14 A14 gap, closed by authored content.
 func TestOverlaysCloseTheSpanGap(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Phenomena) != 38 {
-		t.Fatalf("phenomena = %d, want 38", len(g.Phenomena))
+	if len(g.Phenomena) != 40 {
+		t.Fatalf("phenomena = %d, want 40", len(g.Phenomena))
 	}
 	counts := map[string]int{}
 	for id, p := range g.Phenomena {
@@ -40,10 +40,12 @@ func TestOverlaysCloseTheSpanGap(t *testing.T) {
 			t.Errorf("%s: entity-local with traversal edges %v", id, p.TraversalEdgeTypes)
 		}
 	}
-	// The authored distribution (17 + 16 + 5 = 38) — pinned so an accidental edit
-	// to the overlay shows up as a deliberate diff here too.
-	if counts[SpanEntityLocal] != 17 || counts[SpanFirstOrder] != 16 || counts[SpanSecondOrder] != 5 {
-		t.Errorf("span distribution = %v, want entity-local:17 first-order:16 second-order:5", counts)
+	// The authored distribution (18 + 17 + 5 = 40) — pinned so an accidental edit
+	// to the overlay shows up as a deliberate diff here too. v0.4.0 (doc 15 Phase C)
+	// added PHEN_UPSTREAM_DEGRADATION (entity-local) + PHEN_DOWNSTREAM_IMPACT
+	// (first-order over the new "flow" traversal edge).
+	if counts[SpanEntityLocal] != 18 || counts[SpanFirstOrder] != 17 || counts[SpanSecondOrder] != 5 {
+		t.Errorf("span distribution = %v, want entity-local:18 first-order:17 second-order:5", counts)
 	}
 }
 
@@ -117,8 +119,8 @@ func TestOverlayVersionPinning(t *testing.T) {
 		t.Errorf("version %q not a sha256 pin", merged.Version)
 	}
 	// Provenance travels with the content.
-	if len(merged.Overlays) != 7 {
-		t.Fatalf("overlay provenance records = %d, want 7 (spans, rules v1-v3, conditions v1-v3)", len(merged.Overlays))
+	if len(merged.Overlays) != 8 {
+		t.Fatalf("overlay provenance records = %d, want 8 (spans, rules v1-v3, conditions v1-v3, cross-service-v0)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

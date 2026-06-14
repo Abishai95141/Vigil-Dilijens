@@ -1,0 +1,69 @@
+# Cross-service relation — authored overlay v0 (doc 15 Phase C).
+#
+# AUTHORED-class content. The base KG (k8s_signal_kg.json) is a clean vendored
+# mirror and stays IMMUTABLE; this overlay PROMOTES the experimental cross-service
+# relation (overlays/experimental/flow-relation-v0.yaml) into the curated, versioned
+# ontology. It adds two CorrelationGroup NODES (the cascade roles) + one directed
+# phenomenon_relation EDGE between them + their spans (the first to declare the v2
+# "flow" traversal edge type). Loaded by obsd via flow.RelationFromGraph and surfaced
+# verbatim with release provenance; the warm-path cross-service cascade (MEASURED now,
+# PROJECTED soon) reads its "why" from here.
+#
+# Determinism: these two phenomena carry inline measurable-signal hints but NO
+# participates_in members, NO threshold rules, and NO detection conditions — so they
+# enter neither the selection funnel (TierASet reads participates_in members + checks,
+# not inline signals) nor the matcher, and the deterministic digest is BYTE-IDENTICAL
+# (proven by the ReplayDiff gate). Native MEASURED caller-side detection over the flow
+# span is the directed-flow-span follow-up (doc 15 Phase D-native).
+overlay: cross-service-relation
+version: 0
+author: vigil-engineering
+status: curated-v0 (doc 15 Phase C; promoted from overlays/experimental/flow-relation-v0.yaml)
+
+phenomena:
+  - id: PHEN_UPSTREAM_DEGRADATION
+    label: Upstream service degradation (cross-service trigger)
+    signals:
+      - ["container_memory_working_set_bytes", "supporting", "T0", "callee working-set rising toward its declared limit (the callee's own MEASURED degradation; the actual trigger finding, e.g. PHEN_MEMORY_LEAK, is matched natively)"]
+      - ["request_duration_seconds|grpc_server_handling_seconds", "supporting", "T0", "callee-side latency or error-rate rise where exposed (the degrading own-signal)"]
+    notes: >-
+      Cross-service cascade ROLE: a CALLEE whose own signal degrades at T0. Surfaced
+      verbatim as the upstream end of the authored phenomenon_relation; it names the
+      cascade role, not a separately-matched phenomenon.
+  - id: PHEN_DOWNSTREAM_IMPACT
+    label: Downstream caller impact over observed flow (cross-service)
+    signals:
+      - ["container_memory_working_set_bytes", "supporting", "T0+", "caller-side resource/latency pressure tracking the degraded callee, where exposed"]
+      - ["request_duration_seconds|grpc_client_handling_seconds", "supporting", "T0+", "caller-side latency / connection-depth rise on the observed-flow edge to the degraded callee (the MEASURABLE downstream basis)"]
+    notes: >-
+      Cross-service cascade ROLE: a direct CALLER impacted at T0+ along the observed-flow
+      (conntrack) edge to a degraded callee. Measurable basis is caller-side conn-depth /
+      latency rise; native MEASURED detection is the directed-flow-span follow-up.
+
+relations:
+  - src: PHEN_UPSTREAM_DEGRADATION
+    dst: PHEN_DOWNSTREAM_IMPACT
+    role: downstream
+    temporal_order: "T0->T0+"
+    why: >-
+      Per the curated ontology: a service whose own latency or error signal degrades
+      propagates impact to its direct callers along the observed call edge; the caller's
+      degradation is downstream of, not independent of, the callee's. Impact travels
+      against the call arrow (callee -> caller).
+
+spans:
+  PHEN_UPSTREAM_DEGRADATION:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      The trigger role's own degradation (working-set rising toward its limit, latency
+      or error-rate rise) is observed AT the callee — no topology walk joins it.
+      Entity-local. The actual MEASURED trigger is the callee's own finding.
+  PHEN_DOWNSTREAM_IMPACT:
+    span: first-order
+    traversal_edge_types: [flow]
+    rationale: >-
+      A caller's impact is joined to the degraded callee ONE hop away over the observed-
+      flow (conntrack) edge — the directed cross-service span. Impact travels against the
+      call arrow (callee -> caller); the walk follows the single "flow" edge type, the
+      v2 observed-dependency edge (doc 15 Phase C).

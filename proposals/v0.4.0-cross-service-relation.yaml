@@ -1,0 +1,36 @@
+# Change proposal — doc 12 §3.3. Promote the v2 cross-service AUTHORED relation
+# into the curated ontology (doc 15 Phase C). The base KG stays immutable; the
+# change is a new authored OVERLAY (cross-service-v0.yaml) carrying two
+# CorrelationGroup roles + one phenomenon_relation edge + their flow spans.
+release: v0.4.0
+from: v0.3.0
+class: behavioural-medium
+author: vigil-engineering
+summary: >-
+  Promote overlays/experimental/flow-relation-v0.yaml into the curated graph as
+  PHEN_UPSTREAM_DEGRADATION -> PHEN_DOWNSTREAM_IMPACT (role downstream, T0->T0+),
+  surfaced verbatim with release provenance and read by obsd via
+  flow.RelationFromGraph. Adds "flow" to the traversal-edge vocabulary so the
+  cross-service span is declarable. The two phenomena carry inline measurable-signal
+  hints but NO participates_in members, NO threshold rules, and NO detection
+  conditions, so they enter neither the selection funnel nor the matcher: the
+  deterministic digest is byte-identical (detection-neutral / ReplayDiff). Native
+  MEASURED caller-side detection over the flow span is the directed-flow-span
+  follow-up (doc 15 Phase D-native).
+affected_elements:
+  - PHEN_UPSTREAM_DEGRADATION
+  - PHEN_DOWNSTREAM_IMPACT
+evidence:
+  - kind: corpus
+    ref: corpus/labels/flow-gate-crossservice.md
+  - kind: design-doc
+    ref: docs/15-cross-service-flow-lane.md (Phase C)
+  - kind: replay-diff
+    ref: detection-neutral — the two phenomena carry no checks/rules/participates_in members; TierASet + matcher unaffected; fixture digests byte-identical (version-normalized)
+review:
+  reviewer: vigil-engineering
+  decision: approve
+  at: "2026-06-14"
+  notes: >-
+    behavioural-medium per the diff (two added phenomena); the cascade relation is
+    AUTHORED-by-construction and surfaced verbatim, no learned value.

@@ -52,21 +52,42 @@ type ovCheck struct {
 	Note     string `yaml:"note"`
 }
 
+// ovPhenomenon / ovRelation mirror the runtime loader's overlay-added CorrelationGroup
+// nodes + phenomenon_relation edges (doc 15 Phase C): authored deltas may add phenomena
+// + relations via overlay, so the base KG stays an immutable vendored mirror.
+type ovPhenomenon struct {
+	ID      string     `yaml:"id"`
+	Label   string     `yaml:"label"`
+	Signals [][]string `yaml:"signals"`
+	Notes   string     `yaml:"notes"`
+}
+
+type ovRelation struct {
+	Src           string `yaml:"src"`
+	Dst           string `yaml:"dst"`
+	Role          string `yaml:"role"`
+	TemporalOrder string `yaml:"temporal_order"`
+	Why           string `yaml:"why"`
+}
+
 type overlayDoc struct {
-	path    string
-	Overlay string               `yaml:"overlay"`
-	Version int                  `yaml:"version"`
-	Author  string               `yaml:"author"`
-	Status  string               `yaml:"status"`
-	Spans   map[string]ovSpan    `yaml:"spans"`
-	Rules   []ovRule             `yaml:"rules"`
-	Checks  map[string][]ovCheck `yaml:"checks"`
-	Anchors map[string]string    `yaml:"anchors"`
+	path      string
+	Overlay   string               `yaml:"overlay"`
+	Version   int                  `yaml:"version"`
+	Author    string               `yaml:"author"`
+	Status    string               `yaml:"status"`
+	Phenomena []ovPhenomenon       `yaml:"phenomena"`
+	Relations []ovRelation         `yaml:"relations"`
+	Spans     map[string]ovSpan    `yaml:"spans"`
+	Rules     []ovRule             `yaml:"rules"`
+	Checks    map[string][]ovCheck `yaml:"checks"`
+	Anchors   map[string]string    `yaml:"anchors"`
 }
 
 var (
-	ovSpanVocab      = map[string]bool{"entity-local": true, "first-order": true, "second-order": true}
-	ovEdgeVocab      = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true}
+	ovSpanVocab = map[string]bool{"entity-local": true, "first-order": true, "second-order": true}
+	// "flow" is the v2 observed-flow (conntrack) traversal edge type (doc 15 Phase C).
+	ovEdgeVocab      = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true, "flow": true}
 	ovKindVocab      = map[string]bool{"config-relative": true, "absolute": true, "rate-of-change": true, "co-occurrence": true}
 	ovDirectionVocab = map[string]bool{"above": true, "below": true}
 	ovScopeVocab     = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true}
@@ -160,6 +181,33 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 		}
 		if strings.TrimSpace(o.Author) == "" {
 			errs = append(errs, fmt.Sprintf("%s: missing author provenance (doc 02 §3.6)", at))
+		}
+		// doc 15 Phase C: register overlay-added phenomena (so this overlay's own
+		// spans/relations + later overlays resolve them) and validate added relations.
+		for _, op := range o.Phenomena {
+			if op.ID == "" || op.Label == "" {
+				errs = append(errs, fmt.Sprintf("%s: overlay phenomenon missing id/label", at))
+				continue
+			}
+			if t := nodeType[op.ID]; t != "" {
+				errs = append(errs, fmt.Sprintf("%s: overlay phenomenon %q already defined as %s (overlays may add, never redefine)", at, op.ID, t))
+				continue
+			}
+			if len(op.Signals) == 0 {
+				errs = append(errs, fmt.Sprintf("%s: overlay phenomenon %q: at least one member signal is required", at, op.ID))
+			}
+			nodeType[op.ID] = "CorrelationGroup"
+		}
+		for _, r := range o.Relations {
+			if nodeType[r.Src] != "CorrelationGroup" {
+				errs = append(errs, fmt.Sprintf("%s: overlay relation source %q is not a known phenomenon", at, r.Src))
+			}
+			if nodeType[r.Dst] != "CorrelationGroup" {
+				errs = append(errs, fmt.Sprintf("%s: overlay relation destination %q is not a known phenomenon", at, r.Dst))
+			}
+			if strings.TrimSpace(r.Why) == "" {
+				errs = append(errs, fmt.Sprintf("%s: overlay relation %s->%s needs a 'why' (surfaced verbatim)", at, r.Src, r.Dst))
+			}
 		}
 		ids := make([]string, 0, len(o.Spans))
 		for id := range o.Spans {
@@ -363,6 +411,11 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 func mergeOverlays(doc *kgDoc, ovls []overlayDoc) (rules int) {
 	spans := map[string]string{}
 	for _, o := range ovls {
+		// doc 15 Phase C: overlay-added phenomena become first-class nodes so the
+		// gap report counts them (40, not 38) and credits their spans below.
+		for _, op := range o.Phenomena {
+			doc.Nodes = append(doc.Nodes, kgNode{ID: op.ID, Type: "CorrelationGroup"})
+		}
 		for id, s := range o.Spans {
 			spans[id] = s.Span
 		}

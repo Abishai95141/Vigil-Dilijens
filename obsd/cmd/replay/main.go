@@ -76,7 +76,7 @@ func run(args []string, out *os.File) error {
 		// identical to live. MEASURED+AUTHORED output, verifies nothing.
 		csMode     = fs.Bool("crossservice", false, "CROSS-SERVICE pass: re-compute the warm-path cascade at every tick; verifies nothing")
 		csOut      = fs.String("crossservice-out", "", "JSONL file for per-tick cross-service cascade events (required with -crossservice)")
-		csRelation = fs.String("crossservice-relation", "ontology/graph/overlays/experimental/flow-relation-v0.yaml", "the AUTHORED cross-service relation (surfaced verbatim)")
+		csRelation = fs.String("crossservice-relation", "", "override: load the AUTHORED cross-service relation from this YAML file instead of the curated graph (doc 15 Phase C)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -164,9 +164,21 @@ func run(args []string, out *os.File) error {
 		if *csOut == "" {
 			return fmt.Errorf("-crossservice requires -crossservice-out")
 		}
-		rel, err := flow.LoadRelation(*csRelation)
-		if err != nil {
-			return fmt.Errorf("load cross-service relation: %w", err)
+		// doc 15 Phase C: prefer the CURATED relation from the released graph; the
+		// -crossservice-relation flag is an override for experimental runs only.
+		var rel flow.Relation
+		if *csRelation != "" {
+			r, err := flow.LoadRelation(*csRelation)
+			if err != nil {
+				return fmt.Errorf("load cross-service relation override: %w", err)
+			}
+			rel = r
+		} else {
+			r, ok := flow.RelationFromGraph(g)
+			if !ok {
+				return fmt.Errorf("curated cross-service relation absent in graph %s (use -crossservice-relation to override)", short(g.Version))
+			}
+			rel = r
 		}
 		csFile, err = os.Create(*csOut)
 		if err != nil {

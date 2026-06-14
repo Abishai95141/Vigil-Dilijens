@@ -1,0 +1,37 @@
+# Graph release v0.4.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.4.0
+graph_version: "sha256:5a3b6d476cf43f72b8ce4cdea51d1d39143590ffb4528d316b603e165b4159ed"
+created: "2026-06-14"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+summary: >-
+  Cross-service relation promotion (doc 15 Phase C): the v2 observed-flow cascade's
+  AUTHORED relation graduates from overlays/experimental/flow-relation-v0.yaml into
+  the curated graph via a new authored OVERLAY (cross-service-v0.yaml) — the base KG
+  stays an immutable vendored mirror; authored phenomena + relations are versioned
+  deltas like every other overlay. Adds two CorrelationGroup nodes —
+  PHEN_UPSTREAM_DEGRADATION (the callee whose own signal degrades, T0) and
+  PHEN_DOWNSTREAM_IMPACT (its direct callers impacted over the observed-flow edge,
+  T0+) — one directed phenomenon_relation edge between them (role downstream, temporal
+  T0->T0+), and their spans (the first to declare the v2 "flow" traversal edge type,
+  also added to graph.knownTraversalEdgeTypes). Surfaced verbatim with release
+  provenance; obsd reads it via flow.RelationFromGraph. BEHAVIOURAL-MEDIUM class: the
+  relation is AUTHORED-by-construction (a hand-written edge, no learned value); the
+  two phenomena carry inline measurable-signal hints but NO participates_in members,
+  NO threshold rules, and NO detection conditions — so they enter neither the
+  selection funnel (TierASet reads participates_in members + checks, not inline
+  signals) nor the matcher, and the deterministic digest is BYTE-IDENTICAL (proven by
+  the ReplayDiff / detection-neutrality check). Native MEASURED caller-side detection
+  over the flow span is the directed-flow-span follow-up (doc 15 Phase D-native).

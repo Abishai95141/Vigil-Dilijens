@@ -22,10 +22,9 @@ import (
 // cadence is correct. NOT added to params.requiredEdgeBudgets — flow is OPTIONAL.
 const flowEdgeBudget = 90 * time.Second
 
-// flowRelationPath is the experimental AUTHORED cross-service relation surfaced
-// verbatim by the warm-path cross-service cascade (doc 15 phase C/D). It lives
-// outside the production overlay glob; obsd reads it directly only when --flow-enabled.
-const flowRelationPath = "ontology/graph/overlays/experimental/flow-relation-v0.yaml"
+// The cross-service AUTHORED relation surfaced by the warm-path cascade is now
+// CURATED into the released ontology graph (doc 15 Phase C) and read via
+// flow.RelationFromGraph in main.go — no longer from an experimental file path.
 
 // runFlowCollector is the Phase B flow lane (doc 15): it observes conntrack from the
 // per-node conntrack-agent (via the API-server node proxy, the same path obsd uses

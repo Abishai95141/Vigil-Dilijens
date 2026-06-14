@@ -57,7 +57,11 @@ var knownSpans = map[string]bool{SpanEntityLocal: true, SpanFirstOrder: true, Sp
 
 // knownTraversalEdgeTypes is the instance-topology edge vocabulary spans may walk
 // (doc 02 §3.2; instance edges and their timestamps belong to identity, doc 03).
-var knownTraversalEdgeTypes = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true}
+// "flow" is the v2 observed-flow (conntrack) edge (doc 15 Phase C): a cross-service
+// span may declare it, so the authored cross-service relation is walkable in the
+// bound graph. It stays OUT of params.requiredEdgeBudgets (flow is optional) and OUT
+// of the deterministic digest — adding it to the vocabulary changes no existing span.
+var knownTraversalEdgeTypes = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true, "flow": true}
 
 var knownEntityScopes = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true}
 
@@ -131,16 +135,45 @@ var knownMinStates = map[string]bool{"": true, "at-threshold": true, "above": tr
 var knownOns = map[string]bool{"": true, "anchor": true, "neighbour": true, "two-hop": true}
 
 // overlayFile is the on-disk overlay shape. A file declares spans, rules, checks,
-// and anchors (the entity kind a spanned phenomenon's checks evaluate at).
+// and anchors (the entity kind a spanned phenomenon's checks evaluate at), and —
+// doc 15 Phase C — authored phenomenon NODES + phenomenon_relation edges, so the
+// base KG stays an immutable vendored mirror while curated deltas (new correlation
+// groups, cascade relations) live in versioned overlays like every other authored
+// delta. Added phenomena are applied BEFORE this file's spans/checks so they can
+// be spanned/checked in the same overlay.
 type overlayFile struct {
-	Overlay string                   `yaml:"overlay"`
-	Version int                      `yaml:"version"`
-	Author  string                   `yaml:"author"`
-	Status  string                   `yaml:"status"`
-	Spans   map[string]spanDecl      `yaml:"spans"`
-	Rules   []ThresholdRule          `yaml:"rules"`
-	Checks  map[string][]MemberCheck `yaml:"checks"`
-	Anchors map[string]string        `yaml:"anchors"`
+	Overlay   string                   `yaml:"overlay"`
+	Version   int                      `yaml:"version"`
+	Author    string                   `yaml:"author"`
+	Status    string                   `yaml:"status"`
+	Phenomena []overlayPhenomenon      `yaml:"phenomena"`
+	Relations []overlayRelation        `yaml:"relations"`
+	Spans     map[string]spanDecl      `yaml:"spans"`
+	Rules     []ThresholdRule          `yaml:"rules"`
+	Checks    map[string][]MemberCheck `yaml:"checks"`
+	Anchors   map[string]string        `yaml:"anchors"`
+}
+
+// overlayPhenomenon is an authored CorrelationGroup added by an overlay (doc 15
+// Phase C). Same shape as a base KG phenomenon: id, label, and member-signal
+// tuples [pattern, role, temporal_tag, note] (schema-required). Carries no
+// detection condition by itself — a check/rule (if any) is authored separately.
+type overlayPhenomenon struct {
+	ID      string     `yaml:"id"`
+	Label   string     `yaml:"label"`
+	Signals [][]string `yaml:"signals"`
+	Notes   string     `yaml:"notes"`
+}
+
+// overlayRelation is an authored phenomenon_relation edge added by an overlay
+// (doc 15 Phase C): a directed cascade/corroboration link between two phenomena,
+// surfaced verbatim as the AUTHORED "why".
+type overlayRelation struct {
+	Src           string `yaml:"src"` // trigger phenomenon id (the relation's source)
+	Dst           string `yaml:"dst"` // downstream/corroborating phenomenon id
+	Role          string `yaml:"role"`
+	TemporalOrder string `yaml:"temporal_order"`
+	Why           string `yaml:"why"`
 }
 
 // OverlayInfo is the provenance record of one applied overlay (surfaced, per the
@@ -289,6 +322,59 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 	}
 	if strings.TrimSpace(f.Author) == "" {
 		return fmt.Errorf("missing author provenance (authored-knowledge discipline, doc 02 §3.6)")
+	}
+
+	// New phenomena (doc 15 Phase C): authored CorrelationGroup nodes added by the
+	// overlay, so the base KG stays immutable. Applied FIRST so this file's own
+	// spans/checks/relations may reference them. Mirrors the base parser: signals
+	// become InlineMembers; no detection condition is implied.
+	for i := range f.Phenomena {
+		op := f.Phenomena[i]
+		if op.ID == "" || op.Label == "" {
+			return fmt.Errorf("overlay phenomenon %d: id and label are required", i)
+		}
+		if _, exists := g.Phenomena[op.ID]; exists {
+			return fmt.Errorf("overlay phenomenon %q already defined (overlays may add, never redefine)", op.ID)
+		}
+		if len(op.Signals) == 0 {
+			return fmt.Errorf("overlay phenomenon %q: at least one member signal is required (schema)", op.ID)
+		}
+		p := &Phenomenon{ID: op.ID, Label: op.Label, RawSignals: op.Signals}
+		for _, tup := range op.Signals {
+			if len(tup) != 4 {
+				return fmt.Errorf("overlay phenomenon %q: signal tuple must be [pattern, role, temporal, note]", op.ID)
+			}
+			p.InlineMembers = append(p.InlineMembers, InlineMember{Pattern: tup[0], Role: tup[1], TemporalTag: tup[2], Note: tup[3]})
+		}
+		g.Phenomena[op.ID] = p // NodeType derives "CorrelationGroup" from this map
+	}
+
+	// New phenomenon_relation edges (doc 15 Phase C): a directed authored link
+	// between two phenomena, appended to g.Edges and attached to its source's
+	// Relations (so g.Phenomena[src].Relations carries it, exactly as the base loader).
+	for i := range f.Relations {
+		r := f.Relations[i]
+		if g.Phenomena[r.Src] == nil {
+			return fmt.Errorf("overlay relation %d: unknown source phenomenon %q", i, r.Src)
+		}
+		if g.Phenomena[r.Dst] == nil {
+			return fmt.Errorf("overlay relation %d: unknown destination phenomenon %q", i, r.Dst)
+		}
+		if strings.TrimSpace(r.Why) == "" {
+			return fmt.Errorf("overlay relation %s->%s: a 'why' is required (surfaced verbatim, doc 02 §3.6)", r.Src, r.Dst)
+		}
+		g.Edges = append(g.Edges, Edge{
+			Type: "phenomenon_relation", Src: r.Src, SrcType: "CorrelationGroup",
+			Dst: r.Dst, DstType: "CorrelationGroup", Role: r.Role, TemporalOrder: r.TemporalOrder, Why: r.Why,
+		})
+		g.Phenomena[r.Src].Relations = append(g.Phenomena[r.Src].Relations,
+			Relation{TargetID: r.Dst, Role: r.Role, TemporalOrder: r.TemporalOrder, Why: r.Why})
+	}
+	// Appending to g.Edges may reallocate its backing array, dangling the *Edge
+	// pointers the base loader put in the edge indexes. Rebuild the indexes from the
+	// current slice so every pointer is valid. (Cheap; runs only when an overlay adds edges.)
+	if len(f.Relations) > 0 {
+		g.reindexEdges()
 	}
 
 	// Spans: set each phenomenon's declared span + traversal edges.
