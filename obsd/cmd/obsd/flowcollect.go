@@ -26,8 +26,13 @@ const flowEdgeBudget = 90 * time.Second
 // cascade (doc 15 phase E). Per doc 11 §3.5 a new PROJECTED class is not operator-
 // visible until its backtest gate (lead-time + confirm/refute calibration) passes.
 // The lane COMPUTES every tick regardless (logged, off the digest); this flag controls
-// only whether /api/cross-service surfaces the projected chain. Flip to true on a pass.
-const phaseECrossServiceGatePassed = false
+// only whether /api/cross-service surfaces the projected chain.
+//
+// PASSED 2026-06-14 (`just xsvc-projected-gate`): two independent forecast-led leaks
+// each anticipated their cross-service impact by 9.5–12.5 min before it measured, fan-in
+// faithful, zero false anticipations on a healthy cluster, zero charter violations.
+// Evidence: corpus/labels/flow-gate-projected-crossservice.md + corpus/crossservice-projected/.
+const phaseECrossServiceGatePassed = true
 
 // The cross-service AUTHORED relation surfaced by the warm-path cascade is now
 // CURATED into the released ontology graph (doc 15 Phase C) and read via

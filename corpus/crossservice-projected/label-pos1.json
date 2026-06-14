@@ -1,0 +1,8 @@
+{
+  "bundle": "leakx-leak",
+  "scenario": "positive",
+  "expect_proj_fire": true,
+  "roots": ["chaos/leakx-callee"],
+  "callers": { "chaos/leakx-callee": ["chaos/leakx-caller"] },
+  "note": "A forecast-led memory leak captured ALONE in its own bundle/measurement epoch: FORECAST to cross its working_set bar while sub-bar (PROJECTED anticipatory cross-service cascade to leakx-caller) minutes before the MEASURED MEMORY_LEAK + measured cross-service cascade confirm."
+}

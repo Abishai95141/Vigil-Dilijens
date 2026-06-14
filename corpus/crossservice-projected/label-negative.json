@@ -1,0 +1,6 @@
+{
+  "bundle": "healthy-flow-negative",
+  "scenario": "negative",
+  "expect_proj_fire": false,
+  "note": "A healthy, flow-connected boutique under the SAME forecast lane + curated relation, with NO genuine forecast-led crossing. The anticipatory lane must fire 0 times: the forecast does not fabricate a crossing, so no PROJECTED cross-service cascade is seeded. The no-false-anticipation evidence."
+}

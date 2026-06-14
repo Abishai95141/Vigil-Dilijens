@@ -77,6 +77,14 @@ func run(args []string, out *os.File) error {
 		csMode     = fs.Bool("crossservice", false, "CROSS-SERVICE pass: re-compute the warm-path cascade at every tick; verifies nothing")
 		csOut      = fs.String("crossservice-out", "", "JSONL file for per-tick cross-service cascade events (required with -crossservice)")
 		csRelation = fs.String("crossservice-relation", "", "override: load the AUTHORED cross-service relation from this YAML file instead of the curated graph (doc 15 Phase C)")
+
+		// Anticipatory cross-service pass (doc 15 phase E / the PROJECTED v2 gate):
+		// re-run the REAL forecast funnel at every tick, seed the cascade from the
+		// warned callees, and emit the anticipatory (PROJECTED) chain joined with
+		// the measured chain of the same tick — the lead-time + confirm/refute
+		// substrate. Implies -forecast (it consumes the forecast cycle). Off the digest.
+		pcsMode = fs.Bool("projected-crossservice", false, "ANTICIPATORY cross-service pass (phase E): forecast-seeded PROJECTED cascade + the same-tick measured cascade; implies -forecast; verifies nothing")
+		pcsOut  = fs.String("projected-crossservice-out", "", "JSONL file for per-tick anticipatory+measured cascade events (required with -projected-crossservice)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -120,8 +128,10 @@ func run(args []string, out *os.File) error {
 	}
 
 	var fcFile *os.File
-	if *fcMode {
-		if *fcOut == "" {
+	// The forecast cycle is set up when EITHER the forecast pass OR the anticipatory
+	// (phase E) pass is requested — the latter consumes the cycle's warned callees.
+	if *fcMode || *pcsMode {
+		if *fcMode && *fcOut == "" {
 			return fmt.Errorf("-forecast requires -forecast-out")
 		}
 		p, err := params.Default()
@@ -147,16 +157,19 @@ func run(args []string, out *os.File) error {
 			return err
 		}
 		defer cl.Close()
-		fcFile, err = os.Create(*fcOut)
-		if err != nil {
-			return err
+		fe := &replay.ForecastEval{Clock: cl, Params: regime, Budget: budget}
+		// Only -forecast writes the per-tick forecast JSONL; -projected-crossservice
+		// runs the same cycle silently (it consumes the candidates in-process).
+		if *fcMode {
+			fcFile, err = os.Create(*fcOut)
+			if err != nil {
+				return err
+			}
+			defer fcFile.Close()
+			enc := json.NewEncoder(fcFile)
+			fe.Events = func(tf replay.TickForecast) { _ = enc.Encode(tf) }
 		}
-		defer fcFile.Close()
-		enc := json.NewEncoder(fcFile)
-		opts.Forecast = &replay.ForecastEval{
-			Clock: cl, Params: regime, Budget: budget,
-			Events: func(tf replay.TickForecast) { _ = enc.Encode(tf) },
-		}
+		opts.Forecast = fe
 	}
 
 	var csFile *os.File
@@ -192,6 +205,29 @@ func run(args []string, out *os.File) error {
 		}
 	}
 
+	var pcsFile *os.File
+	if *pcsMode {
+		if *pcsOut == "" {
+			return fmt.Errorf("-projected-crossservice requires -projected-crossservice-out")
+		}
+		// The anticipatory pass surfaces the SAME curated relation the measured pass
+		// does (doc 15 Phase C); no override path — the gate runs against the graph.
+		rel, ok := flow.RelationFromGraph(g)
+		if !ok {
+			return fmt.Errorf("curated cross-service relation absent in graph %s (phase E gate needs the promoted relation)", short(g.Version))
+		}
+		pcsFile, err = os.Create(*pcsOut)
+		if err != nil {
+			return err
+		}
+		defer pcsFile.Close()
+		pcsEnc := json.NewEncoder(pcsFile)
+		opts.ProjectedCrossService = &replay.ProjectedCrossServiceEval{
+			Relation: rel,
+			Events:   func(tp replay.TickProjectedCrossService) { _ = pcsEnc.Encode(tp) },
+		}
+	}
+
 	rep, err := replay.Run(opts)
 	if err != nil {
 		return err
@@ -220,6 +256,14 @@ func run(args []string, out *os.File) error {
 		}
 		fmt.Fprintf(out, "  CROSS-SERVICE PASS: warm-path cascade re-computed at every tick — MEASURED+AUTHORED output, events -> %s (verifies nothing)%s\n",
 			*csOut, note)
+	}
+	if *pcsMode {
+		note := ""
+		if _, hasFlow := m.EdgeBudgets[string(flow.EdgeTypeFlow)]; !hasFlow {
+			note = " — NOTE: bundle pins no flow budget (captured without --flow-enabled); the cascade is quiet on every tick"
+		}
+		fmt.Fprintf(out, "  ANTICIPATORY PASS (phase E): forecast re-ran at clockd=%s; PROJECTED cascade + same-tick MEASURED cascade -> %s (verifies nothing)%s\n",
+			*fcClockd, *pcsOut, note)
 	}
 	if !*quiet {
 		for _, tk := range rep.Ticks {

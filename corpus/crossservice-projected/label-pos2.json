@@ -1,0 +1,8 @@
+{
+  "bundle": "leakz-leak",
+  "scenario": "positive",
+  "expect_proj_fire": true,
+  "roots": ["chaos/leakz-callee"],
+  "callers": { "chaos/leakz-callee": ["chaos/leakz-caller"] },
+  "note": "A SECOND, independent forecast-led memory leak in its OWN separate bundle/measurement epoch (distinct workload, distinct capture, distinct node) — so the gate's >=2 confirmed roots come from >=2 independent captures, not one lucky ramp."
+}

@@ -1,0 +1,73 @@
+# v2 Phase E gate corpus — single-leak capture p2 (leakz). Prefill 500Mi + a smooth
+# +6Mi/min ramp (the proven sweet spot: close enough to the bar that the Tier-B funnel
+# keeps it budgeted, gentle enough that the forecast projects a crossing ~10min ahead of
+# the at-threshold band). Captured ALONE in its own bundle so it gets the full forecast
+# budget and its own measurement epoch (independence).
+apiVersion: v1
+kind: Namespace
+metadata: { name: chaos }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: leakz-callee, namespace: chaos, labels: { app: leakz-callee } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: leakz-callee } }
+  template:
+    metadata: { labels: { app: leakz-callee } }
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              buf = [bytearray(1024*1024) for _ in range(500)]   # ~500Mi (sweet spot)
+              def leak():
+                  while True:
+                      buf.append(bytearray(1024*1024)); time.sleep(10)   # +6Mi/min smooth
+              threading.Thread(target=leak, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 8080)); s.listen(32)
+              held = []
+              while True:
+                  c, _ = s.accept(); held.append(c)
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 20m, memory: 256Mi }
+            limits:   { cpu: 200m, memory: 700Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: leakz-callee, namespace: chaos }
+spec:
+  selector: { app: leakz-callee }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: leakz-caller, namespace: chaos, labels: { app: leakz-caller } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: leakz-caller } }
+  template:
+    metadata: { labels: { app: leakz-caller } }
+    spec:
+      containers:
+        - name: client
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, time
+              while True:
+                  try:
+                      s = socket.create_connection(("leakz-callee.chaos.svc.cluster.local", 8080), timeout=5)
+                      while True:
+                          time.sleep(8); s.sendall(b"ping")
+                  except Exception:
+                      time.sleep(3)
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 32Mi }

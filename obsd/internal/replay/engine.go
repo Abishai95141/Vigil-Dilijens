@@ -56,12 +56,72 @@ type Options struct {
 	// live. MEASURED+AUTHORED output, never digest-bearing — this pass verifies
 	// nothing about determinism (it confirms the digest is UNPERTURBED) and says so.
 	CrossService *CrossServiceEval
+
+	// ProjectedCrossService switches on the ANTICIPATORY cross-service cascade
+	// evaluation pass (doc 15 phase E, the PROJECTED v2 backtest gate). It REQUIRES
+	// Forecast to be set: at every recorded tick the REAL forecast funnel re-runs
+	// (against this bundle's readings + the injected model clock) producing the
+	// warned callees; each warned callee is seeded as a PROJECTED degraded workload
+	// and walked over the SAME captured observed-flow topology + AUTHORED relation
+	// the measured pass uses. The pass emits BOTH the anticipatory (PROJECTED) chain
+	// AND the measured (MEASURED) chain per tick, so the scorer can grade lead-time
+	// (anticipatory fires BEFORE measured) and confirm/refute (the projected impact
+	// later materialises as a measured one). PROJECTED + MEASURED output, never
+	// digest-bearing: the forecast is non-deterministic BY CLASS; this pass verifies
+	// the JOIN (which IS deterministic) and the lead/confirm relationship, not the digest.
+	ProjectedCrossService *ProjectedCrossServiceEval
 }
 
 // CrossServiceEval configures the cross-service cascade evaluation pass.
 type CrossServiceEval struct {
 	Relation flow.Relation          // the one AUTHORED cross-service relation, surfaced verbatim
 	Events   func(TickCrossService) // sink for per-tick cascade events (the gate substrate)
+}
+
+// ProjectedCrossServiceEval configures the anticipatory (phase E) cascade pass.
+// Requires Options.Forecast to be set (the forecast cycle supplies the warned
+// callees that seed the PROJECTED chain).
+type ProjectedCrossServiceEval struct {
+	Relation flow.Relation                   // the one AUTHORED cross-service relation, surfaced verbatim
+	Events   func(TickProjectedCrossService) // sink for per-tick anticipatory+measured events (the gate substrate)
+}
+
+// TickProjectedCrossService is one tick's anticipatory-cascade output joined with
+// the measured cascade of the same tick: the substrate the phase-E gate (harness
+// projected_crossservice_gate.py) grades for lead-time + confirm/refute.
+type TickProjectedCrossService struct {
+	EvalNow   time.Time `json:"evalNow"`
+	BarsEpoch int       `json:"barsEpoch"`
+
+	// Warned names the callees the forecast funnel projected to cross their bar
+	// this tick (the PROJECTED seeds). Sorted role labels.
+	Warned []string `json:"warned"`
+
+	// The ANTICIPATORY (PROJECTED) chain: a callee FORECAST to cross propagates a
+	// projected downstream-impact hypothesis to its callers over the MEASURED flow
+	// edge + AUTHORED relation (weakest-input rule: PROJECTED nodes, MEASURED edge,
+	// AUTHORED why).
+	ProjFired    bool      `json:"projFired"`
+	ProjRoot     string    `json:"projRoot,omitempty"`     // most-upstream PROJECTED-degraded node
+	ProjImpacted []string  `json:"projImpacted,omitempty"` // distinct projected-impacted callers (sorted)
+	ProjCrossAt  time.Time `json:"projCrossAt,omitempty"`  // root's point crossing (the lead-time basis; never shown without its band)
+	ProjEarliest time.Time `json:"projEarliest,omitempty"` // band lower edge: proof the band never collapses
+	ProjLatest   time.Time `json:"projLatest,omitempty"`   // band upper edge (zero when open beyond horizon)
+	ProjBandOpen bool      `json:"projBandOpen,omitempty"` // the band's far edge is open (crossing may exceed horizon)
+
+	// The MEASURED chain of the SAME tick (reproduced exactly as the phase-D pass):
+	// the join key for confirm/refute (did the projected impact materialise as a
+	// measured one?) and lead-time (measured fire-tick minus projected fire-tick).
+	MeasFired    bool     `json:"measFired"`
+	MeasRoot     string   `json:"measRoot,omitempty"`
+	MeasImpacted []string `json:"measImpacted,omitempty"`
+
+	// CharterClean asserts the rendered PROJECTED chain carries no causal-claim
+	// token AND no collapsed band (a degenerate earliest==latest crossing dressed
+	// as certainty). A false here is a hard gate failure (the join was fused, or a
+	// PROJECTED datum was presented as MEASURED certainty).
+	CharterClean bool   `json:"charterClean"`
+	CharterToken string `json:"charterToken,omitempty"`
 }
 
 // TickCrossService is one tick's cross-service cascade output: the degraded
@@ -368,12 +428,14 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		// Forecast-evaluation pass (doc 11 §3.1 time-shift / M5 backtests):
 		// the REAL pipeline "as of" this tick over the reconstructed reader.
 		// PROJECTED output — never digest-bearing, never a verification claim.
+		var fcCandidates []forecast.Candidate
 		if opts.Forecast != nil {
 			cyc := forecast.RunCycle(context.Background(), opts.Forecast.Clock, forecast.CycleInput{
 				Now: rec.EvalNow, Targets: ep.tierB, Reader: reader,
 				Cadence: m.ScrapeInterval, GraphVersion: m.GraphVersion,
 				P: opts.Forecast.Params, Trace: true,
 			})
+			fcCandidates = cyc.Candidates
 			if opts.Forecast.Events != nil {
 				opts.Forecast.Events(TickForecast{
 					EvalNow: rec.EvalNow, BarsEpoch: rec.BarsEpoch, Cadence: m.ScrapeInterval,
@@ -381,6 +443,18 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 					Unbudgeted: ep.unbudgeted, Degraded: cyc.Degraded,
 				})
 			}
+		}
+
+		// Anticipatory (phase E) cascade-evaluation pass (doc 15 phase E, the
+		// PROJECTED v2 backtest gate): seed the cascade from THIS tick's forecast
+		// candidates (the warned callees), walk the SAME captured observed-flow
+		// topology the measured pass uses, and emit the PROJECTED chain joined with
+		// the measured chain of the same tick — the lead-time + confirm/refute
+		// substrate. PROJECTED+MEASURED output, off the digest (the forecast is
+		// non-deterministic by class; the JOIN it grades is deterministic).
+		if opts.ProjectedCrossService != nil && opts.ProjectedCrossService.Events != nil {
+			opts.ProjectedCrossService.Events(projectedCrossServiceTick(
+				rec, fcCandidates, findings, flowStore, ep.res.Bindings, opts.ProjectedCrossService.Relation, w))
 		}
 
 		// Cross-service cascade evaluation pass (doc 15 phase D, v2 backtest gate):
@@ -483,6 +557,105 @@ func crossServiceTick(rec TickRecord, findings []detect.Finding, flowStore *iden
 	// Charter: the rendered chain must carry no causal-claim token. The AUTHORED
 	// `why` is curated prose written to be clean (the flow tests assert this over
 	// the whole chain), so scanning the full render is the strict check.
+	if b, err := chain.JSON(); err == nil {
+		if tok, bad := flow.HasForbiddenToken(string(b)); bad {
+			out.CharterClean, out.CharterToken = false, tok
+		}
+	}
+	return out
+}
+
+// projectedCrossServiceTick reproduces obsd's warm-path ANTICIPATORY cascade
+// (doc 15 phase E) for one replayed tick, joined with the measured cascade of the
+// same tick — the phase-E gate's faithful re-computation. The forecast candidates
+// (this tick's warned callees) seed the PROJECTED chain exactly as the live warm
+// path seeds it from warningsView; the measured chain is the very crossServiceTick
+// the phase-D gate uses. Both are pure functions of pinned inputs + the injected
+// model clock, so the join is reproducible; the forecast itself is PROJECTED (not
+// digest-bearing) by class. The gate grades lead-time (proj fires before meas) and
+// confirm/refute (the projected impact later materialises as a measured one).
+func projectedCrossServiceTick(rec TickRecord, candidates []forecast.Candidate, findings []detect.Finding,
+	flowStore *identity.EdgeStore, bindings []binding.Binding, rel flow.Relation, w identity.TimeWindow) TickProjectedCrossService {
+
+	out := TickProjectedCrossService{
+		EvalNow: rec.EvalNow, BarsEpoch: rec.BarsEpoch, CharterClean: true,
+	}
+
+	// The MEASURED chain of this tick — the confirm/refute + lead-time join key.
+	// Reuse the phase-D reproduction verbatim (no second source of truth).
+	meas := crossServiceTick(rec, findings, flowStore, bindings, rel, w)
+	out.MeasFired, out.MeasRoot, out.MeasImpacted = meas.Fired, meas.Root, meas.Impacted
+
+	if flowStore == nil {
+		return out // pre-topology bundle: no flow edges, no cascade (honest quiet)
+	}
+
+	// instance CEI key -> role CEI key, from the captured bindings (binding.RoleKey
+	// is pod.RoleCEI.Key()): the same resolution the live warm path does via
+	// store.Get(warning.EntityCEI).RoleCEI when it seeds the anticipatory cascade.
+	roleByInstance := make(map[string]string, len(bindings))
+	for i := range bindings {
+		if bindings[i].RoleKey != "" {
+			roleByInstance[bindings[i].CEIKey] = bindings[i].RoleKey
+		}
+	}
+
+	var projected []flow.ProjectedDegradedWorkload
+	warnedLabels := map[string]bool{}
+	seen := map[string]bool{}
+	for i := range candidates {
+		c := &candidates[i]
+		roleKey := roleByInstance[c.EntityCEI]
+		if roleKey == "" || seen[roleKey] {
+			continue
+		}
+		seen[roleKey] = true
+		roleCEI, err := identity.ParseKey(roleKey)
+		if err != nil {
+			continue // unparseable role key: skip, never guess a workload
+		}
+		label := flow.RoleLabel(roleCEI)
+		warnedLabels[label] = true
+		projected = append(projected, flow.ProjectedDegradedWorkload{
+			CEI: roleCEI, Label: label, Metric: c.Metric,
+			PrecursorPhenomena: c.PrecursorPhenomena, Confidence: c.Confidence,
+			CrossAt: c.CrossAt, EarliestAt: c.EarliestAt, LatestAt: c.LatestAt,
+			LatestBeyondHorizon: c.LatestBeyondHorizon,
+		})
+	}
+	out.Warned = sortedSetKeys(warnedLabels)
+
+	chain, ok := flow.ProjectedCrossServiceChain(flowStore, projected, rel, w, rec.EvalNow)
+	if !ok {
+		return out // warned or not, but no caller over a valid flow edge: quiet
+	}
+	out.ProjFired = true
+	out.ProjRoot = chain.MostUpstreamDegradedNode
+	impacted := map[string]bool{}
+	for _, l := range chain.Links {
+		impacted[l.Impacted] = true
+	}
+	out.ProjImpacted = sortedSetKeys(impacted)
+
+	// The root's projection (its band) — the lead-time basis AND the band-collapse
+	// charter check. A PROJECTED crossing whose band degenerates to a line (earliest
+	// == latest, far edge closed) would be PROJECTED dressed as MEASURED certainty:
+	// a hard charter failure (doc 01).
+	for i := range projected {
+		if projected[i].Label == out.ProjRoot {
+			out.ProjCrossAt = projected[i].CrossAt
+			out.ProjEarliest = projected[i].EarliestAt
+			out.ProjLatest = projected[i].LatestAt
+			out.ProjBandOpen = projected[i].LatestBeyondHorizon
+			if !projected[i].LatestBeyondHorizon && !projected[i].LatestAt.After(projected[i].EarliestAt) {
+				out.CharterClean, out.CharterToken = false, "collapsed-band"
+			}
+			break
+		}
+	}
+
+	// Charter: the rendered chain must carry no causal-claim token (the AUTHORED
+	// `why` is curated clean; scanning the full render is the strict check).
 	if b, err := chain.JSON(); err == nil {
 		if tok, bad := flow.HasForbiddenToken(string(b)); bad {
 			out.CharterClean, out.CharterToken = false, tok

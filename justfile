@@ -179,6 +179,16 @@ xsvc-gate:
       --events ../corpus/crossservice/events-pair.jsonl ../corpus/crossservice/events-fanin.jsonl ../corpus/crossservice/events-healthy.jsonl \
       --labels ../corpus/crossservice/label-pair.json ../corpus/crossservice/label-fanin.json ../corpus/crossservice/label-healthy.json
 
+# Anticipatory (phase E) cross-service backtest gate (doc 15 phase E / 11 §3.5) over
+# the frozen, live-captured corpus in corpus/crossservice-projected/ — two independent
+# forecast-led leaks, each anticipated minutes before its measured cross-service
+# cascade, plus a negative the forecast never anticipates. Offline, no cluster needed.
+# Exit 0 = PASSED (the PROJECTED lane may be operator-visible); 1 = FAILED/INSUFFICIENT.
+xsvc-projected-gate:
+    cd harness && uv run python -m harness.projected_crossservice_gate \
+      --events ../corpus/crossservice-projected/events-pos1.jsonl ../corpus/crossservice-projected/events-pos2.jsonl ../corpus/crossservice-projected/events-negative.jsonl \
+      --labels ../corpus/crossservice-projected/label-pos1.json ../corpus/crossservice-projected/label-pos2.json ../corpus/crossservice-projected/label-negative.json
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

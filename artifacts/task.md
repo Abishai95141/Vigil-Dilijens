@@ -222,3 +222,23 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 3. **Ontology ingestion (02 M2)**: load the authoritative 842-node KG (`~/Desktop/vigil copy/k8s_signal_kg.json`)
    — reconcile the schema to its node/edge shape, build the `internal/graph` loader, upgrade graphlint,
    produce the gap report (spans + threshold rules to author). This unblocks binding (04) + detection (07).
+
+---
+
+## ✅ v2 flow lane — cross-service dependency + anticipatory cascade (doc 15) — DONE (branch `v2`)
+
+Auto-discover service→service dependency edges from Linux conntrack (MEASURED observed-flow),
+then trace interdependent failures across the call graph. Built on the `main` epistemic core
+(Phases 0a–3) without touching its determinism guarantee.
+
+- [x] **Phase A** — conntrack-agent DaemonSet + image; live-verified the production collector path (C1 gate).
+- [x] **Phase B** — flow collector wired into `obsd`; live determinism (flow edges in `TickRecord.Topology`, replay byte-identical).
+- [x] **`internal/flow`** — conntrack→edges→reverse-walk; `CrossServiceChain` (most-upstream degraded node = structural fan-in, MEASURED) + golden tests (-race, network-free).
+- [x] **Phase D** 🔒 — warm-path MEASURED cross-service cascade + backtest gate: `replay -crossservice` re-derives the cascade per tick; `crossservice_gate.py` scores root/caller accuracy 1.000, zero false cascades, zero charter. **GATE PASSED** on 3 live bundles.
+- [x] **Phase F** — `/api/cross-service` surface (backend + web), honest off/quiet/active states.
+- [x] **Phase C** — the cross-service relation PROMOTED via governance: a new overlay (`cross-service-v0.yaml`) carries the authored phenomena + relation WITHOUT editing the immutable base KG (the loader was extended to merge overlay phenomena/relations + `reindexEdges`); proven DETECTION-NEUTRAL (digest byte-identical); `govern verify` APPROVED; released as v0.4.0.
+- [x] **Phase E** 🔒 — the ANTICIPATORY (PROJECTED) cross-service cascade: a callee FORECAST to cross its bar propagates a projected downstream-impact to its callers over the MEASURED flow edge + AUTHORED relation (weakest-input rule — PROJECTED nodes, MEASURED edge, AUTHORED why, never fused). `flow.ProjectedCrossServiceChain` + warm-path seed from the gated early-warning lane + `/api/cross-service` projected fields.
+  - **End-to-end live (the now+soon narrative):** TimesFM warned a leaking callee while sub-bar → the anticipatory cascade fired, projecting impact on its caller **~11.5 min BEFORE** the MEASURED cascade confirmed it. Each provenance class labelled, band non-collapsing.
+  - **Backtest GATE PASSED** (`just xsvc-projected-gate`): `replay -projected-crossservice` re-runs the forecast per tick + derives the anticipatory chain joined with the same-tick measured chain; `projected_crossservice_gate.py` grades lead-time + confirm/refute + structural fidelity + no-false-anticipation + charter. Two INDEPENDENT live forecast-led leaks (9.5 / 12.5 min lead, separate bundles) + a healthy negative (0 false). The scorer was **hardened against 5 adversarial-review exploits** (12 tests). `phaseECrossServiceGatePassed` flipped true; projected chain now operator-visible (live-verified). Evidence: `corpus/labels/flow-gate-projected-crossservice.md`.
+
+A 20-agent adversarial review over Phase C + E found **0** charter / determinism / non-gating / identity-join issues (only the 5 scorer holes, all fixed).

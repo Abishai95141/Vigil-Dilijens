@@ -720,7 +720,8 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 						})
 					}
 				}
-				if chain, ok := flow.ProjectedCrossServiceChain(edges, projected, flowRel, evalWindow, now); ok {
+				chain, ok := flow.ProjectedCrossServiceChain(edges, projected, flowRel, evalWindow, now)
+				if ok {
 					c := chain
 					projectedCrossSvcView.Store(&c)
 					logger.Info("anticipatory cross-service cascade (v2 phase E, warm path)",
