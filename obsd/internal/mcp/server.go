@@ -24,6 +24,7 @@ type Sources struct {
 	Coverage      func() *api.CoverageView
 	SilenceLedger func() *api.SilenceLedgerView
 	Warnings      func() *api.WarningsView
+	Incidents     func() *api.IncidentsView
 }
 
 // Server is a READ-ONLY MCP adapter. See doc.go for the charter contract.
@@ -129,6 +130,7 @@ const (
 	toolCoverage      = "get_coverage"
 	toolSilenceLedger = "get_silence_ledger"
 	toolWarnings      = "get_warnings"
+	toolIncidents     = "get_incidents"
 	toolEmitAdvisory  = "emit_advisory"
 )
 
@@ -149,6 +151,11 @@ func toolDefs() []toolDef {
 		{
 			Name:        toolWarnings,
 			Description: "PROJECTED. Early-warning forecast cards, each with a mandatory uncertainty band (earliest/latest, open when the far edge is beyond the horizon) and an isProjection mark. A projection is a band, never a certainty; never restate one as a measurement.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolIncidents,
+			Description: "MEASURED. The durable cross-run incident memory: each phenomenon joined across time on its role, with how many distinct episodes (recurrence) it has had and over what span. Use this for 'has this happened before / how often'. Recurrence is a count, never a cause or a forecast.",
 			InputSchema: emptyObjectSchema,
 		},
 		{
@@ -186,6 +193,8 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.SilenceLedger), "silence ledger not running"), nil
 	case toolWarnings:
 		return toolJSON(orNil(s.src.Warnings), "early-warning lane not running (off pending its gate)"), nil
+	case toolIncidents:
+		return toolJSON(orNil(s.src.Incidents), "incident memory not enabled (needs --incident-memory + --db)"), nil
 	case toolEmitAdvisory:
 		var args struct {
 			Text string `json:"text"`

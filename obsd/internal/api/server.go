@@ -19,6 +19,9 @@ type Providers struct {
 	// lead feature): every (entity,variable) pair watched-or-silent-with-reason.
 	// Built from the SAME binding.Result as Coverage. nil ⇒ honest unavailable state.
 	SilenceLedger func() *SilenceLedgerView
+	// Incidents returns the durable cross-run incident memory (v3 T-B): phenomena
+	// joined across time with recurrence counts. nil ⇒ the honest "not enabled" state.
+	Incidents func() (*IncidentsView, error)
 	// Findings returns the persisted findings feed (may be nil/empty).
 	Findings func(limit int) ([]store.FindingRow, error)
 	// FindingsStaleAfter is the freshness horizon for the findings feed (doc 14
@@ -86,6 +89,23 @@ func Register(mux *http.ServeMux, p Providers) {
 			// Binding has not compiled — say so honestly rather than implying a
 			// fully-watched cluster.
 			v = BuildSilenceLedger("", "", timeNowUTC(), nil)
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/incidents", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.Incidents == nil {
+			writeJSON(w, unavailableIncidents("", timeNowUTC()))
+			return
+		}
+		v, err := p.Incidents()
+		if err != nil {
+			http.Error(w, "incidents unavailable", http.StatusServiceUnavailable)
+			return
 		}
 		writeJSON(w, v)
 	})

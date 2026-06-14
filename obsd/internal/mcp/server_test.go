@@ -40,6 +40,13 @@ func testSources() Sources {
 				Silences: []api.SilenceRow{},
 			}
 		},
+		Incidents: func() *api.IncidentsView {
+			return &api.IncidentsView{
+				Class: "MEASURED", Available: true, GeneratedAt: now,
+				Summary:   api.IncidentsSummary{Total: 1, Recurring: 1},
+				Incidents: []api.IncidentCard{{Phenomenon: "PHEN_MEMORY_LEAK", RecurrenceCount: 3, Summary: "seen 3 times"}},
+			}
+		},
 	}
 }
 
@@ -105,13 +112,16 @@ func TestToolsListAdvertisesClassedTools(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &r); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{toolCoverage: false, toolSilenceLedger: false, toolWarnings: false, toolEmitAdvisory: false}
+	want := map[string]bool{toolCoverage: false, toolSilenceLedger: false, toolWarnings: false, toolIncidents: false, toolEmitAdvisory: false}
 	for _, tl := range r.Tools {
 		if _, ok := want[tl.Name]; ok {
 			want[tl.Name] = true
 		}
 		if tl.Name == toolSilenceLedger && !strings.Contains(tl.Description, "ABSENCE") {
 			t.Error("silence ledger tool must describe deterministic ABSENCE")
+		}
+		if tl.Name == toolIncidents && !strings.Contains(tl.Description, "MEASURED") {
+			t.Error("incidents tool must label itself MEASURED")
 		}
 		if tl.Name == toolWarnings && !strings.Contains(tl.Description, "PROJECTED") {
 			t.Error("warnings tool must label itself PROJECTED")
@@ -143,6 +153,22 @@ func TestSilenceLedgerRoundTripsClassed(t *testing.T) {
 	}
 	if v.Summary.TotalPairs != 3 || v.Summary.Silent != 2 {
 		t.Errorf("summary corrupted: %+v", v.Summary)
+	}
+}
+
+func TestIncidentsRoundTripsClassed(t *testing.T) {
+	s := New(testSources(), false, "vigil-test", "v3")
+	resp := call(t, s, "tools/call", `{"name":"get_incidents"}`)
+	text, isErr := toolText(t, resp)
+	if isErr {
+		t.Fatal("incidents tool returned isError")
+	}
+	var v api.IncidentsView
+	if err := json.Unmarshal([]byte(text), &v); err != nil {
+		t.Fatalf("incidents did not round-trip: %v", err)
+	}
+	if v.Class != "MEASURED" || v.Summary.Recurring != 1 {
+		t.Errorf("incidents corrupted across the wire: class %q recurring %d", v.Class, v.Summary.Recurring)
 	}
 }
 

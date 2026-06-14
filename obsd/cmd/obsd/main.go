@@ -392,6 +392,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			// The durable store can hold a finding whose last match was many ticks
 			// ago; serve anything older than ~3 eval ticks as stale, not firing-now.
 			providers.FindingsStaleAfter = 3 * p.Observation.EvaluationTick.Duration()
+			// The durable cross-run incident memory (v3 T-B): read on request, off
+			// the hot path. Empty (not unavailable) when --incident-memory is off.
+			providers.Incidents = func() (*vapi.IncidentsView, error) {
+				rows, err := findingsStore.ActiveIncidents(200)
+				if err != nil {
+					return nil, err
+				}
+				return vapi.BuildIncidents(graphVersion, time.Now().UTC(), rows), nil
+			}
 			// The anomaly timeline (doc 10 M4) composes the durable match +
 			// unexplained history; reads the store on request (off the hot path).
 			providers.Timeline = func() (*vapi.TimelineView, error) {
@@ -496,9 +505,16 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			Coverage:      providers.Coverage,
 			SilenceLedger: providers.SilenceLedger,
 			Warnings:      providers.Warnings,
+			Incidents: func() *vapi.IncidentsView {
+				if providers.Incidents == nil {
+					return nil
+				}
+				v, _ := providers.Incidents()
+				return v
+			},
 		}, mcpAdvisoryGatePassed, "vigil-obsd", graphRelease).HTTPHandler()
 		logger.Info("MCP read-only harness enabled (v3 T-A)", "route", "/mcp",
-			"tools", "get_coverage get_silence_ledger get_warnings emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
+			"tools", "get_coverage get_silence_ledger get_warnings get_incidents emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
 	}
 	if incidentMemory {
 		if findingsStore == nil {
