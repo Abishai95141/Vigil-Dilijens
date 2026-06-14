@@ -272,14 +272,15 @@ isolated cluster until then.
     `corpus/labels/mcp-gate.md`. Non-gating proven structurally (the lane is outside the
     eval/replay path; full `go test -race ./obsd/...` byte-identical). **Auth + ADVISORY-content
     release are separate later gates.**
-- [~] **T-B** incident identity / time spine 🔒 — spine + durable store + obsd wiring + the
-  **incident-gate** all DONE & gated (`just incident-gate` PASSED: key-purity, grouping,
-  continuous-no-inflation, restart-invariance, separation; evidence
-  `corpus/labels/incident-memory-gate.md`). Live-verified on kind-vigil: real findings → durable
-  incidents (role-resolution, honest-partial Node keying, separation, no-per-tick inflation across a
-  ~12-min span). The `replay -incidents` pass folds findings through the same `incident.Accumulator`
-  the store uses, off the digest. **REMAINS:** surface incidents (`/api/incidents` + MCP tool) behind
-  the gate. A live recurrence *climb* wasn't reproducible on kind (cAdvisor `container_oom_events_total=0`;
-  node OOM continuous) — certified deterministically by the gate instead.
+- [x] **T-B** incident identity / time spine 🔒 — DONE end-to-end: spine + durable store + obsd
+  wiring + the **incident-gate** (`just incident-gate` PASSED: key-purity, grouping,
+  continuous-no-inflation, restart-invariance, separation; `corpus/labels/incident-memory-gate.md`) +
+  **surfacing** (`/api/incidents` + MCP `get_incidents`, MEASURED, charter-clean recurrence framing).
+  Live-verified on kind-vigil at every stage: real findings → durable incidents (role-resolution,
+  honest-partial Node keying, separation, no-per-tick inflation across a ~12-min span), then
+  `/api/incidents` surfaced 4 real incidents with MCP round-trip == /api. The `replay -incidents` pass
+  folds findings through the same `incident.Accumulator` the store uses, off the digest. (A live
+  recurrence *climb* wasn't reproducible on kind — cAdvisor `container_oom_events_total=0`, node OOM
+  continuous — so it's certified deterministically by the gate instead.)
 - [ ] **T-C** k8s events (+KSM) · [ ] **T-D** validate_claim referee · companions: PVC dark-bar
   **fix**, auth/RBAC (LAST). See `memory/vigil-tracks-build-plan.md`.
