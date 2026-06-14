@@ -1,0 +1,13 @@
+{"evalNow":"2026-06-14T04:10:51.466733Z","barsEpoch":1,"findings":0,"degraded":[],"fired":false,"charterClean":true}
+{"evalNow":"2026-06-14T04:11:06.503624Z","barsEpoch":2,"findings":0,"degraded":[],"fired":false,"charterClean":true}
+{"evalNow":"2026-06-14T04:11:21.505056Z","barsEpoch":2,"findings":2,"degraded":["monitoring/node-exporter"],"fired":false,"charterClean":true}
+{"evalNow":"2026-06-14T04:11:36.505046Z","barsEpoch":2,"findings":5,"degraded":["chaos/flow-caller","chaos/leaky-callee","monitoring/node-exporter"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:11:51.505085Z","barsEpoch":2,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:12:06.503418Z","barsEpoch":2,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:12:21.505084Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:12:36.504112Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:12:51.505106Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:13:06.505089Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:13:21.50512Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:13:36.505107Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}
+{"evalNow":"2026-06-14T04:13:51.505132Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-callee"],"fired":true,"root":"chaos/leaky-callee","impacted":["chaos/flow-caller"],"charterClean":true}

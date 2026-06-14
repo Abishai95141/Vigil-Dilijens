@@ -22,6 +22,7 @@ import (
 	"os"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/clock"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
@@ -66,6 +67,16 @@ func run(args []string, out *os.File) error {
 		fcBudget   = fs.Int("forecast-budget", 0, "override Tier-B ceiling for the pass (0 = params default)")
 		fcNoDecomp = fs.Bool("forecast-no-decompose", false, "disable 09 M5 decomposition for the pass (for the A/B exit-gate comparison)")
 		fcMinCtx   = fs.Int("forecast-min-context", 0, "override forecast.min_context for the pass (0 = params default; lower for short-cycle classes)")
+
+		// Cross-service cascade-evaluation pass (doc 15 phase D / v2 backtest
+		// gate): re-run the REAL warm-path cascade at every recorded tick —
+		// findings→degraded mapped via the captured bindings, walked over the
+		// captured observed-flow topology, joined to the AUTHORED relation. The
+		// cascade is a pure function of pinned inputs, so the chain is byte-
+		// identical to live. MEASURED+AUTHORED output, verifies nothing.
+		csMode     = fs.Bool("crossservice", false, "CROSS-SERVICE pass: re-compute the warm-path cascade at every tick; verifies nothing")
+		csOut      = fs.String("crossservice-out", "", "JSONL file for per-tick cross-service cascade events (required with -crossservice)")
+		csRelation = fs.String("crossservice-relation", "ontology/graph/overlays/experimental/flow-relation-v0.yaml", "the AUTHORED cross-service relation (surfaced verbatim)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -148,6 +159,27 @@ func run(args []string, out *os.File) error {
 		}
 	}
 
+	var csFile *os.File
+	if *csMode {
+		if *csOut == "" {
+			return fmt.Errorf("-crossservice requires -crossservice-out")
+		}
+		rel, err := flow.LoadRelation(*csRelation)
+		if err != nil {
+			return fmt.Errorf("load cross-service relation: %w", err)
+		}
+		csFile, err = os.Create(*csOut)
+		if err != nil {
+			return err
+		}
+		defer csFile.Close()
+		csEnc := json.NewEncoder(csFile)
+		opts.CrossService = &replay.CrossServiceEval{
+			Relation: rel,
+			Events:   func(tc replay.TickCrossService) { _ = csEnc.Encode(tc) },
+		}
+	}
+
 	rep, err := replay.Run(opts)
 	if err != nil {
 		return err
@@ -168,6 +200,14 @@ func run(args []string, out *os.File) error {
 	if *fcMode {
 		fmt.Fprintf(out, "  FORECAST PASS: pipeline re-ran at every tick against clockd=%s — PROJECTED output, events -> %s (verifies nothing)\n",
 			*fcClockd, *fcOut)
+	}
+	if *csMode {
+		note := ""
+		if _, hasFlow := m.EdgeBudgets[string(flow.EdgeTypeFlow)]; !hasFlow {
+			note = " — NOTE: bundle pins no flow budget (captured without --flow-enabled); the cascade is quiet on every tick"
+		}
+		fmt.Fprintf(out, "  CROSS-SERVICE PASS: warm-path cascade re-computed at every tick — MEASURED+AUTHORED output, events -> %s (verifies nothing)%s\n",
+			*csOut, note)
 	}
 	if !*quiet {
 		for _, tk := range rep.Ticks {

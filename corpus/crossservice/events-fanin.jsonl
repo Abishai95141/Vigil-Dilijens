@@ -1,0 +1,14 @@
+{"evalNow":"2026-06-14T04:15:58.937434Z","barsEpoch":1,"findings":0,"degraded":[],"fired":false,"charterClean":true}
+{"evalNow":"2026-06-14T04:16:13.975828Z","barsEpoch":2,"findings":0,"degraded":[],"fired":false,"charterClean":true}
+{"evalNow":"2026-06-14T04:16:28.97448Z","barsEpoch":2,"findings":0,"degraded":[],"fired":false,"charterClean":true}
+{"evalNow":"2026-06-14T04:16:43.975255Z","barsEpoch":2,"findings":3,"degraded":["chaos/hub-caller-a","chaos/hub-caller-c","monitoring/conntrack-agent"],"fired":false,"charterClean":true}
+{"evalNow":"2026-06-14T04:16:58.974115Z","barsEpoch":2,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:17:13.974359Z","barsEpoch":2,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:17:28.974604Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:17:43.975948Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:17:58.974911Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:18:13.974265Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:18:28.975241Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:18:43.974607Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:18:58.975025Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}
+{"evalNow":"2026-06-14T04:19:13.975984Z","barsEpoch":3,"findings":1,"degraded":["chaos/leaky-hub"],"fired":true,"root":"chaos/leaky-hub","impacted":["chaos/hub-caller-a","chaos/hub-caller-b","chaos/hub-caller-c"],"charterClean":true}

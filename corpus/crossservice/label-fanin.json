@@ -1,0 +1,3 @@
+{"bundle": "chaos-fanin", "scenario": "positive", "expect_fire": true,
+ "root": "chaos/leaky-hub", "callers": ["chaos/hub-caller-a", "chaos/hub-caller-b", "chaos/hub-caller-c"],
+ "note": "1→3 fan-in: leaky-hub (degraded, MEMORY_LEAK) ← three distinct caller roles over three observed-flow edges."}

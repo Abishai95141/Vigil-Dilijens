@@ -11,6 +11,7 @@ import (
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
@@ -43,6 +44,47 @@ type Options struct {
 	// instant, tracing raw trajectories. PROJECTED output is never part of the
 	// digest — this pass verifies nothing about determinism and says so.
 	Forecast *ForecastEval
+
+	// CrossService switches on the cross-service cascade evaluation pass (doc 15
+	// phase D, the v2 backtest gate): at every recorded tick the REAL warm-path
+	// cascade re-runs — this tick's re-derived findings mapped to their degraded
+	// workloads (via the captured bindings' role keys, the same role CEIs the
+	// live identity store resolves), walked BACKWARD over the captured observed-
+	// flow topology and joined to the one AUTHORED relation. The cascade is a
+	// pure function of (findings, flow topology, relation, window), all pinned in
+	// the bundle, so the replayed chain is byte-identical to what obsd surfaced
+	// live. MEASURED+AUTHORED output, never digest-bearing — this pass verifies
+	// nothing about determinism (it confirms the digest is UNPERTURBED) and says so.
+	CrossService *CrossServiceEval
+}
+
+// CrossServiceEval configures the cross-service cascade evaluation pass.
+type CrossServiceEval struct {
+	Relation flow.Relation          // the one AUTHORED cross-service relation, surfaced verbatim
+	Events   func(TickCrossService) // sink for per-tick cascade events (the gate substrate)
+}
+
+// TickCrossService is one tick's cross-service cascade output: the degraded
+// workloads fed in, whether a chain fired, and (when it did) the named root +
+// distinct impacted callers + a charter check. The scorer (harness
+// crossservice_gate.py) grades these against per-bundle ground truth.
+type TickCrossService struct {
+	EvalNow   time.Time `json:"evalNow"`
+	BarsEpoch int       `json:"barsEpoch"`
+	Findings  int       `json:"findings"` // total findings this tick (context for diagnosis)
+
+	// Degraded names the workloads (namespace/workload labels) this tick's
+	// findings mapped to — the MEASURED seeds the cascade walked from. Sorted.
+	Degraded []string `json:"degraded"`
+
+	Fired    bool     `json:"fired"`              // a cross-service chain was produced
+	Root     string   `json:"root,omitempty"`     // most-upstream degraded node (structural fan-in)
+	Impacted []string `json:"impacted,omitempty"` // distinct impacted-caller labels (sorted)
+
+	// CharterClean asserts the rendered chain carries no causal-claim token
+	// (cause/caused/…); a false here is a hard gate failure (the join was fused).
+	CharterClean bool   `json:"charterClean"`
+	CharterToken string `json:"charterToken,omitempty"`
 }
 
 // ForecastEval configures the forecast-evaluation pass.
@@ -299,6 +341,7 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		// A topology-recording bundle whose tick lacks the field is a corrupt or
 		// hand-edited bundle: refuse rather than mis-verify.
 		var topo detect.Topology
+		var flowStore *identity.EdgeStore // the same store, kept typed for the cross-service pass
 		if m.EdgeBudgets != nil {
 			if rec.Topology == nil {
 				return TickOutcome{}, fmt.Errorf("replay: tick %s carries no topology snapshot but the manifest pins edge budgets (corrupt bundle?)", rec.EvalNow.Format(time.RFC3339Nano))
@@ -308,6 +351,7 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 				return TickOutcome{}, fmt.Errorf("replay: tick %s: %w", rec.EvalNow.Format(time.RFC3339Nano), err)
 			}
 			topo = store
+			flowStore = store
 		} else if rec.Topology != nil {
 			return TickOutcome{}, fmt.Errorf("replay: tick %s records topology but the manifest pins no edge budgets — suspicion thresholds unknown; refusing to guess", rec.EvalNow.Format(time.RFC3339Nano))
 		}
@@ -338,6 +382,17 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 				})
 			}
 		}
+
+		// Cross-service cascade evaluation pass (doc 15 phase D, v2 backtest gate):
+		// reproduce obsd's WARM PATH exactly — map this tick's findings to their
+		// degraded workloads via the captured bindings (whose RoleKey is the role
+		// CEI's Key(), the very key the live identity store resolves), then walk the
+		// captured observed-flow topology backward and join the AUTHORED relation.
+		// A pure function of (findings, flow topology, relation, window) — all pinned
+		// — so the chain is byte-identical to live. MEASURED+AUTHORED, off the digest.
+		if opts.CrossService != nil && opts.CrossService.Events != nil {
+			opts.CrossService.Events(crossServiceTick(rec, findings, flowStore, ep.res.Bindings, opts.CrossService.Relation, w))
+		}
 	}
 	digest, canonical, err := Digest(rec.EvalNow, fps, findings, cascades, unexp)
 	if err != nil {
@@ -362,6 +417,87 @@ func evalTick(rec TickRecord, bars map[int]*barsEpoch, opts Options,
 		}
 	}
 	return out, nil
+}
+
+// crossServiceTick reproduces obsd's warm-path cross-service cascade (doc 15
+// phase D) for one replayed tick — the gate's faithful re-computation. The
+// findings→degraded-workload mapping mirrors the live path (store.Get(EntityCEI).
+// RoleCEI) using the captured bindings' role keys; the walk + AUTHORED-relation
+// join are the very flow.CrossServiceChain obsd calls. Deterministic in (findings,
+// flow topology, relation, window), all pinned — byte-identical to the live chain.
+func crossServiceTick(rec TickRecord, findings []detect.Finding, flowStore *identity.EdgeStore,
+	bindings []binding.Binding, rel flow.Relation, w identity.TimeWindow) TickCrossService {
+
+	out := TickCrossService{
+		EvalNow: rec.EvalNow, BarsEpoch: rec.BarsEpoch,
+		Findings: len(findings), CharterClean: true,
+	}
+	if flowStore == nil {
+		return out // pre-topology bundle: no flow edges, no cascade (honest quiet)
+	}
+
+	// instance CEI key -> role CEI key, from the captured bindings. binding.RoleKey
+	// is pod.RoleCEI.Key() (doc 04 compile.go) — the same role CEI the live
+	// identity store resolves a finding's EntityCEI to in the warm path.
+	roleByInstance := make(map[string]string, len(bindings))
+	for i := range bindings {
+		if bindings[i].RoleKey != "" {
+			roleByInstance[bindings[i].CEIKey] = bindings[i].RoleKey
+		}
+	}
+
+	var degraded []flow.DegradedWorkload
+	seen := map[string]bool{}
+	degradedLabels := map[string]bool{}
+	for i := range findings {
+		roleKey := roleByInstance[findings[i].EntityCEI]
+		if roleKey == "" || seen[roleKey] {
+			continue
+		}
+		seen[roleKey] = true
+		roleCEI, err := identity.ParseKey(roleKey)
+		if err != nil {
+			continue // unparseable role key: skip, never guess a workload
+		}
+		label := flow.RoleLabel(roleCEI)
+		degradedLabels[label] = true
+		degraded = append(degraded, flow.DegradedWorkload{
+			CEI: roleCEI, Label: label,
+			Phenomenon: findings[i].Phenomenon, Detail: findings[i].Phenomenon + " finding (degraded callee)",
+		})
+	}
+	out.Degraded = sortedSetKeys(degradedLabels)
+
+	chain, ok := flow.CrossServiceChain(flowStore, degraded, rel, w, rec.EvalNow)
+	if !ok {
+		return out // degraded or not, but no caller over a valid flow edge: quiet
+	}
+	out.Fired = true
+	out.Root = chain.MostUpstreamDegradedNode
+	impacted := map[string]bool{}
+	for _, l := range chain.Links {
+		impacted[l.Impacted] = true
+	}
+	out.Impacted = sortedSetKeys(impacted)
+
+	// Charter: the rendered chain must carry no causal-claim token. The AUTHORED
+	// `why` is curated prose written to be clean (the flow tests assert this over
+	// the whole chain), so scanning the full render is the strict check.
+	if b, err := chain.JSON(); err == nil {
+		if tok, bad := flow.HasForbiddenToken(string(b)); bad {
+			out.CharterClean, out.CharterToken = false, tok
+		}
+	}
+	return out
+}
+
+func sortedSetKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // bundleReader is the engine's observe.StreamReader: the same read-side

@@ -1,0 +1,2 @@
+{"bundle": "healthy-negative", "scenario": "negative", "expect_fire": false,
+ "note": "boutique 12/12 healthy + chaos/leaky-worker present (degraded but NO caller over a flow edge → correctly quiet). No cross-service cascade may fire."}

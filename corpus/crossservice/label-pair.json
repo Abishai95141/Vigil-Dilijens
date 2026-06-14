@@ -1,0 +1,3 @@
+{"bundle": "chaos-pair", "scenario": "positive", "expect_fire": true,
+ "root": "chaos/leaky-callee", "callers": ["chaos/flow-caller"],
+ "note": "single-caller topology: leaky-callee (degraded, MEMORY_LEAK) ← flow-caller over one observed-flow edge."}

@@ -171,6 +171,14 @@ harness-setup:
 harness-test:
     cd harness && uv run --extra analytics ruff check . && uv run --extra analytics pytest -q
 
+# Cross-service cascade backtest gate (doc 15 phase D / 11 §3.5) over the frozen,
+# live-captured corpus in corpus/crossservice/ — offline, no cluster needed. Exit
+# 0 = PASSED (the class may be operator-visible); 1 = FAILED/INSUFFICIENT.
+xsvc-gate:
+    cd harness && uv run python -m harness.crossservice_gate \
+      --events ../corpus/crossservice/events-pair.jsonl ../corpus/crossservice/events-fanin.jsonl ../corpus/crossservice/events-healthy.jsonl \
+      --labels ../corpus/crossservice/label-pair.json ../corpus/crossservice/label-fanin.json ../corpus/crossservice/label-healthy.json
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

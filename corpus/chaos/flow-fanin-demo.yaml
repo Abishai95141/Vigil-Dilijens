@@ -1,0 +1,151 @@
+# v2 cross-service GATE corpus — fan-in scenario (doc 15 phase D / 11 §3.5).
+# A second, DISTINCT degraded root (leaky-hub) with THREE distinct caller roles,
+# so the gate is validated on a topology different from the single-caller pair
+# (flow-cross-demo.yaml): a 1→3 fan-in. The hub uses the same proven slow-leak as
+# flow-cross-demo (prefill below the bar, +1Mi/10s, serving while it leaks) so
+# PHEN_MEMORY_LEAK fires on the rising-slope-at-threshold for several ticks before
+# OOM. Each caller holds a persistent TCP connection (a conntrack flow edge). The
+# warm-path cascade must name root=chaos/leaky-hub with all THREE callers impacted.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaky-hub
+  namespace: chaos
+  labels: { app: leaky-hub }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: leaky-hub } }
+  template:
+    metadata: { labels: { app: leaky-hub } }
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              # prefill BELOW the bar, then leak slowly so the working-set is still
+              # RISING when it enters the at-threshold band [bar=365Mi, limit=384Mi]
+              # and the 5-min slope window is full of rising data -> PHEN_MEMORY_LEAK
+              # fires for several ticks before OOM (not a sawtooth, not a plateau).
+              buf = [bytearray(1024*1024) for _ in range(340)]   # ~340Mi
+              def leak():
+                  while True:
+                      buf.append(bytearray(1024*1024)); time.sleep(10)   # +1Mi / 10s
+              threading.Thread(target=leak, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 8080)); s.listen(64)
+              held = []
+              while True:
+                  c, _ = s.accept(); held.append(c)   # keep caller connections open
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 20m, memory: 256Mi }
+            limits:   { cpu: 100m, memory: 384Mi }   # bar = 0.95*384 = ~365Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: leaky-hub
+  namespace: chaos
+spec:
+  selector: { app: leaky-hub }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+# Three DISTINCT caller workloads (distinct roles), each holding a persistent
+# connection to leaky-hub -> three observed-flow edges fanning into the hub.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-caller-a
+  namespace: chaos
+  labels: { app: hub-caller-a }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hub-caller-a } }
+  template:
+    metadata: { labels: { app: hub-caller-a } }
+    spec:
+      containers:
+        - name: client
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, time
+              while True:
+                  try:
+                      s = socket.create_connection(("leaky-hub.chaos.svc.cluster.local", 8080), timeout=5)
+                      while True:
+                          time.sleep(8); s.sendall(b"ping")
+                  except Exception:
+                      time.sleep(3)
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 32Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-caller-b
+  namespace: chaos
+  labels: { app: hub-caller-b }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hub-caller-b } }
+  template:
+    metadata: { labels: { app: hub-caller-b } }
+    spec:
+      containers:
+        - name: client
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, time
+              while True:
+                  try:
+                      s = socket.create_connection(("leaky-hub.chaos.svc.cluster.local", 8080), timeout=5)
+                      while True:
+                          time.sleep(8); s.sendall(b"ping")
+                  except Exception:
+                      time.sleep(3)
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 32Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-caller-c
+  namespace: chaos
+  labels: { app: hub-caller-c }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: hub-caller-c } }
+  template:
+    metadata: { labels: { app: hub-caller-c } }
+    spec:
+      containers:
+        - name: client
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, time
+              while True:
+                  try:
+                      s = socket.create_connection(("leaky-hub.chaos.svc.cluster.local", 8080), timeout=5)
+                      while True:
+                          time.sleep(8); s.sendall(b"ping")
+                  except Exception:
+                      time.sleep(3)
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 32Mi }
