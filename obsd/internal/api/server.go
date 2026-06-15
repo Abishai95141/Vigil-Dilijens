@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -55,6 +56,9 @@ type Providers struct {
 	// Events returns the v3 T-C discrete-event lane surface (OOMKilled,
 	// CrashLoopBackOff joined by CEI); nil ⇒ the honest "not enabled" state.
 	Events func() *EventsView
+	// Referee validates an EXTERNAL claim against the charter + authored graph (v3
+	// T-D). Advisory — it NEVER blocks. nil ⇒ the referee is not enabled.
+	Referee func(claim string) ClaimVerdict
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -111,6 +115,26 @@ func Register(mux *http.ServeMux, p Providers) {
 			return
 		}
 		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/validate-claim", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed (POST a JSON {\"claim\":\"...\"})", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.Referee == nil {
+			writeJSON(w, ClaimVerdict{LabelledBestEffort: true, Reasons: []ClaimFinding{},
+				Note: "The validate-claim referee is not enabled (needs --referee-enabled)."})
+			return
+		}
+		var body struct {
+			Claim string `json:"claim"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&body); err != nil || body.Claim == "" {
+			http.Error(w, "POST a JSON body {\"claim\":\"<text>\"}", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, p.Referee(body.Claim))
 	})
 
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {

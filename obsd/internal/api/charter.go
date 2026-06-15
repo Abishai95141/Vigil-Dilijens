@@ -42,9 +42,10 @@ var bannedCausal = []string{
 // is modal; a measurement is past/present, never a future promise).
 var bannedFutureCertainty = []string{
 	"will cross", "will reach", "will breach", "will hit", "will exceed",
-	"will happen", "will fail", "shall cross", "shall reach", "is going to",
-	"are going to", "set to breach", "set to cross", "bound to", "guaranteed to",
-	"definitely will", "certain to", "imminent crossing", "inevitably",
+	"will surpass", "will go over", "will top", "will happen", "will fail",
+	"shall cross", "shall reach", "is going to", "are going to", "set to breach",
+	"set to cross", "bound to", "guaranteed to", "definitely will", "certain to",
+	"imminent crossing", "inevitably",
 }
 
 // bannedFusion are class-confusion markers: a forecast spoken as a fact.

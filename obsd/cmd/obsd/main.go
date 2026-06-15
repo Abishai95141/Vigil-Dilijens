@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -91,6 +93,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		eventsOn     = fs.Bool("events-enabled", false, "v3 T-C: ingest discrete k8s Events (OOMKilled, CrashLoopBackOff) as MEASURED findings joined by CEI to gauge phenomena. OFF by default; off = byte-identical (events ride off the digest).")
 		eventsConds  = fs.String("events-conditions", "ontology/graph/overlays/experimental/event-conditions-v1.yaml", "v3 T-C: the authored event-corroboration conditions overlay (experimental until the events-gate promotes it)")
 		eventsInt    = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
+		refereeOn    = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -152,7 +155,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -165,9 +168,61 @@ const mcpAdvisoryGatePassed = false
 // the Result and the coverage report.
 const sha256PreviewLen = len("sha256:") + 12
 
+// refereePhenomena extracts the validate_claim referee's static ground from the loaded
+// graph (v3 T-D): the phenomenon vocabulary (id -> ALIAS tails for endpoint mapping) and
+// the AUTHORED phenomenon_relation edges (the only legitimate causal basis). Each
+// phenomenon gets BOTH the natural id-derived tail ("oom kill cgroup") AND the cleaned
+// graph label ("oom kill", from "OOM kill (cgroup-level)") so the referee recognises
+// either phrasing in live prose. Pure; nil graph yields empty context (the referee then
+// runs only its substring backstop).
+func refereePhenomena(g *graph.Graph) (map[string][]string, []vapi.AuthoredLink) {
+	if g == nil {
+		return nil, nil
+	}
+	phen := make(map[string][]string, len(g.Phenomena))
+	for id, p := range g.Phenomena {
+		set := map[string]bool{}
+		if t := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(id, "PHEN_"), "_", " "))); t != "" {
+			set[t] = true
+		}
+		if p != nil {
+			if t := cleanPhenLabel(p.Label); t != "" {
+				set[t] = true
+			}
+		}
+		aliases := make([]string, 0, len(set))
+		for a := range set {
+			aliases = append(aliases, a)
+		}
+		sort.Strings(aliases)
+		phen[id] = aliases
+	}
+	var links []vapi.AuthoredLink
+	for i := range g.Edges {
+		e := &g.Edges[i]
+		if e.Type == "phenomenon_relation" {
+			links = append(links, vapi.AuthoredLink{Src: e.Src, Dst: e.Dst, Why: e.Why})
+		}
+	}
+	return phen, links
+}
+
+// cleanPhenLabel normalises a graph label into a prose-matchable tail: lowercased,
+// parentheticals dropped ("OOM kill (cgroup-level)" -> "oom kill"), separators spaced.
+func cleanPhenLabel(label string) string {
+	s := strings.ToLower(strings.TrimSpace(label))
+	if i := strings.IndexByte(s, '('); i >= 0 {
+		s = s[:i]
+	}
+	for _, sep := range []string{"→", "->", "/"} {
+		s = strings.ReplaceAll(s, sep, " ")
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -410,6 +465,38 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// points (09 M5 §3.4). Created once so both see the same windows.
 	cwStore := vapi.NewContextWindowStore()
 
+	// v3 T-D validate-claim referee: a pure check of an EXTERNAL claim against the
+	// charter + the AUTHORED graph relations + the current PROJECTED/MEASURED state.
+	// Advisory — never blocks, never gates detection. Default off ⇒ not constructed.
+	var refereeFn func(string) vapi.ClaimVerdict
+	if refereeEnabled {
+		phen, links := refereePhenomena(ontologyGraph)
+		refereeFn = func(claim string) vapi.ClaimVerdict {
+			cc := vapi.ClaimContext{Phenomena: phen, AuthoredLinks: links}
+			// PROJECTED subjects: the current early-warning entities (the names a
+			// crossing claim would reference); MEASURED subjects: the current findings.
+			if wv := warningsView.Load(); wv != nil {
+				for i := range wv.Warnings {
+					if n := wv.Warnings[i].Name; n != "" {
+						cc.Projected = append(cc.Projected, n)
+					}
+				}
+			}
+			if findingsStore != nil {
+				if rows, err := findingsStore.ActiveFindings(200); err == nil {
+					for i := range rows {
+						if rows[i].Name != "" {
+							cc.Measured = append(cc.Measured, rows[i].Name)
+						}
+					}
+				}
+			}
+			return vapi.ValidateClaim(claim, cc, vapi.ClaimOpts{})
+		}
+		logger.Info("validate-claim referee enabled (v3 T-D)",
+			"routes", "/api/validate-claim + MCP validate_claim", "authored_relations", len(links))
+	}
+
 	var providers *vapi.Providers
 	if apiEnabled {
 		providers = &vapi.Providers{
@@ -432,6 +519,8 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				}
 				return eventsView.Load()
 			},
+			// v3 T-D validate-claim referee (nil ⇒ /api/validate-claim reports off).
+			Referee: refereeFn,
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
@@ -558,10 +647,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				v, _ := providers.Incidents()
 				return v
 			},
-			Events: providers.Events,
+			Events:  providers.Events,
+			Referee: providers.Referee,
 		}, mcpAdvisoryGatePassed, "vigil-obsd", graphRelease).HTTPHandler()
-		logger.Info("MCP read-only harness enabled (v3 T-A)", "route", "/mcp",
-			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
+		logger.Info("MCP harness enabled (v3 T-A + T-C/T-D tools)", "route", "/mcp",
+			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events validate_claim emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
 	}
 	if incidentMemory {
 		if findingsStore == nil {

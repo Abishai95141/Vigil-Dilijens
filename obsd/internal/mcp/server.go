@@ -26,6 +26,9 @@ type Sources struct {
 	Warnings      func() *api.WarningsView
 	Incidents     func() *api.IncidentsView
 	Events        func() *api.EventsView
+	// Referee validates an external claim against the charter + authored graph
+	// (v3 T-D). Advisory — NEVER blocks. nil ⇒ the validate_claim tool reports off.
+	Referee func(claim string) api.ClaimVerdict
 }
 
 // Server is a READ-ONLY MCP adapter. See doc.go for the charter contract.
@@ -133,6 +136,7 @@ const (
 	toolWarnings      = "get_warnings"
 	toolIncidents     = "get_incidents"
 	toolEvents        = "get_events"
+	toolValidateClaim = "validate_claim"
 	toolEmitAdvisory  = "emit_advisory"
 )
 
@@ -164,6 +168,11 @@ func toolDefs() []toolDef {
 			Name:        toolEvents,
 			Description: "MEASURED. The discrete-event lane: k8s Events (OOMKilled, CrashLoopBackOff) ingested as findings and JOINED by shared role CEI to gauge phenomena (corroborate, never fuse). A corroboration carries an AUTHORED why verbatim; a standalone event is visible but never upgraded to a match. An event is a co-occurrence, never a cause.",
 			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolValidateClaim,
+			Description: "Referee a claim BEFORE you surface it (v3 T-D). Submit your drafted prose; the referee checks it against the charter + the AUTHORED graph and returns {flagged, reasons, matchedAuthored} — it flags generated causation (a cause the graph does not author), a projection restated as a measurement, and future certainty. It is ADVISORY: it NEVER blocks. A causal claim with an authored relation behind it is not flagged but should be surfaced AS authored, verbatim.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"claim":{"type":"string","description":"the drafted claim to referee"}},"required":["claim"],"additionalProperties":false}`),
 		},
 		{
 			Name:        toolEmitAdvisory,
@@ -204,6 +213,22 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.Incidents), "incident memory not enabled (needs --incident-memory + --db)"), nil
 	case toolEvents:
 		return toolJSON(orNil(s.src.Events), "events lane not enabled (needs --events-enabled)"), nil
+	case toolValidateClaim:
+		if s.src.Referee == nil {
+			return mustRaw(toolResult{Content: []toolContent{{Type: "text", Text: `{"available":false,"note":"the validate-claim referee is not enabled (needs --referee-enabled)"}`}}}), nil
+		}
+		var args struct {
+			Claim string `json:"claim"`
+		}
+		if len(p.Arguments) > 0 {
+			if err := json.Unmarshal(p.Arguments, &args); err != nil {
+				return nil, &rpcErr{Code: codeInvalidParams, Message: "invalid validate_claim arguments: " + err.Error()}
+			}
+		}
+		if args.Claim == "" {
+			return nil, &rpcErr{Code: codeInvalidParams, Message: "validate_claim requires a non-empty claim"}
+		}
+		return mustRaw(textResult(s.src.Referee(args.Claim))), nil
 	case toolEmitAdvisory:
 		var args struct {
 			Text string `json:"text"`

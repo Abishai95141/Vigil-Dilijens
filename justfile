@@ -227,6 +227,17 @@ events-gate:
       --events ../corpus/events/events-corroborated-oom.jsonl ../corpus/events/events-multi-role.jsonl ../corpus/events/events-identity-mismatch.jsonl ../corpus/events/events-standalone-crashloop.jsonl ../corpus/events/events-healthy-negative.jsonl \
       --labels ../corpus/events/label-corroborated-oom.json ../corpus/events/label-multi-role.json ../corpus/events/label-identity-mismatch.json ../corpus/events/label-standalone-crashloop.json ../corpus/events/label-healthy-negative.json
 
+# validate-claim referee gate (v3 T-D / doc 01 / doc 11 §3.5) over the frozen corpus in
+# corpus/validate-claim/ — certifies the deterministic LLM-claim referee: FALSE-BLOCK==0
+# (ABSOLUTE — a true claim is never flagged), RECALL>=0.90, per-category recall, the
+# MUTATION teeth (with the substring denylist OFF the STRUCTURAL backstop still catches
+# relation-absent fabrications), labelled-best-effort, never-block. The Go half runs the
+# referee unit tests + the frozen-corpus drift guard (verdicts == a fresh ValidateClaim
+# run); the Python half grades the frozen verdicts. Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+validate-claim-gate:
+    go test -race ./obsd/internal/api/ -run 'ValidateClaim|Legit|RelationAbsent|AuthoredCausal|ClassFusion|FutureCertainty|StructuralHoneypot|Mutation|NeverBlocks|Deterministic'
+    cd harness && uv run python -m harness.validate_claim_gate --verdicts ../corpus/validate-claim/verdicts.jsonl
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

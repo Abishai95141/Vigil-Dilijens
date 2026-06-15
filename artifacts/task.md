@@ -298,5 +298,22 @@ isolated cluster until then.
   collector: on kind an OOM emits NO `OOMKilled` Event — the fact is in pod `lastState.terminated`, so
   the collector reads pod status too. (Corroboration *firing* not reproducible live — needs a gauge OOM
   finding that can't exist on kind — certified by the gate instead.)
-- [ ] **T-D** validate_claim referee · companions: PVC dark-bar **fix**, auth/RBAC (LAST).
+- [x] **T-D** validate_claim referee 🔒 — DONE end-to-end + adversarially hardened: NEW
+  `internal/api/validate.go` (`ValidateClaim`: two backstops — the charter denylist + a
+  graph-aware STRUCTURAL extractor — that flags generated causation / class-fusion /
+  future-certainty and **NEVER blocks**; a causal claim with an AUTHORED relation behind
+  it is RESCUED, not flagged). Surfaced behind `--referee-enabled` (default off): MCP
+  `validate_claim` tool + `/api/validate-claim`, context built from the real graph
+  relations (alias tails per phenomenon) + live PROJECTED/MEASURED. **validate-claim-gate**
+  (`just validate-claim-gate` PASSED: FALSE-BLOCK==0 ABSOLUTE, RECALL 14/14, per-category,
+  MUTATION 9/9 structural-only, never-block; + a frozen-corpus drift guard). **Adversarial
+  hardening** (11-agent workflow → 27 exploits; all 80 probes run through the REAL
+  ValidateClaim found 13 false-blocks + 23 misses in the first cut, ALL FIXED: passive/
+  reverse-cue direction, class-fusion subject-proximity, negation, all-occurrence indexing,
+  per-cue rescue, word-boundary — 8 frozen as regression cases + `TestHardening`).
+  **Live-verified on kind-vigil**: authored restatements rescued (incl. PASSIVE voice),
+  fabrications flagged (incl. reverse-direction), via both `/api/validate-claim` and MCP
+  `validate_claim`, against the real verbose graph labels (alias derivation working);
+  non-gating confirmed (0 errors). `corpus/labels/validate-claim-gate.md`.
+- [ ] companions: PVC dark-bar **fix** · KSM object-state (events sibling) · auth/RBAC (LAST).
   See `memory/vigil-tracks-build-plan.md`.

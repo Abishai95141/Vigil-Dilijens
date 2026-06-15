@@ -57,6 +57,12 @@ func testSources() Sources {
 				}},
 			}
 		},
+		Referee: func(claim string) api.ClaimVerdict {
+			return api.ValidateClaim(claim, api.ClaimContext{
+				Phenomena:     map[string][]string{"PHEN_MEMORY_LEAK": {"memory leak"}, "PHEN_OOM_KILL_CGROUP": {"oom kill"}},
+				AuthoredLinks: []api.AuthoredLink{{Src: "PHEN_MEMORY_LEAK", Dst: "PHEN_OOM_KILL_CGROUP", Why: "Eventual outcome"}},
+			}, api.ClaimOpts{})
+		},
 	}
 }
 
@@ -179,6 +185,23 @@ func TestIncidentsRoundTripsClassed(t *testing.T) {
 	}
 	if v.Class != "MEASURED" || v.Summary.Recurring != 1 {
 		t.Errorf("incidents corrupted across the wire: class %q recurring %d", v.Class, v.Summary.Recurring)
+	}
+}
+
+func TestValidateClaimToolRoundTrips(t *testing.T) {
+	s := New(testSources(), false, "vigil-test", "v3")
+	// A relation-absent fabrication (oom kill → memory leak is not authored) must flag.
+	resp := call(t, s, "tools/call", `{"name":"validate_claim","arguments":{"claim":"the oom kill caused the memory leak"}}`)
+	text, isErr := toolText(t, resp)
+	if isErr {
+		t.Fatal("validate_claim returned isError on a normal claim")
+	}
+	var v api.ClaimVerdict
+	if err := json.Unmarshal([]byte(text), &v); err != nil {
+		t.Fatalf("verdict did not round-trip: %v", err)
+	}
+	if !v.Flagged || !v.LabelledBestEffort {
+		t.Errorf("a relation-absent causal claim must be flagged + labelled best-effort: %+v", v)
 	}
 }
 
