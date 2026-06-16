@@ -317,3 +317,27 @@ isolated cluster until then.
   non-gating confirmed (0 errors). `corpus/labels/validate-claim-gate.md`.
 - [ ] companions: PVC dark-bar **fix** · KSM object-state (events sibling) · auth/RBAC (LAST).
   See `memory/vigil-tracks-build-plan.md`.
+
+## Graph-robustness #2 — G0/G1 (event-driven detection) — DONE (2026-06-16, branch v3)
+
+- [x] **G0** wireability ledger — `corpus/labels/graph-robustness-ledger.md`. The
+  reframing: `/api/coverage` observability (11 full/12 partial/17 none) is OBTAINABILITY,
+  not "fires"; only **7** phenomena had a detection CHECK; live, only MEMORY_LEAK fired.
+  Every authored cascade needs a non-fingerprint lane (events/KSM/kubelet-main); the two
+  flagship cascades are one lane (events) away.
+- [x] **G1** event-driven phenomenon detection 🔒 — a discrete event the KG authors as a
+  REQUIRED member produces a DEGRADED MEASURED `detect.Finding`; unioned with fingerprint
+  findings ONLY at the surface + cascade layer, OFF the fingerprint replay digest (the
+  cross-service warm-path precedent). NEW `obsd/internal/eventdetect/` (`Findings`);
+  authored `event_detections:` block in the experimental overlay (referentially validated
+  → release hash UNCHANGED, zero blast radius); off-digest augmented cascade tracker
+  (`binder.augmentedCascades`); surfaced via `/api/insights` + `/api/topology`. Behind
+  `--events-enabled`. **event-detection-gate** (`just event-detection-gate` PASSED:
+  detection-fidelity, no-false-upgrade==0, cascade-recognition [authored why verbatim, no
+  phantom], degraded-honest, digest-invariance, charter==0; + always-on digest guard +
+  frozen-corpus drift guard + 8 python regression tests). **LIVE-VERIFIED on kind-vigil**:
+  BOTH previously-dark flagship cascades light up — `MEMORY_LEAK → OOM_KILL_CGROUP`
+  (why="Eventual outcome") on REAL currencyservice (closes the `container_oom_events_total=0`
+  blind spot) AND `THROTTLING_CASCADE → PROBE_FAILURE_RESTART` (why="Probe cascade") on a
+  throttled crash-looper; bare Pods (no role) correctly fire nothing. `corpus/labels/event-detection-gate.md`.
+- [ ] G2 KSM lane · G3 kubelet-main lane · G4 author-only — see `memory/vigil-graph-robustness-plan.md`.

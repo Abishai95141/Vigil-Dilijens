@@ -1,0 +1,25 @@
+{
+  "bundle": "eventdetect-leak-to-oom-cascade",
+  "scenario": "leak-to-oom-cascade",
+  "digestBefore": "a312859869ce54dc58ffb13b7e39627abeb55762034adb8d8c974ead3d23f455",
+  "digestAfter": "a312859869ce54dc58ffb13b7e39627abeb55762034adb8d8c974ead3d23f455",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_OOM_KILL_CGROUP",
+      "entityCei": "i|evt-cluster|online-boutique|Pod|currency-abc|u-currency",
+      "quality": "degraded",
+      "requiredMet": 1,
+      "requiredTotal": 8
+    }
+  ],
+  "expectCascades": [
+    {
+      "trigger": "PHEN_MEMORY_LEAK",
+      "downstream": "PHEN_OOM_KILL_CGROUP",
+      "why": "Eventual outcome",
+      "related": "same-entity"
+    }
+  ],
+  "expectNoUpgrade": 0,
+  "note": "MEMORY_LEAK (gauge) + OOMKilled (event) on the SAME workload -\u003e the authored MEMORY_LEAK-\u003eOOM_KILL_CGROUP cascade lights up live (the flagship)."
+}

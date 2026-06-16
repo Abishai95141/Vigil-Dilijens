@@ -1,0 +1,25 @@
+{
+  "bundle": "eventdetect-throttle-to-probe-cascade",
+  "scenario": "throttle-to-probe-cascade",
+  "digestBefore": "2fc4f4f450d553c07d1c3feb7a010cd852146f66e76862be753a2f2834b83248",
+  "digestAfter": "2fc4f4f450d553c07d1c3feb7a010cd852146f66e76862be753a2f2834b83248",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_PROBE_FAILURE_RESTART",
+      "entityCei": "i|evt-cluster|online-boutique|Pod|cart-xyz|u-cart",
+      "quality": "degraded",
+      "requiredMet": 1,
+      "requiredTotal": 11
+    }
+  ],
+  "expectCascades": [
+    {
+      "trigger": "PHEN_THROTTLING_CASCADE",
+      "downstream": "PHEN_PROBE_FAILURE_RESTART",
+      "why": "",
+      "related": "same-entity"
+    }
+  ],
+  "expectNoUpgrade": 0,
+  "note": "THROTTLING_CASCADE (gauge) + CrashLoopBackOff (event) on the SAME workload -\u003e the authored THROTTLING_CASCADE-\u003ePROBE_FAILURE_RESTART cascade lights up."
+}

@@ -53,3 +53,53 @@ event_conditions:
       this signal set, so it is surfaced standalone — a visible MEASURED finding,
       never inferred into an explanation and never auto-upgraded to a phenomenon
       match it lacks the required members for.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# event_detections (graph-robustness #2, G1) — a discrete event that the KG already
+# authors as a REQUIRED member of a phenomenon produces a DEGRADED, MEASURED finding
+# for that phenomenon. This is distinct from corroboration above: here the event IS a
+# required member of the phenomenon it lights up (not a corroborator of a separate
+# gauge phenomenon). member_signal must be a role=required member of `phenomenon` in
+# the released graph (validated referentially at load, lane stays off otherwise).
+#
+# Epistemic discipline (doc 01): the event is MEASURED; the match is its MEASURED
+# consequence (one authored required member observed); the finding is DEGRADED with the
+# phenomenon's gauge/probe members NAMED unobservable (degrade-never-fabricate). The
+# event never becomes a "trigger" and proves no cause — it recognizes that an authored
+# required member is present. These findings ride OFF the deterministic replay digest
+# (events are not in the replay bundle) and are gated by the standalone event-detection
+# gate, exactly like the corroboration JOIN. Promotion into the released overlays is a
+# governed follow-up (mirroring the cross-service relation's Phase A→C, doc 15).
+event_detections:
+  # OOMKilled (Pod) IS the cgroup-OOM phenomenon's required OOMKilled event member.
+  # Closes the real blind spot: on a cluster whose cAdvisor reports
+  # container_oom_events_total == 0 the gauge match never fires, yet the kubelet records
+  # the kill. With this, MEMORY_LEAK → OOM_KILL_CGROUP becomes a LIVE cascade.
+  - reason: OOMKilled
+    involved_kind: Pod
+    phenomenon: PHEN_OOM_KILL_CGROUP
+    member_signal: SIG_oomkilled_oomkilling_d6c7e936
+    temporal_order: "T0+PLEG"
+    why: >-
+      Per the curated ontology, an OOMKilled pod-status terminated reason IS the cgroup
+      out-of-memory phenomenon's required OOMKilled event member. Observing it is a
+      MEASURED occurrence of that member, so the phenomenon is recognized DEGRADED on
+      this workload — the cgroup OOM counter and kernel-log discriminator are
+      unobservable on this signal set and are stated, never assumed. It asserts nothing
+      about why the memory was exhausted.
+
+  # CrashLoopBackOff (Pod) IS the probe-failure→restart phenomenon's required
+  # CrashLoopBackOff event member. With this, THROTTLING_CASCADE → PROBE_FAILURE_RESTART
+  # becomes a LIVE cascade (CPU throttling lit on the container + the restart loop on
+  # the same pod).
+  - reason: CrashLoopBackOff
+    involved_kind: Pod
+    phenomenon: PHEN_PROBE_FAILURE_RESTART
+    member_signal: SIG_container_failure_events_backoff_crashloopbackoff_error_1cee58e3
+    temporal_order: "T0+sustained"
+    why: >-
+      Per the curated ontology, a CrashLoopBackOff event on a pod IS the
+      probe-failure→restart phenomenon's required restart-loop member. Observing it is a
+      MEASURED occurrence of that member, so the phenomenon is recognized DEGRADED on
+      this workload — the probe-failure counters, Killing/Unhealthy events and KSM
+      restart count are unobservable on this signal set and are stated, never assumed.

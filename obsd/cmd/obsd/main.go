@@ -31,6 +31,7 @@ import (
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/eventdetect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/events"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
@@ -400,6 +401,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var eventsView atomic.Pointer[vapi.EventsView]
 	eventsView.Store(vapi.BuildEvents(graphVersion, time.Now(), nil))
 	var eventsConds []events.Corroboration
+	var eventsDets []events.Detection // graph-robustness #2 G1: event-driven detection conditions (validated referential)
 	var fcIn *atomic.Pointer[forecastInputs]
 	if p.Forecast.Enabled {
 		fcIn = new(atomic.Pointer[forecastInputs])
@@ -453,9 +455,41 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			}
 			if valid {
 				eventsConds = cs
+				// Event-driven phenomenon detection (graph-robustness #2 G1): a discrete
+				// event that IS a required member of a phenomenon produces a degraded
+				// MEASURED finding. Validate referentially — the member_signal must be a
+				// role=required member of the named phenomenon in the released graph —
+				// else drop that detection (honest degradation, never a fabricated member).
+				if dets, derr := events.LoadEventDetections(eventsCondsPath); derr != nil {
+					logger.Warn("events lane: detections not loadable; event-driven detection off", "err", derr)
+				} else {
+					var ok []events.Detection
+					for _, d := range dets {
+						p := ontologyGraph.Phenomena[d.Phenomenon]
+						if p == nil {
+							logger.Warn("events detection: phenomenon absent from graph; dropped", "phenomenon", d.Phenomenon)
+							continue
+						}
+						isReq := false
+						for _, mem := range p.Members {
+							if mem.SignalID == d.MemberSignal && mem.Role == "required" {
+								isReq = true
+								break
+							}
+						}
+						if !isReq {
+							logger.Warn("events detection: member_signal is not a required member; dropped (no authored basis)",
+								"phenomenon", d.Phenomenon, "member", d.MemberSignal)
+							continue
+						}
+						ok = append(ok, d)
+					}
+					eventsDets = ok
+				}
 				go runEventCollector(ctx, logger, &gate, client, store, clusterID, eventsConds, &eventsSnap, eventsInterval)
 				logger.Info("events lane enabled (v3 T-C)", "route", "/api/events",
-					"reasons", events.Reasons(cs), "conditions", eventsCondsPath)
+					"reasons", events.Reasons(cs), "conditions", eventsCondsPath,
+					"event_detections", len(eventsDets))
 			}
 		}
 	}
@@ -666,7 +700,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView,
 		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
-		eventsEnabled, eventsConds, &eventsSnap, &eventsView)
+		eventsEnabled, eventsConds, eventsDets, &eventsSnap, &eventsView)
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
 	}
@@ -723,7 +757,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
 func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration,
-	eventsEnabled bool, eventsConds []events.Corroboration, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView]) {
+	eventsEnabled bool, eventsConds []events.Corroboration, eventsDets []events.Detection, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView]) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -824,6 +858,27 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			renderFindings(out, findings, bnd.lastObs)
 			cascades = bnd.cascades(now, findings, topo, evalWindow)
 			renderCascades(out, cascades)
+			// Event-driven phenomenon detection (graph-robustness #2 G1): a real
+			// discrete event that IS a required member of a phenomenon (OOMKilled →
+			// OOM_KILL_CGROUP, CrashLoopBackOff → PROBE_FAILURE_RESTART) produces a
+			// DEGRADED MEASURED finding. These JOIN the fingerprint findings ONLY for the
+			// live surfaces below + cascade recognition — they ride strictly OFF the
+			// deterministic digest (the fp `findings`/`cascades` used by routeUnexplained
+			// + capture are NEVER mutated), so replay stays byte-identical and the events
+			// lane non-gating. With --events-enabled off this block is skipped entirely.
+			surfFindings, surfCascades := findings, cascades
+			if eventsEnabled && len(eventsDets) > 0 && bnd.matcher != nil {
+				var raw []events.EventFinding
+				if snap := eventsSnap.Load(); snap != nil {
+					raw = snap.findings
+				}
+				if ef := eventdetect.Findings(bnd.graph, raw, eventsDets, now); len(ef) > 0 {
+					surfFindings = append(append([]detect.Finding{}, findings...), ef...)
+					surfCascades = bnd.augmentedCascades(now, surfFindings, topo, evalWindow)
+					renderFindings(out, ef, bnd.lastObs)
+					renderCascades(out, surfCascades)
+				}
+			}
 			// Unexplained channel (doc 08): loud-but-unmatched routing — the
 			// blind-spot patch, after detection so coverage sees this tick's
 			// matches. Part of the digest (windowed, deterministic).
@@ -853,7 +908,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// M3): live snapshots, current marks only (predictive marks are a
 			// separate visual language added in M5/Phase 2).
 			if insightsView != nil {
-				insightsView.Store(vapi.BuildInsights(clusterID, graphVersion, graphRelease, now, findings, cascades))
+				insightsView.Store(vapi.BuildInsights(clusterID, graphVersion, graphRelease, now, surfFindings, surfCascades))
 			}
 			// v2 cross-service cascade (doc 15 phase D), WARM PATH — off the digest,
 			// gated (logged, not yet a deterministic finding). Map this tick's findings
@@ -941,7 +996,7 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 						warned[wv.Warnings[i].EntityCEI] = true
 					}
 				}
-				topoView.Store(vapi.BuildTopology(clusterID, graphVersion, now, active, topoSnap, strBudgets, findings, unexp, selected, warned))
+				topoView.Store(vapi.BuildTopology(clusterID, graphVersion, now, active, topoSnap, strBudgets, surfFindings, unexp, selected, warned))
 			}
 			// Freeze the warm path's inputs (doc 09 M4): Tier-B targets under
 			// the budget (doc 06 M5) plus the context the blast-radius walk

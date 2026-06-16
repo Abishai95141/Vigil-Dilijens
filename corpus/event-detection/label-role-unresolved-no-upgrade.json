@@ -1,0 +1,10 @@
+{
+  "bundle": "eventdetect-role-unresolved-no-upgrade",
+  "scenario": "role-unresolved-no-upgrade",
+  "digestBefore": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "digestAfter": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "expectFindings": null,
+  "expectCascades": null,
+  "expectNoUpgrade": 1,
+  "note": "OOMKilled on a role-less Node -\u003e ZERO phenomenon findings (never assert a workload phenomenon on an unidentified entity)."
+}

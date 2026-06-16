@@ -238,6 +238,23 @@ validate-claim-gate:
     go test -race ./obsd/internal/api/ -run 'ValidateClaim|Legit|RelationAbsent|AuthoredCausal|ClassFusion|FutureCertainty|StructuralHoneypot|Mutation|NeverBlocks|Deterministic'
     cd harness && uv run python -m harness.validate_claim_gate --verdicts ../corpus/validate-claim/verdicts.jsonl
 
+# event-detection gate (graph-robustness #2 G1 / doc 07 §3.1+§3.4 / doc 11 §3.5) over the
+# frozen corpus in corpus/event-detection/ — certifies that a discrete event the KG
+# authors as a REQUIRED member produces a DEGRADED MEASURED phenomenon finding and lights
+# up the AUTHORED cascade (MEMORY_LEAK->OOM_KILL_CGROUP, THROTTLING_CASCADE->
+# PROBE_FAILURE_RESTART), OFF the fingerprint digest. Floors: detection-fidelity (produced
+# == oracle), no-false-upgrade==0 (role-unresolved/unauthored fire nothing), cascade-
+# recognition (authored why verbatim, no phantom), degraded-honest (missing members named),
+# digest-invariance, charter==0. The Go half runs the producer unit tests + the always-on
+# digest guard + the frozen-corpus drift guard; the Python half grades the frozen corpus.
+# Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+event-detection-gate:
+    go test -race ./obsd/internal/eventdetect/
+    cd harness && uv run python -m harness.event_detection_gate \
+      --findings ../corpus/event-detection/findings-oom-detection.jsonl ../corpus/event-detection/findings-leak-to-oom-cascade.jsonl ../corpus/event-detection/findings-throttle-to-probe-cascade.jsonl ../corpus/event-detection/findings-role-unresolved-no-upgrade.jsonl ../corpus/event-detection/findings-unrelated-reason.jsonl ../corpus/event-detection/findings-healthy-negative.jsonl \
+      --cascades ../corpus/event-detection/cascades-oom-detection.jsonl ../corpus/event-detection/cascades-leak-to-oom-cascade.jsonl ../corpus/event-detection/cascades-throttle-to-probe-cascade.jsonl ../corpus/event-detection/cascades-role-unresolved-no-upgrade.jsonl ../corpus/event-detection/cascades-unrelated-reason.jsonl ../corpus/event-detection/cascades-healthy-negative.jsonl \
+      --labels ../corpus/event-detection/label-oom-detection.json ../corpus/event-detection/label-leak-to-oom-cascade.json ../corpus/event-detection/label-throttle-to-probe-cascade.json ../corpus/event-detection/label-role-unresolved-no-upgrade.json ../corpus/event-detection/label-unrelated-reason.json ../corpus/event-detection/label-healthy-negative.json
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

@@ -1,0 +1,18 @@
+{
+  "bundle": "eventdetect-oom-detection",
+  "scenario": "oom-detection",
+  "digestBefore": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "digestAfter": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_OOM_KILL_CGROUP",
+      "entityCei": "i|evt-cluster|online-boutique|Pod|currency-abc|u-currency",
+      "quality": "degraded",
+      "requiredMet": 1,
+      "requiredTotal": 8
+    }
+  ],
+  "expectCascades": null,
+  "expectNoUpgrade": 0,
+  "note": "OOMKilled on a resolved workload -\u003e ONE degraded OOM_KILL_CGROUP event finding (the blind-spot-closing detection). No trigger -\u003e no cascade."
+}

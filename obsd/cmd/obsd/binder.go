@@ -53,7 +53,12 @@ type binder struct {
 
 	matcher *detect.Matcher        // the phenomenon matcher (doc 07 M1–M3), built once
 	tracker *detect.CascadeTracker // windowed cascade memory (doc 07 M5); reset = process restart
-	unexp   *unexplained.Tracker   // the unexplained channel (doc 08); reset = process restart
+	// eventTracker is a SEPARATE windowed cascade memory for the OFF-DIGEST
+	// event-augmented surface (graph-robustness #2 G1): cascades over the union of
+	// fingerprint findings + event-driven findings. Kept apart from `tracker` so the
+	// digest-bearing cascade recognition (fp findings only) is never perturbed.
+	eventTracker *detect.CascadeTracker
+	unexp        *unexplained.Tracker // the unexplained channel (doc 08); reset = process restart
 }
 
 // routeUnexplained runs the unexplained channel (doc 08): loud-but-unmatched
@@ -84,6 +89,24 @@ func (b *binder) cascades(now time.Time, findings []detect.Finding, topo detect.
 	}
 	cs := b.matcher.Cascades(now, findings, b.tracker, topo, w)
 	b.tracker.Observe(now, findings)
+	return cs
+}
+
+// augmentedCascades recognizes cascades over the UNION of fingerprint findings and
+// event-driven findings (graph-robustness #2 G1) — the OFF-DIGEST surface that lights
+// up the flagship cascades live (THROTTLING_CASCADE→PROBE_FAILURE_RESTART,
+// MEMORY_LEAK→OOM_KILL_CGROUP). Uses a SEPARATE tracker from cascades() so the
+// digest-bearing recognition is untouched; called only when the events lane runs, so
+// with --events-enabled off the obsd output is byte-identical (this never executes).
+func (b *binder) augmentedCascades(now time.Time, union []detect.Finding, topo detect.Topology, w identity.TimeWindow) []detect.Cascade {
+	if b == nil || b.matcher == nil {
+		return nil
+	}
+	if b.eventTracker == nil {
+		b.eventTracker = detect.NewCascadeTracker(b.fpParams.EffectiveCascadeWindow())
+	}
+	cs := b.matcher.Cascades(now, union, b.eventTracker, topo, w)
+	b.eventTracker.Observe(now, union)
 	return cs
 }
 

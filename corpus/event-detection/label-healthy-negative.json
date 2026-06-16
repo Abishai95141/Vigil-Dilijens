@@ -1,0 +1,10 @@
+{
+  "bundle": "eventdetect-healthy-negative",
+  "scenario": "healthy-negative",
+  "digestBefore": "a312859869ce54dc58ffb13b7e39627abeb55762034adb8d8c974ead3d23f455",
+  "digestAfter": "a312859869ce54dc58ffb13b7e39627abeb55762034adb8d8c974ead3d23f455",
+  "expectFindings": null,
+  "expectCascades": null,
+  "expectNoUpgrade": 0,
+  "note": "a gauge trigger exists but NO events -\u003e zero event findings, zero cascades (nothing manufactured)."
+}

@@ -1,0 +1,10 @@
+{
+  "bundle": "eventdetect-unrelated-reason",
+  "scenario": "unrelated-reason",
+  "digestBefore": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "digestAfter": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "expectFindings": null,
+  "expectCascades": null,
+  "expectNoUpgrade": 1,
+  "note": "an event reason with no authored detection -\u003e ZERO findings (never the firehose)."
+}
