@@ -254,6 +254,21 @@ func LoadWithOverlayPaths(kgPath string, paths []string) (*Graph, error) {
 	return loadWithOverlayPaths(kgPath, paths)
 }
 
+// LoadWithExtraOverlays loads the base graph + the production overlay glob + EXTRA
+// overlay files appended after it (doc 15 cap. A): a flagged lane (e.g. app signals)
+// merges its experimental overlay on top of the released overlays WITHOUT being in the
+// production glob — so the released hash is unchanged when the flag is off, and the
+// extra phenomena exist in the matcher's graph only when the lane runs. The extra files
+// merge AFTER the sorted glob (a different, lane-specific content hash, stated).
+func LoadWithExtraOverlays(kgPath, overlayDir string, extra ...string) (*Graph, error) {
+	paths, err := overlayPaths(overlayDir)
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, extra...)
+	return loadWithOverlayPaths(kgPath, paths)
+}
+
 func loadWithOverlayPaths(kgPath string, paths []string) (*Graph, error) {
 	raw, err := os.ReadFile(kgPath)
 	if err != nil {

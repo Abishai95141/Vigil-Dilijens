@@ -342,6 +342,21 @@ isolated cluster until then.
   throttled crash-looper; bare Pods (no role) correctly fire nothing. `corpus/labels/event-detection-gate.md`.
 - [ ] G2 KSM lane · G3 kubelet-main lane · G4 author-only — see `memory/vigil-graph-robustness-plan.md`.
 
+## Capability A COMPLETE (A1–A5, doc 15) — Vigil now detects an APPLICATION-LEVEL phenomenon (2026-06-16, v3)
+
+- [x] **Cap A** application-signal ingestion → SLO binding → detection → gate → LIVE 🔒. The
+  first app-level phenomenon Vigil detects (**L4: aggregation queue saturation**), lighting up
+  a link of the smart-traffic chain that was structurally blind. A1 (`identity.FamilyApp` +
+  pods/proxy fetch) · A2 (`bindPod` SLO from `vigil.io/slo.*` annotations, borrowed normativity,
+  no fabricated bar) · A3 (overlay-loader `signals:`+`members:` blocks + `app-conditions-v1.yaml`
+  → `PHEN_APP_QUEUE_SATURATION` fires through the normal matcher) · A4 (`just app-slo-gate` PASSED:
+  detection-fidelity, no-fabrication==0, borrowed-bar, charter==0 + frozen drift guard + 6 pytest)
+  · A5 (obsd `--app-metrics-enabled` + prometheus.io/scrape discovery; LIVE on kind: queue 1500 >
+  SLO 1000 → finding fires config-sourced; remove the SLO → unbounded, finding goes stale, NO
+  fabricated bar). Released graph hash UNCHANGED (experimental overlay behind the flag); full
+  `go test -race ./obsd/...` green; non-gating. `corpus/labels/app-slo-gate.md`.
+  Next app phenomena (same machinery): L1 request-rate-vs-capacity, L6 freshness (now−last_update).
+
 ## Capability architecture (doc 15) — vertical depth for chain-reaction value (2026-06-16, v3)
 
 The reframe: recent work was HORIZONTAL (more phenomena, same reach). Delivering

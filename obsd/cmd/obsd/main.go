@@ -28,6 +28,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
@@ -93,6 +96,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		incidentMem  = fs.Bool("incident-memory", false, "v3 T-B: fold findings into the durable cross-run incident memory (recurrence counting). OFF by default; off = byte-identical. Needs --db (a persistent store) to survive restarts.")
 		eventsOn     = fs.Bool("events-enabled", false, "v3 T-C: ingest discrete k8s Events (OOMKilled, CrashLoopBackOff) as MEASURED findings joined by CEI to gauge phenomena. OFF by default; off = byte-identical (events ride off the digest).")
 		eventsConds  = fs.String("events-conditions", "ontology/graph/overlays/experimental/event-conditions-v1.yaml", "v3 T-C: the authored event-corroboration conditions overlay (experimental until the events-gate promotes it)")
+		appMetrics   = fs.Bool("app-metrics-enabled", false, "doc 15 cap. A: scrape application /metrics endpoints (prometheus.io/scrape pods) + bind to declared SLOs (vigil.io/slo.* annotations). OFF by default; off = byte-identical (the app overlay + app scrape are not loaded).")
+		appConds     = fs.String("app-conditions", "ontology/graph/overlays/experimental/app-conditions-v1.yaml", "doc 15 cap. A: the authored application-signal overlay (experimental until the app-slo-gate promotes it)")
 		eventsInt    = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
 		refereeOn    = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
 	)
@@ -134,7 +139,17 @@ func run(args []string, stdout, stderr *os.File) error {
 	// ontology is present, defective, or absent — absence is stated, never fatal.
 	var ontologyGraph *graph.Graph
 	if *ontology != "" {
-		g, err := graph.LoadWithOverlays(*ontology, *overlays)
+		// doc 15 cap. A: with --app-metrics-enabled, merge the experimental app-signal
+		// overlay ON TOP of the released overlays so the app phenomena exist in the
+		// matcher's graph. Off (default), the released glob loads unchanged — the released
+		// hash, and the binding/detection digest, are identical to before.
+		var g *graph.Graph
+		var err error
+		if *appMetrics {
+			g, err = graph.LoadWithExtraOverlays(*ontology, *overlays, *appConds)
+		} else {
+			g, err = graph.LoadWithOverlays(*ontology, *overlays)
+		}
 		if err != nil {
 			logger.Warn("binding disabled: ontology release not loadable (identity is unaffected)", "path", *ontology, "err", err)
 		} else {
@@ -156,7 +171,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -223,7 +238,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -413,7 +428,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// Fetching (network) happens OUTSIDE the lock; only parse+ingest holds it.
 	var gate sync.RWMutex
 
-	go scrapeLoop(ctx, logger, &gate, ingestor, kube.NewProxyFetcher(client), watcher, p.Scrape.Interval.Duration())
+	proxyFetcher := kube.NewProxyFetcher(client)
+	// doc 15 cap. A: with --app-metrics-enabled, the scrape cycle also fetches app
+	// /metrics from pods that opt in via prometheus.io/scrape, in the SAME gated cycle.
+	var appTargets func(context.Context) []observe.PodTarget
+	if appMetricsEnabled {
+		appTargets = func(c context.Context) []observe.PodTarget { return discoverAppTargets(c, client, logger) }
+		logger.Info("app-metrics lane enabled (doc 15 cap. A)",
+			"discovery", "prometheus.io/scrape pods", "slo_source", "vigil.io/slo.* annotations")
+	}
+	go scrapeLoop(ctx, logger, &gate, ingestor, proxyFetcher, watcher, p.Scrape.Interval.Duration(),
+		appMetricsEnabled, proxyFetcher, appTargets)
 
 	// v2 flow lane (doc 15): observe conntrack from the per-node agent and assert
 	// observed-flow edges into the same EdgeStore the tick snapshots. Off by default;
@@ -1130,13 +1155,43 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 	}
 }
 
+// discoverAppTargets lists pods that opt into app-metrics scraping via the standard
+// prometheus.io/scrape annotation (doc 15 cap. A) and returns their scrape targets:
+// port from prometheus.io/port (default 8080), path from prometheus.io/path (default
+// metrics). Discovery is config-declared on the customer's OWN pods, never inferred; a
+// failed list degrades the lane this cycle (logged), never fatal.
+func discoverAppTargets(ctx context.Context, cs kubernetes.Interface, logger *slog.Logger) []observe.PodTarget {
+	pods, err := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Warn("app-metrics: pod discovery failed this cycle (lane degraded, never fatal)", "err", err)
+		return nil
+	}
+	var out []observe.PodTarget
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Annotations["prometheus.io/scrape"] != "true" || p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		port := p.Annotations["prometheus.io/port"]
+		if port == "" {
+			port = "8080"
+		}
+		path := strings.TrimPrefix(p.Annotations["prometheus.io/path"], "/")
+		if path == "" {
+			path = "metrics"
+		}
+		out = append(out, observe.PodTarget{Namespace: p.Namespace, Name: p.Name, Port: port, Path: path})
+	}
+	return out
+}
+
 // scrapeLoop runs the observation ingest cycle (doc 05 M1): scrape every node's
 // cAdvisor endpoint each scrape interval, log the honest summary (resolved /
 // dropped / quarantined / node errors). The first cycle fires as soon as the
 // informers sync so identity joins are warm. Fetching happens outside the store
 // gate (network); ingest holds the write side so evaluation ticks never observe
 // a half-ingested cycle (the replay guarantee, doc 05 §3.5).
-func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration) {
+func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration, appEnabled bool, podFetcher observe.PodFetcher, appTargets func(context.Context) []observe.PodTarget) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -1154,10 +1209,21 @@ func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in
 		if len(neNodes) > 0 {
 			payloads = append(payloads, observe.FetchNodeExporter(ctx, f, neNodes)...)
 		}
+		// app-metrics lane (doc 15 cap. A): app /metrics from opt-in pods, in the SAME
+		// gated cycle (so eval ticks see whole cycles — the replay guarantee). Only when
+		// the flag is on; off ⇒ this block never runs and obsd is byte-identical.
+		appCount := 0
+		if appEnabled && appTargets != nil {
+			tg := appTargets(ctx)
+			appCount = len(tg)
+			if len(tg) > 0 {
+				payloads = append(payloads, observe.FetchPodMetrics(ctx, podFetcher, tg)...)
+			}
+		}
 		gate.Lock()
 		sum := in.IngestPayloads(payloads)
 		gate.Unlock()
-		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d", len(names), len(neNodes)),
+		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d app:%d", len(names), len(neNodes), appCount),
 			"summary", sum.String(), "streams", in.Hot().Streams())
 	}
 	if waitForSync(ctx, watcher, every) {

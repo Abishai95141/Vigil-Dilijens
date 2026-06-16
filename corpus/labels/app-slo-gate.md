@@ -40,6 +40,28 @@ SLO is declared AND the queue crosses it).
 - Scorer: `harness/src/harness/app_slo_gate.py`; regression tests `harness/tests/test_app_slo_gate.py` (6 — good corpus passes + one mutation per floor).
 - Recipe: `just app-slo-gate` (Go -race + Python).
 
+## LIVE-VERIFIED on kind-vigil (2026-06-16) — A5
+
+`obsd --app-metrics-enabled` + a synthetic `aggregation` Deployment in ns `traffic`
+exposing `/metrics` (`app_queue_depth 1500`) with `prometheus.io/scrape: "true"` and
+`vigil.io/slo.queue.max_depth: "1000"`:
+
+- **Scraped**: ingest cycle reports `app:1` — the app `/metrics` endpoint discovered via
+  the prometheus.io/scrape annotation and fetched through pods/proxy, attributed to the
+  aggregation pod's CEI.
+- **Detected (positive)**: `PHEN_APP_QUEUE_SATURATION` fires on `aggregation-…` (full, 1/1)
+  in `/api/findings` AND `/api/insights`, member `app_queue_depth` `state=well-above`,
+  **`barFlagged=false`** (config-sourced — the customer's declared 1000, not a default),
+  the authored note attached. The FIRST application-level phenomenon Vigil detects — the
+  L4 link of the smart-traffic chain, previously structurally blind.
+- **Charter floor (negative), live**: removing the `vigil.io/slo.queue.max_depth`
+  annotation → the pod re-binds **`unbounded: no early-warning eligibility`** (coverage:
+  `THR_APP_QUEUE_DEPTH configBound=0 unbounded=32`) → the finding goes **stale** (active /
+  non-stale count = **0**), *even though the queue is still 1500*. No declared SLO ⇒ no
+  active finding, no fabricated bar — borrowed normativity proven end-to-end on a real cluster.
+- **Non-gating**: `--app-metrics-enabled` off ⇒ obsd byte-identical (full `go test -race
+  ./obsd/...` green; the released graph hash + the binding/detection digest unchanged).
+
 ## Honest scope
 
 The first phenomenon is queue saturation (single-series gauge vs a declared SLO). The
