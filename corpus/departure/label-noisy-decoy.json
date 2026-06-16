@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-noisy-decoy",
+  "scenario": "noisy-decoy",
+  "kind": "decoy",
+  "expectDeparture": false,
+  "expectSide": "",
+  "note": "THE CARDINAL FP DEFENSE: a noisy-but-stationary series ⇒ the clock returns a WIDE band [0,40]; a noisy sample 35 stays INSIDE → NO departure."
+}

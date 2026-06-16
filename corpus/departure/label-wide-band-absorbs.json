@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-wide-band-absorbs",
+  "scenario": "wide-band-absorbs",
+  "kind": "decoy",
+  "expectDeparture": false,
+  "expectSide": "",
+  "note": "the clock is UNSURE (very wide band [5,95]); even a real bump to 80 is absorbed → NO departure. The detector never out-claims the forecast's own confidence."
+}

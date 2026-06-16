@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-step-above",
+  "scenario": "step-above",
+  "kind": "step",
+  "expectDeparture": true,
+  "expectSide": "above",
+  "note": "a stationary series (band [10,20]) STEPS to 50 — well past its forecast band → a PROJECTED departure (recall)."
+}

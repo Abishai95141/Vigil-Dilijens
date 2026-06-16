@@ -412,6 +412,25 @@ isolated cluster until then.
   `corpus/labels/projected-transitive-gate.md`. Next: **C** (anomaly: capacity-crossing shipped with A;
   band-departure = a new off-digest PROJECTED producer behind `--departure-enabled`, over corpus #75).
 
+- [x] **Capability C — the anomaly primitive (2026-06-16, v3).** Two halves. (1) Capacity-crossing
+  ALREADY SHIPPED with A (a config-relative bar from declared limits/SLOs through the unchanged
+  `t.State.Crossed()` path — MEASURED-vs-MEASURED, byte-identical). (2) BAND-DEPARTURE, SALVAGED from
+  the KILLED in-digest shortcut (doc 15 §3): a MEASURED sample that left the PROJECTED band its OWN
+  recent forecast drew — survives ONLY off-digest, classed PROJECTED. New `obsd/internal/departure`
+  package (`Detect` — a pure fn: a realized sample past its band edge, beyond a STRUCTURAL margin =
+  a fraction of band WIDTH, NOT a learned threshold; the band IS the bar; a malformed band never
+  fabricates; a ZERO-WIDTH/collapsed band is skipped too — a band must never collapse to a line,
+  doc 01, so the structural margin can never become a zero-ULP hair-trigger). Gate `just departure-gate`
+  PASSED — 8 scenarios (the near-miss/decoy corpus, **also closes task #75**): the CARDINAL FP-ON-DECOYS
+  floor (a noisy-but-stationary series whose clock band is WIDE never false-fires) + recall on the true
+  step + side-fidelity + projected-class (never a MEASURED anomaly score) + charter; pure-fn frozen
+  determinism guard (`-count=1`, never cached); 7 unit + 7 python tests. Surface
+  `/api/departures` (`api/departure.go`), wired behind `--departure-enabled`, **gate-pending**
+  (`phaseCDepartureGatePassed=false`); LIVE: serves the honest gate-pending state, off-digest, never
+  feeds governance/the candidate funnel. RELEASED graph hash UNCHANGED; full `-race` green (21 pkgs);
+  non-gating. Live stateful forecast-band hook + step capture = task #129. `corpus/labels/departure-gate.md`.
+  **All four doc-15 capabilities (A·B·D·C) are now COMPLETE — wide-but-shallow → deep chain-reaction.**
+
 ## Capability architecture (doc 15) — vertical depth for chain-reaction value (2026-06-16, v3)
 
 The reframe: recent work was HORIZONTAL (more phenomena, same reach). Delivering

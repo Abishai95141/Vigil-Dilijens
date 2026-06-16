@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/departure"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/eventdetect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/events"
@@ -100,6 +101,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		appConds     = fs.String("app-conditions", "ontology/graph/overlays/experimental/app-conditions-v1.yaml", "doc 15 cap. A: the authored application-signal overlay (experimental until the app-slo-gate promotes it)")
 		eventsInt    = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
 		refereeOn    = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
+		departureOn  = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -171,7 +173,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -179,6 +181,14 @@ func run(args []string, stdout, stderr *os.File) error {
 // §3.5) — the class still REFUSES banned drafts while withheld. Flip only with the
 // gate's passing evidence cited, mirroring phaseECrossServiceGatePassed.
 const mcpAdvisoryGatePassed = false
+
+// phaseCDepartureGatePassed gates whether the band-departure anomaly lane (doc 15 cap. C)
+// is surfaced to the operator. The DETERMINISTIC producer gate (`just departure-gate`)
+// PASSES — the producer is certified (a measured sample leaving its projected band fires;
+// a noisy-but-stationary series never false-fires). FALSE until a real step is captured live
+// (doc 11 §3.5): the lane still COMPUTES off the digest, withheld from the surface. Mirrors
+// the Phase-E / cap-D gate-pending posture.
+const phaseCDepartureGatePassed = false
 
 // sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
 // the Result and the coverage report.
@@ -238,7 +248,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -405,6 +415,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var crossSvcView atomic.Pointer[flow.Chain]
 	var transitiveChainView atomic.Pointer[[]flow.Chain]     // doc 15 cap. B: the transitive root-cause chains
 	var projectedTransitiveView atomic.Pointer[[]flow.Chain] // doc 15 cap. D: the multi-hop projected cascades
+	var departureView atomic.Pointer[[]departure.Departure]  // doc 15 cap. C: band-departure anomalies (gate-pending; producer hook is a follow-up)
 	// v2 ANTICIPATORY cross-service cascade (doc 15 phase E): seeded from the gated
 	// early-warning lane, propagating a PROJECTED downstream-impact hypothesis along
 	// the MEASURED flow edges. Computed-but-DARK until its own backtest gate passes
@@ -583,6 +594,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					projected = *p
 				}
 				return vapi.BuildRootCauseChain(chains, projected, flowEnabled, phaseDProjectedTransitiveGatePassed, time.Now().UTC())
+			},
+			// doc 15 cap. C: the band-departure anomaly surface — gate-pending (the producer
+			// + anti-FP gate pass; the live stateful forecast-band hook + step capture flip it).
+			Departures: func() *vapi.DepartureView {
+				var deps []departure.Departure
+				if p := departureView.Load(); p != nil {
+					deps = *p
+				}
+				return vapi.BuildDepartures(deps, departureEnabled, phaseCDepartureGatePassed, time.Now().UTC())
 			},
 			// v3 T-C discrete-event lane: the joined EventsView, or the honest
 			// unavailable state when --events-enabled is off.

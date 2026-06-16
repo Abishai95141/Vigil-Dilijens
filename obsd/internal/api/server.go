@@ -56,6 +56,9 @@ type Providers struct {
 	// RootCauseChain returns the transitive root-cause chain surface (doc 15 cap. B):
 	// the one-hop cascade made transitive. nil ⇒ the honest OFF state.
 	RootCauseChain func() *RootCauseChainView
+	// Departures returns the band-departure anomaly surface (doc 15 cap. C): a measured
+	// sample leaving its own projected forecast band. nil ⇒ the honest OFF state.
+	Departures func() *DepartureView
 	// Events returns the v3 T-C discrete-event lane surface (OOMKilled,
 	// CrashLoopBackOff joined by CEI); nil ⇒ the honest "not enabled" state.
 	Events func() *EventsView
@@ -282,6 +285,21 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		if v == nil {
 			v = BuildRootCauseChain(nil, nil, false, false, timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/departures", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *DepartureView
+		if p.Departures != nil {
+			v = p.Departures()
+		}
+		if v == nil {
+			v = BuildDepartures(nil, false, false, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

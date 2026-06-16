@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-step-below",
+  "scenario": "step-below",
+  "kind": "step",
+  "expectDeparture": true,
+  "expectSide": "below",
+  "note": "a series (band [40,60]) DROPS to 5 — far below its forecast band → a 'below' departure."
+}

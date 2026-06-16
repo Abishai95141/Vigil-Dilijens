@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-zero-width-band",
+  "scenario": "zero-width-band",
+  "kind": "decoy",
+  "expectDeparture": false,
+  "expectSide": "",
+  "note": "a COLLAPSED forecast band [5,5] (upper==lower) is degenerate — a band must NEVER collapse to a line (doc 01); even a far-away sample 50 produces NO departure, because the structural margin would be a zero-ULP hair-trigger. Degrade-never-fabricate at the model-adjacent edge."
+}

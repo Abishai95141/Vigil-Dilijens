@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-edge-inside",
+  "scenario": "edge-inside",
+  "kind": "healthy",
+  "expectDeparture": false,
+  "expectSide": "",
+  "note": "a sample exactly ON the upper edge (20 of [10,20]) is INSIDE (strict) → no departure."
+}

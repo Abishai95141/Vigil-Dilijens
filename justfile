@@ -295,6 +295,18 @@ projected-transitive-gate:
       c=""; l=""; for s in $scns; do c="$c ../corpus/projected-transitive/chains-$s.jsonl"; l="$l ../corpus/projected-transitive/label-$s.json"; done; \
       uv run python -m harness.projected_transitive_gate --chains $c --labels $l
 
+# departure (band-anomaly) gate (doc 15 cap. C / doc 11 §3.5 / task #75) over corpus/departure/ —
+# certifies the anomaly half: a MEASURED sample leaving its own PROJECTED forecast band fires
+# (classed PROJECTED, off-digest), and a noisy-but-stationary series (whose clock band is WIDE)
+# NEVER false-fires — the band is the bar (structural FP defense). The CARDINAL floor: zero false
+# departures on the near-miss/decoy scenarios. Each scenario folds the REAL departure.Detect (a
+# pure fn) vs a label oracle. Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+departure-gate:
+    go test -race -count=1 ./obsd/internal/departure/
+    cd harness && scns="step-above step-below noisy-decoy wide-band-absorbs near-miss-margin healthy-inside edge-inside zero-width-band"; \
+      d=""; l=""; for s in $scns; do d="$d ../corpus/departure/departures-$s.jsonl"; l="$l ../corpus/departure/label-$s.json"; done; \
+      uv run python -m harness.departure_gate --departures $d --labels $l
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-near-miss-margin",
+  "scenario": "near-miss-margin",
+  "kind": "decoy",
+  "expectDeparture": false,
+  "expectSide": "",
+  "note": "a sample 20.8 a hair past a tight band [10,20] is ABSORBED by the structural margin (0.1×10=1 ⇒ edge 21) → NO departure (no flag on jitter)."
+}

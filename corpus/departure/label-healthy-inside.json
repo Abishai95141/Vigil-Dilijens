@@ -1,0 +1,8 @@
+{
+  "bundle": "departure-healthy-inside",
+  "scenario": "healthy-inside",
+  "kind": "healthy",
+  "expectDeparture": false,
+  "expectSide": "",
+  "note": "a calm series (band [18,22]) realizes 20 — squarely inside → no departure, never invented."
+}
