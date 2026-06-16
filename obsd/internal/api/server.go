@@ -281,7 +281,7 @@ func Register(mux *http.ServeMux, p Providers) {
 			v = p.RootCauseChain()
 		}
 		if v == nil {
-			v = BuildRootCauseChain(nil, false, timeNowUTC())
+			v = BuildRootCauseChain(nil, nil, false, false, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})
