@@ -1,0 +1,12 @@
+{
+  "bundle": "appslo-load-over",
+  "scenario": "load-over",
+  "family": "load",
+  "phenomenon": "PHEN_APP_LOAD_SURGE",
+  "configPath": "slo.requests.max_rate",
+  "metric": "app_requests_total",
+  "sloDeclared": true,
+  "sloBar": 100,
+  "expectFire": true,
+  "note": "request rate 150/s \u003e declared capacity SLO 100/s -\u003e PHEN_APP_LOAD_SURGE fires (counter-rate, config bar)."
+}

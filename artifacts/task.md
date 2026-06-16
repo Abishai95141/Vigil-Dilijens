@@ -355,7 +355,24 @@ isolated cluster until then.
   SLO 1000 → finding fires config-sourced; remove the SLO → unbounded, finding goes stale, NO
   fabricated bar). Released graph hash UNCHANGED (experimental overlay behind the flag); full
   `go test -race ./obsd/...` green; non-gating. `corpus/labels/app-slo-gate.md`.
-  Next app phenomena (same machinery): L1 request-rate-vs-capacity, L6 freshness (now−last_update).
+
+- [x] **Cap A chain completion — L6 data-staleness + L1 request-rate (2026-06-16, v3).** The
+  app lane now spans THREE links of the smart-traffic chain, each a MEASURED-vs-declared-SLO
+  phenomenon: **L4** `PHEN_APP_QUEUE_SATURATION` (queue gauge) · **L6** `PHEN_APP_DATA_STALENESS`
+  (the differentiator: `app_last_update_seconds` re-expressed as DATA AGE = `evalNow − value` via
+  a new authored **age-from-timestamp** transform — injected clock, replay-deterministic, MEASURED
+  — vs `slo.freshness.max_age`) · **L1** `PHEN_APP_LOAD_SURGE` (the chain trigger: `app_requests_total`
+  counter→rate vs `slo.requests.max_rate`, reusing the existing counter-rate path). New: the
+  transform vocabulary in `graph/overlay.go` + the materializer derivation in `observe/fingerprint.go`;
+  three phenomena authored in `app-conditions-v1.yaml`. Gate generalized to 10 scenarios across the
+  3 families + a new **NO-CROSS-TALK** floor (a stale timestamp ≠ a deep queue ≠ a load surge);
+  `just app-slo-gate` PASSED. The 4 queue scenarios reproduce BYTE-IDENTICAL (only the lane graph
+  hash differs) — L6/L1 did not perturb L4. LIVE on kind: all three fire full-quality config-sourced
+  (`barFlagged=false`); charter floor holds at scale (31 pods unbounded → 0 findings) AND dynamically
+  (remove the freshness SLO → staleness de-activates while data is still 120s stale; queue+load persist).
+  RELEASED graph hash UNCHANGED; full `-race` green (20 pkgs); non-gating. The chain is now INGESTED
+  end-to-end (root L1 + terminal L6 + L4 visible) — ready for **Capability B** (stitch the transitive
+  root-cause chain). `corpus/labels/app-slo-gate.md`.
 
 ## Capability architecture (doc 15) — vertical depth for chain-reaction value (2026-06-16, v3)
 

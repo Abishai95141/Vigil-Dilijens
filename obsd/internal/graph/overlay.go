@@ -66,6 +66,24 @@ func knownConfigPath(p string) bool {
 	return knownConfigPaths[p] || strings.HasPrefix(p, SLOConfigPathPrefix)
 }
 
+// Transform vocabulary (doc 15 cap. A — L6 freshness): an optional, AUTHORED
+// re-expression of a gauge's RAW value into the quantity its bar is actually about.
+// The only transform is age-from-timestamp: a gauge that reports a Unix-epoch
+// "last update" time is re-expressed as DATA AGE = evalNow − value (seconds), so a
+// declared freshness SLO (slo.freshness.max_age) can ladder against staleness. The
+// eval clock is INJECTED (never time.Now), so the derived age stays replay-
+// deterministic — same readings + same evalNow ⇒ same age. The result is MEASURED:
+// a deterministic arithmetic consequence of two facts (the eval clock, a measured
+// gauge), exactly like a counter rate. Empty = the gauge's value is used directly
+// (the default, e.g. queue depth). It is the canonical Prometheus staleness pattern
+// (a *_last_success_timestamp_seconds gauge) made SLO-relative — and robust by
+// construction: if the app hangs, its last-update freezes while evalNow advances, so
+// the computed age GROWS and the staleness is caught (a self-reported age gauge would
+// freeze and hide it).
+const TransformAgeFromTimestamp = "age-from-timestamp"
+
+var knownTransforms = map[string]bool{"": true, TransformAgeFromTimestamp: true}
+
 var knownSpans = map[string]bool{SpanEntityLocal: true, SpanFirstOrder: true, SpanSecondOrder: true}
 
 // knownTraversalEdgeTypes is the instance-topology edge vocabulary spans may walk
@@ -97,7 +115,13 @@ type ThresholdRule struct {
 	Direction     string   `yaml:"direction"`               // above | below
 	EntityScope   string   `yaml:"entity_scope"`            // instantiation fan-out target (doc 04 axis 2)
 	Window        string   `yaml:"window"`
-	Rationale     string   `yaml:"rationale"`
+	// Transform optionally re-expresses the gauge's raw value before laddering
+	// (doc 15 cap. A — L6): "" = use the value directly; "age-from-timestamp" =
+	// the gauge is a Unix-epoch last-update time and the laddered quantity is the
+	// DATA AGE evalNow − value (seconds), against a slo.freshness.max_age bar. Only
+	// meaningful on a gauge level rule (config-relative or absolute), never a rate.
+	Transform string `yaml:"transform"`
+	Rationale string `yaml:"rationale"`
 }
 
 // WindowDuration parses the rule's evaluation window.
@@ -668,6 +692,27 @@ func (g *Graph) validateRule(r *ThresholdRule) error {
 	}
 	if r.Eligibility != "" && !knownConfigPath(r.Eligibility) {
 		return fmt.Errorf("unknown eligibility_config_path %q", r.Eligibility)
+	}
+	if !knownTransforms[r.Transform] {
+		return fmt.Errorf("unknown transform %q (vocabulary: <empty>|age-from-timestamp)", r.Transform)
+	}
+	if r.Transform != "" {
+		// A transform re-expresses a gauge LEVEL; it is incoherent on a rate-of-change
+		// rule (a rate is already a difference) or a participation-only co-occurrence.
+		if r.Kind == RuleRateOfChange || r.Kind == RuleCoOccurrence {
+			return fmt.Errorf("transform %q is only meaningful on a gauge level rule, not a %s rule", r.Transform, r.Kind)
+		}
+		// A transform and a divisor are mutually exclusive: the materializer evaluates the
+		// divisor (ratio) branch BEFORE the transform branch, so co-presence would silently
+		// take the ratio and drop the transform. Reject it at load, never silently mis-derive.
+		if r.DivisorMetric != "" {
+			return fmt.Errorf("transform %q cannot combine with divisor_metric %q (a transform re-expresses a single series, not a ratio)", r.Transform, r.DivisorMetric)
+		}
+		// age-from-timestamp needs a gauge series (a Unix-epoch last-update time);
+		// a counter or other shape cannot be aged against the eval clock.
+		if s := g.Signals[r.Signal]; s != nil && s.DataType != "" && s.DataType != "gauge" {
+			return fmt.Errorf("transform %q requires a gauge signal, but %s is %q", r.Transform, r.Signal, s.DataType)
+		}
 	}
 	switch r.Kind {
 	case RuleConfigRelative:

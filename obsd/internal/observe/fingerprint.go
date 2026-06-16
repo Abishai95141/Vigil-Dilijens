@@ -241,9 +241,14 @@ func evalThresholdVar(b *binding.Binding, rule *graph.ThresholdRule, streamID, u
 			anchor = denAt
 		}
 		vt.Stale = stale(anchor, evalNow, p.Watermark)
-	case expoType == "counter":
+	case expoType == "counter" && (rule == nil || rule.Transform == ""):
 		// A cumulative counter compared to a level bar (e.g. cpu_seconds vs a
 		// millicore limit): convert to a rate. cores = Δsec/Δt; ×1000 → millicores.
+		// An age-from-timestamp rule is EXCLUDED here even if the app mis-exposes its
+		// last-update gauge as a counter: the AUTHORED intent (age the value) wins over
+		// the observed exposition type, so a type mismatch never silently rate-converts an
+		// epoch instead of aging it. The transform branch below handles it (validateRule
+		// already requires the authored signal to be a gauge).
 		rr := EvalRate(reader.LastN(streamID, ringWindowN(p)), evalNow, p.RateWindow, p.ScrapeInterval)
 		if rr.Elapsed <= 0 {
 			return VariableThreshold{}, false
@@ -255,6 +260,26 @@ func evalThresholdVar(b *binding.Binding, rule *graph.ThresholdRule, streamID, u
 		vt.Value = v
 		latest, _ := reader.Latest(streamID)
 		vt.Deriv = DerivationRef{StreamID: streamID, SampleAt: latest.At, Samples: rr.Samples, How: "counter-rate"}
+		vt.Stale = stale(latest.At, evalNow, p.Watermark)
+	case rule != nil && rule.Transform == graph.TransformAgeFromTimestamp:
+		// L6 freshness (doc 15 cap. A): the gauge is a Unix-epoch "last update" time;
+		// the quantity the freshness SLO is about is DATA AGE = evalNow − value
+		// (seconds). The eval clock is INJECTED (never time.Now), so the derived age is
+		// replay-deterministic — same readings + same evalNow ⇒ same age — and MEASURED
+		// (a deterministic arithmetic consequence of the eval clock and a measured gauge,
+		// exactly like a counter rate). A future timestamp yields a NEGATIVE age (very
+		// fresh): it lands Below the bar, never firing, never fabricated. A zero/unset
+		// timestamp yields a huge age (the app has never updated → genuinely stale → it
+		// SHOULD fire). No slope: age slope is just clock drift, meaningless here.
+		latest, ok := reader.Latest(streamID)
+		if !ok {
+			return VariableThreshold{}, false
+		}
+		vt.Value = float64(evalNow.Unix()) - latest.Value
+		vt.Deriv = DerivationRef{StreamID: streamID, SampleAt: latest.At, How: "gauge-age-from-timestamp"}
+		// Staleness here is METRIC staleness (we haven't scraped the timestamp gauge
+		// recently) — distinct from DATA age (the value). If we can't trust the latest
+		// scrape, the derived age is not a live measurement.
 		vt.Stale = stale(latest.At, evalNow, p.Watermark)
 	default:
 		// Gauge: the latest value, directly, plus its window slope (signed) for

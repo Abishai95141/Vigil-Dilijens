@@ -1,9 +1,12 @@
 {
   "bundle": "appslo-undeclared-high-queue",
   "scenario": "undeclared-high-queue",
+  "family": "queue",
+  "phenomenon": "PHEN_APP_QUEUE_SATURATION",
+  "configPath": "slo.queue.max_depth",
+  "metric": "app_queue_depth",
   "sloDeclared": false,
   "sloBar": 0,
-  "queueValue": 1500,
   "expectFire": false,
   "note": "a HIGH queue but NO declared SLO -\u003e unbounded, NO bar, NO finding (the charter floor: fabricating a bar fails)."
 }

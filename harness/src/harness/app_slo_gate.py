@@ -1,22 +1,31 @@
 """App-SLO gate (doc 15 cap. A / doc 04 §3.4 / doc 11 §3.5).
 
-Certifies the application-signal keystone over a FROZEN corpus, offline: an app gauge
-(queue depth) crossing its CUSTOMER-DECLARED SLO produces a MEASURED finding, and an
-UNDECLARED SLO never fabricates a bar. Each scenario was folded through the REAL path —
-binding.Compile (SLO resolution from declared config) -> observe.Materialize (the gauge
-laddered vs the declared bar) -> detect.Matcher — with a LABEL ORACLE fixed by
-construction (fire iff declared AND crossed). FULLY DETERMINISTIC; the Go drift guard
-proves the frozen corpus reproduces.
+Certifies the application-signal lane over a FROZEN corpus, offline, across the three
+chain phenomena Capability A ingests — each an app metric crossing its CUSTOMER-DECLARED
+SLO producing a MEASURED finding, with an UNDECLARED SLO never fabricating a bar:
+
+  L4 queue     PHEN_APP_QUEUE_SATURATION  — queue depth gauge vs slo.queue.max_depth
+  L6 freshness PHEN_APP_DATA_STALENESS — data AGE (evalNow-value) vs slo.freshness.max_age
+  L1 load      PHEN_APP_LOAD_SURGE        — request RATE (Δcounter/Δt) vs slo.requests.max_rate
+
+Each scenario was folded through the REAL path — binding.Compile (SLO resolution from
+declared config) -> observe.Materialize (the metric laddered vs the declared bar, with the
+counter→rate and age-from-timestamp derivations) -> detect.Matcher — with a LABEL ORACLE
+fixed by construction (fire iff declared AND crossed). FULLY DETERMINISTIC; the Go drift
+guard proves the frozen corpus reproduces.
 
 Floors:
-  1. DETECTION-FIDELITY  — a PHEN_APP_QUEUE_SATURATION finding appears iff the oracle's
-                           expectFire is true; full quality; on the app pod.
-  2. NO-FABRICATION == 0 — the undeclared-SLO scenario produces ZERO findings: a high
-                           queue with no declared bar is NEVER a finding (the charter ban
+  1. DETECTION-FIDELITY  — for each scenario, a finding for its phenomenon appears iff the
+                           oracle's expectFire is true; full quality; on the app pod.
+  2. NO-FABRICATION == 0 — an undeclared-SLO scenario produces ZERO findings: a crossing
+                           metric with no declared bar is NEVER a finding (the charter ban
                            on learned/default capacity, proven through the real binding).
   3. BORROWED-BAR        — every firing finding's bar is CONFIG-sourced (BarFlagged false):
                            the customer's own SLO, never a flagged default.
-  4. CHARTER == 0        — no finding row restates a cause.
+  4. NO-CROSS-TALK == 0  — a scenario exercising one phenomenon must NOT light up another
+                           app phenomenon: the three app signals are independent (a stale
+                           timestamp is not a deep queue is not a load surge).
+  5. CHARTER == 0        — no finding row restates a cause.
 
 A substantive VIOLATION fails the gate. Absent any violation, a corpus missing a
 required scenario is INSUFFICIENT — never a pass.
@@ -29,8 +38,28 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-REQUIRED_SCENARIOS = {"over-slo", "under-slo", "undeclared-high-queue", "healthy-no-stream"}
-APP_PHEN = "PHEN_APP_QUEUE_SATURATION"
+REQUIRED_SCENARIOS = {
+    # L4 queue (the keystone)
+    "over-slo",
+    "under-slo",
+    "undeclared-high-queue",
+    "healthy-no-stream",
+    # L6 freshness (the differentiator)
+    "freshness-stale",
+    "freshness-fresh",
+    "freshness-undeclared",
+    # L1 load (the trigger)
+    "load-over",
+    "load-under",
+    "load-undeclared",
+}
+# Every application-level phenomenon the lane authors (doc 15 cap. A). A finding whose
+# Phenomenon is in this set is an app finding the floors apply to.
+APP_PHENS = {
+    "PHEN_APP_QUEUE_SATURATION",
+    "PHEN_APP_DATA_STALENESS",
+    "PHEN_APP_LOAD_SURGE",
+}
 
 DENYLIST = [
     "because",
@@ -47,10 +76,12 @@ DENYLIST = [
 @dataclass
 class GateReport:
     scenarios: set = field(default_factory=set)
+    phenomena_fired: set = field(default_factory=set)
     findings_graded: int = 0
     fidelity_violations: list = field(default_factory=list)
     fabrications: list = field(default_factory=list)
     bar_violations: list = field(default_factory=list)
+    crosstalk_violations: list = field(default_factory=list)
     charter_violations: list = field(default_factory=list)
 
 
@@ -61,32 +92,52 @@ def score(bundles: dict[str, tuple[list[dict], dict]]) -> GateReport:
         g.scenarios.add(scenario)
         g.findings_graded += len(findings)
 
-        app = [f for f in findings if f.get("Phenomenon") == APP_PHEN]
-        fired = len(app) > 0
+        # The phenomenon this scenario exercises (default to the queue keystone for
+        # back-compat with any unlabelled bundle).
+        phen = label.get("phenomenon", "PHEN_APP_QUEUE_SATURATION")
+        own = [f for f in findings if f.get("Phenomenon") == phen]
+        fired = len(own) > 0
         expect = bool(label.get("expectFire"))
+        for f in own:
+            g.phenomena_fired.add(f.get("Phenomenon"))
 
-        # detection-fidelity: fired iff expected
+        # detection-fidelity: the scenario's phenomenon fired iff expected
         if fired != expect:
             g.fidelity_violations.append(
-                f"{name}: fired={fired} != oracle expectFire={expect}"
+                f"{name}: {phen} fired={fired} != oracle expectFire={expect}"
             )
         # quality must be full when firing (a declared crossing is unambiguous)
-        for f in app:
+        for f in own:
             if f.get("Quality") != "full":
                 g.fidelity_violations.append(f"{name}: quality {f.get('Quality')} != full")
 
-        # no-fabrication: an UNDECLARED SLO must never produce a finding
-        if not label.get("sloDeclared") and fired:
-            g.fabrications.append(
-                f"{name}: produced a finding with NO declared SLO (fabricated a bar)"
-            )
+        # no-cross-talk: NO OTHER app phenomenon may fire on this scenario — the three
+        # app signals are independent (a stale timestamp must not read as a deep queue).
+        for f in findings:
+            ph = f.get("Phenomenon")
+            if ph in APP_PHENS and ph != phen:
+                g.crosstalk_violations.append(
+                    f"{name}: exercises {phen} but {ph} also fired (cross-talk)"
+                )
 
-        # borrowed-bar provenance: a firing finding's member bar is config-sourced
-        for f in app:
+        # no-fabrication: an UNDECLARED SLO must never produce ANY app finding
+        if not label.get("sloDeclared"):
+            for f in findings:
+                fp = f.get("Phenomenon")
+                if fp in APP_PHENS:
+                    g.fabrications.append(
+                        f"{name}: produced {fp} with NO declared SLO (fabricated a bar)"
+                    )
+
+        # borrowed-bar provenance: a firing app finding's member bar is config-sourced
+        for f in findings:
+            fp = f.get("Phenomenon")
+            if fp not in APP_PHENS:
+                continue
             for m in f.get("Members") or []:
                 if m.get("BarFlagged"):
                     g.bar_violations.append(
-                        f"{name}: finding bar is a flagged default, not the customer SLO"
+                        f"{name}: {fp} bar is a flagged default, not the customer SLO"
                     )
 
         # charter
@@ -113,6 +164,8 @@ def gate(g: GateReport) -> GateVerdict:
         reasons.append("NO-FABRICATION > 0: " + "; ".join(g.fabrications))
     if g.bar_violations:
         reasons.append("BORROWED-BAR broken: " + "; ".join(g.bar_violations))
+    if g.crosstalk_violations:
+        reasons.append("NO-CROSS-TALK > 0: " + "; ".join(g.crosstalk_violations))
     if g.charter_violations:
         reasons.append("charter: " + "; ".join(g.charter_violations))
     if reasons:
@@ -128,21 +181,23 @@ def gate(g: GateReport) -> GateVerdict:
 def render(g: GateReport, v: GateVerdict) -> str:
     ok = lambda bad: "OK" if not bad else "BROKEN"  # noqa: E731
     lines = [
-        "app-slo gate — class: measured_app_signal_vs_declared_slo",
+        "app-slo gate — class: measured_app_signal_vs_declared_slo (L4 queue, L6 fresh, L1 load)",
         f"  scenarios:        {sorted(g.scenarios)}",
+        f"  phenomena fired:  {sorted(g.phenomena_fired)}",
         f"  findings graded:  {g.findings_graded}",
         f"  detection-fidelity:{ok(g.fidelity_violations)} (fire iff declared+crossed)",
         f"  no-fabrication:   {len(g.fabrications)} (max 0; undeclared SLO never fires)",
         f"  borrowed-bar:     {ok(g.bar_violations)} (firing bar is the customer SLO)",
+        f"  no-cross-talk:    {len(g.crosstalk_violations)} (max 0; app phenomena are independent)",
         f"  charter:          {len(g.charter_violations)} violations (max 0)",
     ]
     if v.insufficient:
         lines.append(f"  GATE: INSUFFICIENT — {'; '.join(v.reasons)} (never a pass)")
     elif v.passed:
         lines.append(
-            "  GATE: PASSED — the application-SLO detection keystone is certified deterministic"
-            " (borrowed normativity, no fabricated bar); the app lane may be surfaced behind"
-            " --app-metrics-enabled (doc 11 §3.5)"
+            "  GATE: PASSED — the application-SLO detection lane is certified deterministic across"
+            " L4 queue + L6 freshness + L1 load (borrowed normativity, no fabricated bar, no"
+            " cross-talk); the app lane may be surfaced behind --app-metrics-enabled (doc 11 §3.5)"
         )
     else:
         lines.append(f"  GATE: FAILED — {'; '.join(v.reasons)}")

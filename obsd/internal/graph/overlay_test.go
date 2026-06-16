@@ -207,6 +207,18 @@ author: a
 rules:
   - {id: R1, signal: SIG_node_nf_conntrack_entries_6161e704, metric: m, kind: absolute, direction: above, entity_scope: Node, window: 5m}
 `, "default"},
+		{"transform on a rate rule", `
+overlay: t
+author: a
+rules:
+  - {id: R1, signal: SIG_node_nf_conntrack_entries_6161e704, metric: m, kind: rate-of-change, default: 1, direction: above, entity_scope: Node, window: 5m, transform: age-from-timestamp}
+`, "only meaningful on a gauge level rule"},
+		{"transform combined with a divisor", `
+overlay: t
+author: a
+rules:
+  - {id: R1, signal: SIG_node_nf_conntrack_entries_6161e704, metric: m, divisor_metric: d, kind: config-relative, config_path: slo.freshness.max_age, factor: 1.0, direction: above, entity_scope: Node, window: 5m, transform: age-from-timestamp}
+`, "cannot combine with divisor_metric"},
 	}
 
 	raw, err := os.ReadFile(kgPath)

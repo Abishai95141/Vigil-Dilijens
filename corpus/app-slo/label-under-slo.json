@@ -1,9 +1,12 @@
 {
   "bundle": "appslo-under-slo",
   "scenario": "under-slo",
+  "family": "queue",
+  "phenomenon": "PHEN_APP_QUEUE_SATURATION",
+  "configPath": "slo.queue.max_depth",
+  "metric": "app_queue_depth",
   "sloDeclared": true,
   "sloBar": 1000,
-  "queueValue": 500,
   "expectFire": false,
   "note": "queue 500 \u003c declared SLO 1000 -\u003e healthy, no finding."
 }

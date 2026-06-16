@@ -1,0 +1,12 @@
+{
+  "bundle": "appslo-load-under",
+  "scenario": "load-under",
+  "family": "load",
+  "phenomenon": "PHEN_APP_LOAD_SURGE",
+  "configPath": "slo.requests.max_rate",
+  "metric": "app_requests_total",
+  "sloDeclared": true,
+  "sloBar": 100,
+  "expectFire": false,
+  "note": "request rate 40/s \u003c declared capacity SLO 100/s -\u003e within capacity, no finding."
+}

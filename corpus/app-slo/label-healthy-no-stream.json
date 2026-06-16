@@ -1,9 +1,12 @@
 {
   "bundle": "appslo-healthy-no-stream",
   "scenario": "healthy-no-stream",
+  "family": "queue",
+  "phenomenon": "PHEN_APP_QUEUE_SATURATION",
+  "configPath": "slo.queue.max_depth",
+  "metric": "app_queue_depth",
   "sloDeclared": true,
   "sloBar": 1000,
-  "queueValue": -1,
   "expectFire": false,
   "note": "SLO declared but the app exposes no queue series -\u003e no variable, no finding (never invented)."
 }

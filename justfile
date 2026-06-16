@@ -265,10 +265,10 @@ event-detection-gate:
 # The Go half runs the producer unit tests + the always-on frozen-corpus drift guard; the Python
 # half grades the frozen corpus. Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
 app-slo-gate:
-    go test -race ./obsd/internal/detect/ ./obsd/internal/binding/ ./obsd/internal/identity/ ./obsd/internal/observe/ -run App
-    cd harness && uv run python -m harness.app_slo_gate \
-      --findings ../corpus/app-slo/findings-over-slo.jsonl ../corpus/app-slo/findings-under-slo.jsonl ../corpus/app-slo/findings-undeclared-high-queue.jsonl ../corpus/app-slo/findings-healthy-no-stream.jsonl \
-      --labels ../corpus/app-slo/label-over-slo.json ../corpus/app-slo/label-under-slo.json ../corpus/app-slo/label-undeclared-high-queue.json ../corpus/app-slo/label-healthy-no-stream.json
+    go test -race ./obsd/internal/detect/ ./obsd/internal/binding/ ./obsd/internal/identity/ ./obsd/internal/observe/ -run 'App|AgeFromTimestamp'
+    cd harness && scns="over-slo under-slo undeclared-high-queue healthy-no-stream freshness-stale freshness-fresh freshness-undeclared load-over load-under load-undeclared"; \
+      f=""; l=""; for s in $scns; do f="$f ../corpus/app-slo/findings-$s.jsonl"; l="$l ../corpus/app-slo/label-$s.json"; done; \
+      uv run python -m harness.app_slo_gate --findings $f --labels $l
 
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 

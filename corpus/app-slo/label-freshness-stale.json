@@ -1,0 +1,12 @@
+{
+  "bundle": "appslo-freshness-stale",
+  "scenario": "freshness-stale",
+  "family": "freshness",
+  "phenomenon": "PHEN_APP_DATA_STALENESS",
+  "configPath": "slo.freshness.max_age",
+  "metric": "app_last_update_seconds",
+  "sloDeclared": true,
+  "sloBar": 30,
+  "expectFire": true,
+  "note": "data age 120s \u003e declared freshness SLO 30s -\u003e PHEN_APP_DATA_STALENESS fires (age-from-timestamp, config bar)."
+}

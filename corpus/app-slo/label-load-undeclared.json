@@ -1,0 +1,12 @@
+{
+  "bundle": "appslo-load-undeclared",
+  "scenario": "load-undeclared",
+  "family": "load",
+  "phenomenon": "PHEN_APP_LOAD_SURGE",
+  "configPath": "slo.requests.max_rate",
+  "metric": "app_requests_total",
+  "sloDeclared": false,
+  "sloBar": 0,
+  "expectFire": false,
+  "note": "request rate 150/s but NO declared capacity SLO -\u003e unbounded, NO bar, NO finding (the charter floor)."
+}

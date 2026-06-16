@@ -1,0 +1,12 @@
+{
+  "bundle": "appslo-freshness-fresh",
+  "scenario": "freshness-fresh",
+  "family": "freshness",
+  "phenomenon": "PHEN_APP_DATA_STALENESS",
+  "configPath": "slo.freshness.max_age",
+  "metric": "app_last_update_seconds",
+  "sloDeclared": true,
+  "sloBar": 30,
+  "expectFire": false,
+  "note": "data age 8s \u003c declared freshness SLO 30s -\u003e fresh, no finding."
+}

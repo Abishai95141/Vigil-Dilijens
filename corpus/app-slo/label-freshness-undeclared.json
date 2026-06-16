@@ -1,0 +1,12 @@
+{
+  "bundle": "appslo-freshness-undeclared",
+  "scenario": "freshness-undeclared",
+  "family": "freshness",
+  "phenomenon": "PHEN_APP_DATA_STALENESS",
+  "configPath": "slo.freshness.max_age",
+  "metric": "app_last_update_seconds",
+  "sloDeclared": false,
+  "sloBar": 0,
+  "expectFire": false,
+  "note": "data age 120s but NO declared freshness SLO -\u003e unbounded, NO bar, NO finding (the charter floor)."
+}
