@@ -1,0 +1,9 @@
+{
+  "bundle": "appslo-over-slo",
+  "scenario": "over-slo",
+  "sloDeclared": true,
+  "sloBar": 1000,
+  "queueValue": 1500,
+  "expectFire": true,
+  "note": "queue 1500 \u003e declared SLO 1000 -\u003e PHEN_APP_QUEUE_SATURATION fires (config-sourced bar)."
+}

@@ -255,6 +255,21 @@ event-detection-gate:
       --cascades ../corpus/event-detection/cascades-oom-detection.jsonl ../corpus/event-detection/cascades-leak-to-oom-cascade.jsonl ../corpus/event-detection/cascades-throttle-to-probe-cascade.jsonl ../corpus/event-detection/cascades-role-unresolved-no-upgrade.jsonl ../corpus/event-detection/cascades-unrelated-reason.jsonl ../corpus/event-detection/cascades-healthy-negative.jsonl \
       --labels ../corpus/event-detection/label-oom-detection.json ../corpus/event-detection/label-leak-to-oom-cascade.json ../corpus/event-detection/label-throttle-to-probe-cascade.json ../corpus/event-detection/label-role-unresolved-no-upgrade.json ../corpus/event-detection/label-unrelated-reason.json ../corpus/event-detection/label-healthy-negative.json
 
+# app-slo gate (doc 15 cap. A / doc 11 §3.5) over the frozen corpus in corpus/app-slo/ —
+# certifies the application-signal keystone: an app gauge (queue depth) crossing its
+# CUSTOMER-DECLARED SLO produces a MEASURED finding, and an UNDECLARED SLO never fabricates
+# a bar. Each scenario folds the REAL binding.Compile (SLO resolution) -> observe.Materialize
+# -> detect.Matcher against a label oracle (fire iff declared AND crossed). Floors:
+# detection-fidelity, no-fabrication==0 (the charter floor — a high queue with no declared SLO
+# is never a finding), borrowed-bar (firing bar is config-sourced, not a default), charter==0.
+# The Go half runs the producer unit tests + the always-on frozen-corpus drift guard; the Python
+# half grades the frozen corpus. Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+app-slo-gate:
+    go test -race ./obsd/internal/detect/ ./obsd/internal/binding/ ./obsd/internal/identity/ ./obsd/internal/observe/ -run App
+    cd harness && uv run python -m harness.app_slo_gate \
+      --findings ../corpus/app-slo/findings-over-slo.jsonl ../corpus/app-slo/findings-under-slo.jsonl ../corpus/app-slo/findings-undeclared-high-queue.jsonl ../corpus/app-slo/findings-healthy-no-stream.jsonl \
+      --labels ../corpus/app-slo/label-over-slo.json ../corpus/app-slo/label-under-slo.json ../corpus/app-slo/label-undeclared-high-queue.json ../corpus/app-slo/label-healthy-no-stream.json
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

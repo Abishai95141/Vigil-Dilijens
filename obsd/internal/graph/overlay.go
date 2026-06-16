@@ -155,16 +155,43 @@ var knownOns = map[string]bool{"": true, "anchor": true, "neighbour": true, "two
 // delta. Added phenomena are applied BEFORE this file's spans/checks so they can
 // be spanned/checked in the same overlay.
 type overlayFile struct {
-	Overlay   string                   `yaml:"overlay"`
-	Version   int                      `yaml:"version"`
-	Author    string                   `yaml:"author"`
-	Status    string                   `yaml:"status"`
-	Phenomena []overlayPhenomenon      `yaml:"phenomena"`
-	Relations []overlayRelation        `yaml:"relations"`
-	Spans     map[string]spanDecl      `yaml:"spans"`
-	Rules     []ThresholdRule          `yaml:"rules"`
-	Checks    map[string][]MemberCheck `yaml:"checks"`
-	Anchors   map[string]string        `yaml:"anchors"`
+	Overlay   string                     `yaml:"overlay"`
+	Version   int                        `yaml:"version"`
+	Author    string                     `yaml:"author"`
+	Status    string                     `yaml:"status"`
+	Signals   []overlaySignal            `yaml:"signals"`
+	Phenomena []overlayPhenomenon        `yaml:"phenomena"`
+	Members   map[string][]overlayMember `yaml:"members"`
+	Relations []overlayRelation          `yaml:"relations"`
+	Spans     map[string]spanDecl        `yaml:"spans"`
+	Rules     []ThresholdRule            `yaml:"rules"`
+	Checks    map[string][]MemberCheck   `yaml:"checks"`
+	Anchors   map[string]string          `yaml:"anchors"`
+}
+
+// overlaySignal is an authored Signal node added by an overlay (doc 15 cap. A): a new
+// observable variable not in the base KG — e.g. an application's own /metrics gauge,
+// which exists only because the customer's app exposes it. id + name + data_type are the
+// minimum the runtime needs (data_type drives the gauge/counter shape derivation). The
+// base KG stays an immutable vendored mirror; new signals live in versioned overlays.
+type overlaySignal struct {
+	ID       string `yaml:"id"`
+	Name     string `yaml:"name"`
+	DataType string `yaml:"data_type"` // "gauge" | "counter" | ... (shape derived)
+	Entity   string `yaml:"entity"`    // the entity kind the signal attaches to (Pod, Container, ...)
+	Modality string `yaml:"modality"`  // "Metric" (the only numeric series) — defaulted if empty
+	Notes    string `yaml:"notes"`
+}
+
+// overlayMember is one STRUCTURED member of an overlay phenomenon (doc 15 cap. A):
+// signal -> phenomenon, the SignalID-bearing membership the matcher reads (p.Members)
+// and a detection check binds against (validateCheck.isMember). Authored exactly like a
+// participates_in edge; the loader also appends the edge so the graph stays self-consistent.
+type overlayMember struct {
+	Signal   string `yaml:"signal"`
+	Role     string `yaml:"role"`     // required | corroborating
+	Temporal string `yaml:"temporal"` // T0, T0+, ...
+	Why      string `yaml:"why"`
 }
 
 // overlayPhenomenon is an authored CorrelationGroup added by an overlay (doc 15
@@ -337,6 +364,27 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 		return fmt.Errorf("missing author provenance (authored-knowledge discipline, doc 02 §3.6)")
 	}
 
+	// New Signal nodes (doc 15 cap. A): authored observable variables not in the base
+	// KG — e.g. an application's own /metrics gauge. Applied FIRST so this file's
+	// phenomena/members/rules/checks may reference them. The base KG stays immutable.
+	for i := range f.Signals {
+		os := f.Signals[i]
+		if strings.TrimSpace(os.ID) == "" || strings.TrimSpace(os.Name) == "" {
+			return fmt.Errorf("overlay signal %d: id and name are required", i)
+		}
+		if strings.TrimSpace(os.DataType) == "" {
+			return fmt.Errorf("overlay signal %q: data_type is required (drives the gauge/counter shape)", os.ID)
+		}
+		if g.Signals[os.ID] != nil {
+			return fmt.Errorf("overlay signal %q already defined (overlays may add, never redefine)", os.ID)
+		}
+		modality := os.Modality
+		if modality == "" {
+			modality = "Metric"
+		}
+		g.Signals[os.ID] = &Signal{ID: os.ID, Name: os.Name, DataType: os.DataType, Modality: modality, Entity: os.Entity, Notes: os.Notes}
+	}
+
 	// New phenomena (doc 15 Phase C): authored CorrelationGroup nodes added by the
 	// overlay, so the base KG stays immutable. Applied FIRST so this file's own
 	// spans/checks/relations may reference them. Mirrors the base parser: signals
@@ -360,6 +408,47 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 			p.InlineMembers = append(p.InlineMembers, InlineMember{Pattern: tup[0], Role: tup[1], TemporalTag: tup[2], Note: tup[3]})
 		}
 		g.Phenomena[op.ID] = p // NodeType derives "CorrelationGroup" from this map
+	}
+
+	// New STRUCTURED members (doc 15 cap. A): signal -> phenomenon membership the
+	// matcher reads (p.Members) and a detection check binds against (validateCheck).
+	// Authored exactly like a participates_in edge; we populate p.Members AND append
+	// the edge so the graph stays self-consistent. Applied after phenomena+signals so
+	// both endpoints exist; before rules/checks so they can reference the members.
+	memberPhens := make([]string, 0, len(f.Members))
+	for id := range f.Members {
+		memberPhens = append(memberPhens, id)
+	}
+	sort.Strings(memberPhens)
+	addedMemberEdge := false
+	for _, phen := range memberPhens {
+		p, ok := g.Phenomena[phen]
+		if !ok {
+			return fmt.Errorf("members for unknown phenomenon %q", phen)
+		}
+		for _, m := range f.Members[phen] {
+			if g.Signals[m.Signal] == nil {
+				return fmt.Errorf("phenomenon %s: member references unknown signal %q", phen, m.Signal)
+			}
+			role := m.Role
+			if role == "" {
+				role = "required"
+			}
+			for _, prior := range p.Members {
+				if prior.SignalID == m.Signal {
+					return fmt.Errorf("phenomenon %s: duplicate member for signal %q", phen, m.Signal)
+				}
+			}
+			p.Members = append(p.Members, Member{SignalID: m.Signal, Role: role, TemporalOrder: m.Temporal, Why: m.Why})
+			g.Edges = append(g.Edges, Edge{
+				Type: "participates_in", Src: m.Signal, SrcType: "Signal",
+				Dst: phen, DstType: "CorrelationGroup", Role: role, TemporalOrder: m.Temporal, Why: m.Why,
+			})
+			addedMemberEdge = true
+		}
+	}
+	if addedMemberEdge {
+		g.reindexEdges()
 	}
 
 	// New phenomenon_relation edges (doc 15 Phase C): a directed authored link

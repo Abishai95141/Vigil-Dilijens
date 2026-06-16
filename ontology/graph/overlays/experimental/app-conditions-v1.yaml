@@ -1,0 +1,75 @@
+# EXPERIMENTAL — authored application-signal overlay (doc 15 cap. A).
+#
+# NOT in the production overlay glob: it lives under overlays/experimental/ (like
+# event-conditions-v1.yaml and flow-relation-v0.yaml), so it does NOT change the released
+# graph's content hash. obsd loads it ONLY behind --app-metrics-enabled (the app lane),
+# alongside the released overlays. Promotion into the released ontology is a governed
+# follow-up (mirroring the cross-service relation's Phase A->C, doc 15).
+#
+# What it authors (the keystone L4 phenomenon — aggregation queue saturation):
+#   - SIG_app_queue_depth: a new Signal node — an application's OWN reported queue depth,
+#     which exists only because the customer's app exposes it on /metrics. data_type gauge.
+#   - PHEN_APP_QUEUE_SATURATION: a CorrelationGroup (entity-local) over that one member.
+#   - THR_APP_QUEUE_DEPTH: a config-relative SLO rule — the bar is the customer-declared
+#     slo.queue.max_depth (read from a vigil.io/slo.queue.max_depth annotation; borrowed
+#     normativity, never learned). Pod-scoped (the app exposes the metric per pod).
+#   - a detection check: the gauge crossing its declared SLO IS the phenomenon.
+#
+# Epistemic discipline (doc 01): the finding is MEASURED (a fact: the queue crossed the
+# customer's OWN declared bar). No learned baseline; undeclared SLO => unbounded/listed.
+overlay: app-conditions-v1
+version: 1
+author: vigil-engineering
+status: experimental
+
+signals:
+  - id: SIG_app_queue_depth
+    name: "Application queue depth (app /metrics)"
+    data_type: gauge
+    entity: Pod
+    notes: "An application's own reported count of pending/unprocessed work items (e.g. a traffic-aggregation backlog). Customer-exposed on /metrics; bound to a declared SLO."
+
+phenomena:
+  - id: PHEN_APP_QUEUE_SATURATION
+    label: "Application queue saturation (backlog over declared SLO)"
+    signals:
+      - ["app_queue_depth", "required", "T0", "the application's own reported pending-work depth"]
+    notes: "The app's processing backlog has crossed the queue-depth SLO the customer declared on the workload. MEASURED against the customer's OWN bar; asserts nothing about why."
+
+members:
+  PHEN_APP_QUEUE_SATURATION:
+    - signal: SIG_app_queue_depth
+      role: required
+      temporal: T0
+      why: "the application's own reported pending-work depth, the direct measure of backlog"
+
+spans:
+  PHEN_APP_QUEUE_SATURATION:
+    span: entity-local
+    rationale: "Queue saturation is a property of the single workload that owns the queue — its own backlog gauge against its own declared SLO. No topology walk; entity-local."
+
+rules:
+  - id: THR_APP_QUEUE_DEPTH
+    signal: SIG_app_queue_depth
+    metric: app_queue_depth
+    kind: config-relative
+    config_path: slo.queue.max_depth
+    factor: 1.0
+    direction: above
+    entity_scope: Pod
+    window: 5m
+    rationale: >-
+      The maximum acceptable queue depth is a SERVICE-LEVEL OBJECTIVE only the operator can
+      declare — there is no universal "too deep". So the bar is borrowed from the customer's
+      own config: the vigil.io/slo.queue.max_depth annotation on the workload (config-path
+      slo.queue.max_depth), read verbatim at bind time. Where it is not declared, the pair is
+      unbounded/listed — never a learned or default capacity (the charter ban on baselines).
+
+checks:
+  PHEN_APP_QUEUE_SATURATION:
+    - signal: SIG_app_queue_depth
+      metric: app_queue_depth
+      facet: level
+      expect: crossed
+      on: anchor
+      note: "the app's reported queue depth has crossed the declared slo.queue.max_depth (config-sourced bar; unbounded where the SLO is not declared)"

@@ -1,0 +1,9 @@
+{
+  "bundle": "appslo-healthy-no-stream",
+  "scenario": "healthy-no-stream",
+  "sloDeclared": true,
+  "sloBar": 1000,
+  "queueValue": -1,
+  "expectFire": false,
+  "note": "SLO declared but the app exposes no queue series -\u003e no variable, no finding (never invented)."
+}
