@@ -1,0 +1,14 @@
+{
+  "bundle": "transitive-silent-intermediate",
+  "scenario": "silent-intermediate",
+  "expectChains": 0,
+  "expectRoots": null,
+  "expectPath": null,
+  "independentPairs": [
+    [
+      "traffic/inference",
+      "traffic/prediction"
+    ]
+  ],
+  "note": "inference(deg) \u003c- aggregation(SILENT) \u003c- prediction(deg): the chain is NEVER bridged across the unmeasured aggregation (weakest-input). Zero asserted chains; the silence is a stated gap."
+}

@@ -1,0 +1,9 @@
+{
+  "bundle": "transitive-healthy-no-degradation",
+  "scenario": "healthy-no-degradation",
+  "expectChains": 0,
+  "expectRoots": null,
+  "expectPath": null,
+  "independentPairs": null,
+  "note": "a flow topology with NO degraded node — no chain, never invented."
+}

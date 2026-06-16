@@ -374,6 +374,25 @@ isolated cluster until then.
   end-to-end (root L1 + terminal L6 + L4 visible) — ready for **Capability B** (stitch the transitive
   root-cause chain). `corpus/labels/app-slo-gate.md`.
 
+- [x] **Capability B — transitive root-cause chain (2026-06-16, v3).** The one-hop cross-service
+  cascade made TRANSITIVE: MEASURED-degraded workloads stitched into an ORDERED root-cause chain by
+  walking the observed-flow topology, oriented ONLY by the AUTHORED relation (never timing). New:
+  `flow/transitive.go` `TransitiveChains` (walks `NeighboursInto(EdgeTypeFlow)` transitively from the
+  deepest degraded callee; deterministic — sorted, visited-set cycle terminator, `TransitiveMaxHops`
+  ceiling); `flow.Chain` gains an ordered `Path []PathStep` + stated `Gaps []ChainGap` (omitempty → the
+  one-hop output stays byte-identical, `xsvc-gate` still PASSES). Silent intermediates (flow-adjacent but
+  no measured degradation) are NEVER bridged — stated gaps (weakest-input). Surface `/api/root-cause-chain`
+  (`api/rootcause.go`); warm-path wiring reuses the SAME degraded set + curated relation, strictly
+  OFF-DIGEST. **`just transitive-chain-gate` PASSED** — 6 scenarios, the CARDINAL floor (independently-
+  coincident faults NEVER merge into one chain) + chain-count/root/path-fidelity/charter; pure-function
+  frozen-corpus determinism guard. LIVE on kind: a 3-service synthetic chain (`front→mid→back`, each
+  calling the next via ClusterIP so conntrack records the edges, each crossing a queue SLO) reconstructed
+  ONE chain ROOT `traffic/back` → `mid` → `front` (2 valid hops), each hop per-node MEASURED phenomenon +
+  MEASURED observed-flow edge + AUTHORED why; the CARDINAL rule held live (none of the ~31 other workloads
+  leaked in). RELEASED graph hash UNCHANGED (B adds no graph content — reuses the curated relation); full
+  `-race` green; non-gating. The chain reaction is now STITCHED. `corpus/labels/transitive-chain-gate.md`.
+  Next: **Capability D** (forecast the chain's ripple), then **C** (anomaly).
+
 ## Capability architecture (doc 15) — vertical depth for chain-reaction value (2026-06-16, v3)
 
 The reframe: recent work was HORIZONTAL (more phenomena, same reach). Delivering

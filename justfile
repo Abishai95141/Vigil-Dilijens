@@ -270,6 +270,19 @@ app-slo-gate:
       f=""; l=""; for s in $scns; do f="$f ../corpus/app-slo/findings-$s.jsonl"; l="$l ../corpus/app-slo/label-$s.json"; done; \
       uv run python -m harness.app_slo_gate --findings $f --labels $l
 
+# transitive-chain gate (doc 15 cap. B / doc 11 §3.5) over the frozen corpus in
+# corpus/transitive-chain/ — certifies the transitive root-cause chain: MEASURED-degraded
+# workloads stitched into an ORDERED chain by walking the observed-flow topology, oriented
+# ONLY by the AUTHORED relation (never timing). The CARDINAL floor: independently-coincident
+# faults never merge into one chain. Each scenario folds the REAL flow.TransitiveChains (a
+# pure function) against a label oracle. The Go half runs the unit tests + the always-on
+# frozen-corpus determinism guard; the Python half grades. Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+transitive-chain-gate:
+    go test -race ./obsd/internal/flow/ -run 'Transitive'
+    cd harness && scns="linear-chain independent-faults silent-intermediate fan-in two-disjoint-real-chains healthy-no-degradation"; \
+      c=""; l=""; for s in $scns; do c="$c ../corpus/transitive-chain/chains-$s.jsonl"; l="$l ../corpus/transitive-chain/label-$s.json"; done; \
+      uv run python -m harness.transitive_chain_gate --chains $c --labels $l
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

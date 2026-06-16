@@ -403,6 +403,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// v2 cross-service cascade (doc 15 phase D/F), warm path: published each tick
 	// off the deterministic digest, surfaced (gated) at /api/cross-service.
 	var crossSvcView atomic.Pointer[flow.Chain]
+	var transitiveChainView atomic.Pointer[[]flow.Chain] // doc 15 cap. B: the transitive root-cause chains
 	// v2 ANTICIPATORY cross-service cascade (doc 15 phase E): seeded from the gated
 	// early-warning lane, propagating a PROJECTED downstream-impact hypothesis along
 	// the MEASURED flow edges. Computed-but-DARK until its own backtest gate passes
@@ -570,6 +571,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			CrossService: func() *vapi.CrossServiceView {
 				return vapi.BuildCrossService(crossSvcView.Load(), projectedCrossSvcView.Load(), flowEnabled, phaseECrossServiceGatePassed, time.Now().UTC())
 			},
+			// doc 15 cap. B: the transitive root-cause chain surface — the warm-path
+			// chains, or the honest OFF/quiet state (flowEnabled drives OFF-vs-quiet).
+			RootCauseChain: func() *vapi.RootCauseChainView {
+				var chains []flow.Chain
+				if p := transitiveChainView.Load(); p != nil {
+					chains = *p
+				}
+				return vapi.BuildRootCauseChain(chains, flowEnabled, time.Now().UTC())
+			},
 			// v3 T-C discrete-event lane: the joined EventsView, or the honest
 			// unavailable state when --events-enabled is off.
 			Events: func() *vapi.EventsView {
@@ -723,7 +733,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
-		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView,
+		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView, &transitiveChainView,
 		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
 		eventsEnabled, eventsConds, eventsDets, &eventsSnap, &eventsView)
 	if p.Forecast.Enabled {
@@ -781,7 +791,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
-func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration,
+func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], transitiveChainView *atomic.Pointer[[]flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration,
 	eventsEnabled bool, eventsConds []events.Corroboration, eventsDets []events.Detection, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView]) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
@@ -967,6 +977,26 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 						"why_class", "AUTHORED", "edge_class", "MEASURED observed flow")
 				} else {
 					crossSvcView.Store(nil)
+				}
+
+				// Transitive root-cause chain (doc 15 cap. B), WARM PATH — the one-hop
+				// cascade above made TRANSITIVE. Reuses the SAME degraded set + authored
+				// relation; a pure function of (flow topology, degraded set, relation,
+				// window), so it never perturbs the tick or the replay digest. Direction
+				// is taken ONLY from the authored relation; silent intermediates are stated
+				// gaps, never bridged; independent faults never merge into one chain.
+				if transitiveChainView != nil {
+					chains := flow.TransitiveChains(edges, degraded, flowRel, evalWindow, now, flow.TransitiveMaxHops)
+					if len(chains) > 0 {
+						transitiveChainView.Store(&chains)
+						for i := range chains {
+							logger.Info("transitive root-cause chain (doc 15 cap. B, warm path)",
+								"root", chains[i].MostUpstreamDegradedNode, "hops", len(chains[i].Path),
+								"gaps", len(chains[i].Gaps), "why_class", "AUTHORED", "edge_class", "MEASURED observed flow")
+						}
+					} else {
+						transitiveChainView.Store(nil)
+					}
 				}
 			}
 			// v2 ANTICIPATORY cross-service cascade (doc 15 phase E), WARM PATH — seeded

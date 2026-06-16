@@ -53,6 +53,9 @@ type Providers struct {
 	// CrossService returns the v2 cross-service cascade surface (doc 15 phase F);
 	// nil = the route serves the honest OFF state (flow discovery not running).
 	CrossService func() *CrossServiceView
+	// RootCauseChain returns the transitive root-cause chain surface (doc 15 cap. B):
+	// the one-hop cascade made transitive. nil ⇒ the honest OFF state.
+	RootCauseChain func() *RootCauseChainView
 	// Events returns the v3 T-C discrete-event lane surface (OOMKilled,
 	// CrashLoopBackOff joined by CEI); nil ⇒ the honest "not enabled" state.
 	Events func() *EventsView
@@ -264,6 +267,21 @@ func Register(mux *http.ServeMux, p Providers) {
 			// Flow discovery is not running: state WHY the lane is dark (the gate
 			// rule's honesty), never imply there is no cross-service dependency.
 			v = BuildCrossService(nil, nil, false, false, timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/root-cause-chain", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *RootCauseChainView
+		if p.RootCauseChain != nil {
+			v = p.RootCauseChain()
+		}
+		if v == nil {
+			v = BuildRootCauseChain(nil, false, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

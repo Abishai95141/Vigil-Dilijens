@@ -1,0 +1,24 @@
+{
+  "bundle": "transitive-linear-chain",
+  "scenario": "linear-chain",
+  "expectChains": 1,
+  "expectRoots": [
+    "traffic/inference"
+  ],
+  "expectPath": [
+    [
+      "traffic/aggregation",
+      "traffic/db"
+    ],
+    [
+      "traffic/db",
+      "traffic/prediction"
+    ],
+    [
+      "traffic/inference",
+      "traffic/aggregation"
+    ]
+  ],
+  "independentPairs": null,
+  "note": "the smart-traffic chain: inference(mem)-\u003eaggregation(queue)-\u003edb(latency)-\u003eprediction(stale), all degraded, flow-connected. ONE ordered root-cause chain."
+}

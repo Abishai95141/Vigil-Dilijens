@@ -1,0 +1,14 @@
+{
+  "bundle": "transitive-independent-faults",
+  "scenario": "independent-faults",
+  "expectChains": 0,
+  "expectRoots": null,
+  "expectPath": null,
+  "independentPairs": [
+    [
+      "a/lonely1",
+      "b/lonely2"
+    ]
+  ],
+  "note": "two coincident faults in DISJOINT flow components — the CARDINAL rule: ZERO chains, never one merged story."
+}
