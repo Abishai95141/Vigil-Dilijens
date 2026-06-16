@@ -26,6 +26,10 @@ const (
 	FamilyKSM Family = "kube-state-metrics"
 	// FamilyNodeExporter is node-exporter (node hardware signals).
 	FamilyNodeExporter Family = "node-exporter"
+	// FamilyApp is an application's own /metrics endpoint (doc 15 cap. A): RED,
+	// queue, freshness — bound to CUSTOMER-DECLARED SLO bars (borrowed normativity).
+	// Identity is the scrape-target pod, never the series labels.
+	FamilyApp Family = "app"
 
 	// OTel semconv is deliberately the FOURTH lane, added in Phase 0b–1 after the
 	// first maps work, to prove the machinery is not single-dialect-shaped
@@ -38,6 +42,7 @@ var mapVersions = map[Family]string{
 	FamilyCAdvisor:     "0.1.0",
 	FamilyKSM:          "0.1.0",
 	FamilyNodeExporter: "0.1.0",
+	FamilyApp:          "0.1.0",
 }
 
 // MapVersion returns the current normalization-map version for a family.
@@ -103,6 +108,15 @@ type Series struct {
 	// scraper always knows it. Node-scoped identity comes from HERE, not from
 	// series labels — node name ↔ Node object is the only join needed (doc 14 §3.2).
 	SourceNode string
+
+	// SourcePodNS/SourcePodName are scrape-target metadata for FamilyApp: the POD
+	// whose /metrics endpoint produced this series (doc 15 cap. A). An application's
+	// own metrics (queue depth, request rate, freshness) carry no k8s identity
+	// labels, so — exactly like node-exporter's node identity — the entity is the
+	// SCRAPE TARGET, never guessed from the series' own labels. Resolved to a pod
+	// CEI through the same time-aware control-plane lookup cAdvisor uses.
+	SourcePodNS   string
+	SourcePodName string
 
 	// At is the RECEIVE timestamp (doc 14 A12: wall-clock UTC at ingest receive
 	// time). It stamps the audit record; it is NOT the join time when the source
@@ -170,9 +184,30 @@ func (n *Normalizer) Normalize(s Series) Result {
 		return n.ksm(s)
 	case FamilyNodeExporter:
 		return n.nodeExporter(s)
+	case FamilyApp:
+		return n.app(s)
 	default:
 		return n.quarantine(s.Family, ReasonUnknownFamily)
 	}
+}
+
+// app implements the application-metrics dialect (doc 15 cap. A). An app's own
+// /metrics series carry no k8s identity labels, so — exactly like node-exporter's
+// node identity — the entity is the SCRAPE TARGET pod, resolved through the same
+// time-aware control-plane lookup cAdvisor uses (so a late sample joins the pod
+// that was alive when it was taken, never a same-name successor). The series'
+// own labels are NEVER trusted for identity; they only disambiguate sub-streams
+// (streamSubID). A missing target, or a target the control plane has not seen,
+// quarantines — it never guesses a pod.
+func (n *Normalizer) app(s Series) Result {
+	if s.SourcePodNS == "" || s.SourcePodName == "" {
+		return n.quarantine(FamilyApp, ReasonMissingSource)
+	}
+	uid, ok := n.lookup.PodUID(s.SourcePodNS, s.SourcePodName, s.joinTime())
+	if !ok {
+		return n.quarantine(FamilyApp, ReasonUnknownPod)
+	}
+	return n.pod(FamilyApp, s.SourcePodNS, s.SourcePodName, uid, s.At)
 }
 
 // cadvisor implements the container-runtime dialect (doc 14 §3.2 row 1).

@@ -103,6 +103,13 @@ type NodePayload struct {
 	Body       []byte
 	ReceivedAt time.Time
 	Err        error
+
+	// PodNS/PodName are the scrape-target pod for FamilyApp payloads (doc 15 cap.
+	// A): an app's /metrics endpoint is served BY a pod, and that pod is the entity
+	// every series in the body is attributed to (identity from the target, never the
+	// labels). Empty for node-scoped families.
+	PodNS   string
+	PodName string
 }
 
 // FetchCAdvisor fetches every node's cAdvisor payload (network only, no store
@@ -140,6 +147,51 @@ func FetchNodeExporter(ctx context.Context, f Fetcher, nodes []string) []NodePay
 	return out
 }
 
+// PodFetcher fetches one pod's /metrics endpoint through the API server's
+// pods/proxy subresource (doc 15 cap. A — the sibling of nodes/proxy). Separate
+// from Fetcher so node-scoped fixtures stay unaffected.
+type PodFetcher interface {
+	PodMetrics(ctx context.Context, namespace, name, port, path string) (body []byte, receivedAt time.Time, err error)
+}
+
+// PodTarget is one application scrape target: the pod, the port, and the metrics
+// path (from the customer's own prometheus.io/scrape annotations). Discovery of
+// targets is the caller's job (doc 15 cap. A2); this lane only fetches+ingests.
+type PodTarget struct {
+	Namespace string
+	Name      string
+	Port      string // e.g. "8080"
+	Path      string // e.g. "metrics" (no leading slash)
+}
+
+// FetchPodMetrics fetches every app target's /metrics payload (network only, no
+// store writes), in sorted (ns,name) order for determinism. Each payload carries
+// its target pod so ingest attributes every series to that pod's CEI — identity
+// from the target, never the series labels.
+func FetchPodMetrics(ctx context.Context, f PodFetcher, targets []PodTarget) []NodePayload {
+	sorted := append([]PodTarget(nil), targets...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Namespace != sorted[j].Namespace {
+			return sorted[i].Namespace < sorted[j].Namespace
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	out := make([]NodePayload, 0, len(sorted))
+	for _, t := range sorted {
+		path := t.Path
+		if path == "" {
+			path = "metrics"
+		}
+		body, receivedAt, err := f.PodMetrics(ctx, t.Namespace, t.Name, t.Port, path)
+		out = append(out, NodePayload{
+			Node: t.Namespace + "/" + t.Name, Family: identity.FamilyApp,
+			PodNS: t.Namespace, PodName: t.Name,
+			Body: body, ReceivedAt: receivedAt, Err: err,
+		})
+	}
+	return out
+}
+
 // IngestPayloads ingests previously-fetched payloads into the store (no network).
 // A partial scrape is a stated partial, never a silent one.
 func (in *Ingestor) IngestPayloads(payloads []NodePayload) IngestSummary {
@@ -157,7 +209,7 @@ func (in *Ingestor) IngestPayloads(payloads []NodePayload) IngestSummary {
 		if family == "" {
 			family = identity.FamilyCAdvisor
 		}
-		in.ingestExposition(p.Body, family, p.Node, p.ReceivedAt, &sum)
+		in.ingestExposition(p.Body, family, p.Node, p.PodNS, p.PodName, p.ReceivedAt, &sum)
 	}
 	return sum
 }
@@ -173,7 +225,7 @@ func (in *Ingestor) ScrapeCAdvisor(ctx context.Context, f Fetcher, nodes []strin
 // through the normalizer into the hot store. All stored times are canonicalized
 // to UTC so fingerprints (and their replay digests) are timezone-independent —
 // a bundle captured on one machine must replay byte-identically on another.
-func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node string, receivedAt time.Time, sum *IngestSummary) {
+func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node, podNS, podName string, receivedAt time.Time, sum *IngestSummary) {
 	receivedAt = receivedAt.UTC()
 	// UTF8Validation accepts every name LegacyValidation does plus UTF-8 names;
 	// kubelet/cAdvisor emit classic charset, so this is permissive at the parse
@@ -216,11 +268,13 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node s
 				labels[lp.GetName()] = lp.GetValue()
 			}
 			s := identity.Series{
-				Family:     family,
-				Metric:     name,
-				Labels:     labels,
-				SourceNode: node,
-				At:         receivedAt,
+				Family:        family,
+				Metric:        name,
+				Labels:        labels,
+				SourceNode:    node,
+				SourcePodNS:   podNS,
+				SourcePodName: podName,
+				At:            receivedAt,
 			}
 			// cAdvisor stamps samples with collection time (ms) — the JOIN time.
 			if ts := m.GetTimestampMs(); ts != 0 {
@@ -273,7 +327,11 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node s
 // (sub-variable normalization is the doc 02 data_type queue, not this layer).
 // cAdvisor/KSM identity rides on the labels themselves and stays unchanged.
 func streamSubID(family identity.Family, labels map[string]string) string {
-	if family != identity.FamilyNodeExporter || len(labels) == 0 {
+	// node-exporter AND app series both resolve EVERY series to ONE entity CEI (the
+	// node / the scrape-target pod), so without the full label set as part of the
+	// stream identity, unrelated label dimensions would collapse into one ring — a
+	// mis-join. cAdvisor/KSM carry their identity in the labels and stay unchanged.
+	if (family != identity.FamilyNodeExporter && family != identity.FamilyApp) || len(labels) == 0 {
 		return ""
 	}
 	keys := make([]string, 0, len(labels))

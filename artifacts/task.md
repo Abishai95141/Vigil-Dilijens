@@ -341,3 +341,26 @@ isolated cluster until then.
   blind spot) AND `THROTTLING_CASCADE → PROBE_FAILURE_RESTART` (why="Probe cascade") on a
   throttled crash-looper; bare Pods (no role) correctly fire nothing. `corpus/labels/event-detection-gate.md`.
 - [ ] G2 KSM lane · G3 kubelet-main lane · G4 author-only — see `memory/vigil-graph-robustness-plan.md`.
+
+## Capability architecture (doc 15) — vertical depth for chain-reaction value (2026-06-16, v3)
+
+The reframe: recent work was HORIZONTAL (more phenomena, same reach). Delivering
+root-cause + forecasting + anomaly across a real multi-service chain reaction needs four
+VERTICAL capabilities. Plan: [`docs/15-capability-architecture.md`](docs/15-capability-architecture.md).
+Two charter-violating shortcuts were KILLED by an adversarial enforcer (temporal causal
+direction — no intra-tick onset signal + invents causation; in-digest band-departure —
+breaks replay + launders PROJECTED→MEASURED). Build order **A → B → D → C**.
+
+- [~] **Cap A — app-signal ingestion (keystone).** Unlocks L1 load / L4 queue / L5 latency /
+  L6 freshness. **A1 DONE (tested):** `identity.FamilyApp` (identity from the SCRAPE-TARGET
+  pod, resolved time-aware, NEVER the series labels — the cardinal mis-join test passes);
+  `kube.ProxyFetcher.PodMetrics` (pods/proxy subresource); `observe.FetchPodMetrics` +
+  `PodTarget` + `PodFetcher` + `streamSubID` app-disambiguation. Full scrape→normalize→store
+  path tested (`normalize_app_test.go`, `scrape_app_test.go`); full `go test -race ./obsd/...`
+  green, no regressions. **NEXT:** A2 SLO-declared config-relative binding (annotation source,
+  no-default-for-capacity) → A3 app-signal phenomenon + detection → A4 app-slo-gate → A5
+  live-verify (synthetic app `/metrics` + SLO annotation on kind).
+- [ ] **Cap B — transitive structural+authored root-cause** (`flow/transitive.go`, off-digest;
+  direction from AUTHORED relations ONLY; silent intermediates traversed-not-asserted).
+- [ ] **Cap D — multi-hop projected cascade** (one forecast root, inherited WIDENING band).
+- [ ] **Cap C — anomaly** (capacity-crossing ships with A; band-departure off-digest PROJECTED).
