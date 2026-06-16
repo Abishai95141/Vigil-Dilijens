@@ -34,6 +34,10 @@ type Chain struct {
 	// connectivity but NEVER bridged, the weakest-input rule) or a hop ceiling. Stated,
 	// never hidden. Empty for CrossServiceChain.
 	Gaps []ChainGap `json:"gaps,omitempty"`
+	// RootBand is the FORECAST root's own band (hop 0) in a multi-hop projected cascade
+	// (doc 15 cap. D) — surfaced so every downstream band's widening can be checked against
+	// it (the hop-1 nodes must already widen vs the root). nil for a MEASURED chain (B).
+	RootBand *ProjectedBand `json:"root_band,omitempty"`
 }
 
 // PathStep is one ORDERED impact edge in a transitive root-cause chain (doc 15 cap.
@@ -54,6 +58,31 @@ type PathStep struct {
 	Temporal             string `json:"temporal"`
 	Author               string `json:"author"`
 	Version              string `json:"version"`
+
+	// Band is the PROJECTED-impact window the DOWNSTREAM node inherits in a multi-hop
+	// FORECAST cascade (doc 15 cap. D). nil for a MEASURED chain (B) — present only for
+	// the projected transitive cascade, where each hop INHERITS the forecast root's band
+	// and WIDENS it (never re-runs the clock). The weakest-input rule: the edge stays
+	// MEASURED, the why AUTHORED, but the downstream IMPACT is PROJECTED — never upgraded.
+	Band *ProjectedBand `json:"band,omitempty"`
+}
+
+// ProjectedBand is one downstream node's inherited, WIDENED projected-impact window in a
+// multi-hop forecast cascade (doc 15 cap. D). It is the forecast ROOT's band, widened
+// once per flow hop away from the root — so the arrival-of-impact window strictly WIDENS
+// with distance (more uncertainty further from the root) and NEVER collapses to a line
+// (doc 01). The clock is run ONCE, at the root; every downstream band is a structural
+// re-expression, never a re-forecast.
+type ProjectedBand struct {
+	Class        string `json:"class"`          // "PROJECTED"
+	Earliest     string `json:"earliest"`       // band lower edge, RFC3339 UTC (sorts chronologically as a string — no midnight-wrap bug)
+	Latest       string `json:"latest"`         // band upper edge, RFC3339 UTC, or "" when Open
+	Open         bool   `json:"open"`           // the far edge is open (root crossing may exceed the horizon, OR a zero-width root — a band never collapses)
+	HopsFromRoot int    `json:"hops_from_root"` // 0 = the root itself; ≥1 = inherited+widened
+	RootMetric   string `json:"root_metric"`    // the forecast root's series (e.g. working_set)
+	RootCrossAt  string `json:"root_cross_at"`  // the root's point projection (shown only WITH the band)
+	Confidence   string `json:"confidence"`     // the root forecast's confidence, carried verbatim
+	WidenNote    string `json:"widen_note"`     // the stated per-hop widening assumption
 }
 
 // ChainGap is a stated break in the asserted chain (doc 15 cap. B §2): the chain is
@@ -103,8 +132,17 @@ type CoverageOut struct {
 // JSON renders the chain deterministically (indented, stable key order via structs).
 func (c Chain) JSON() ([]byte, error) { return json.MarshalIndent(c, "", "  ") }
 
-// forbiddenTokens are causal-claim words the SYSTEM-GENERATED scaffolding must never
-// emit on its own (the charter ban on the system fabricating "X caused Y").
+// forbiddenTokens are causal-claim words the SYSTEM-GENERATED scaffolding must never emit
+// on its own (the charter ban on the system fabricating "X caused Y").
+//
+// NOTE: the doc 15 §4.D projection verbs (propagates / cascades to / flows to) are NOT in
+// this base list — the AUTHORED relation note ("...degradation propagates to its downstream
+// callers...") is curated, governance-reviewed text surfaced VERBATIM and legitimately uses
+// "propagates", and several callers scan the FULL rendered chain (why included). Banning the
+// projection verbs there would censor the curator. That ban therefore lives in the cap-D
+// gate scorer (`projected_transitive_gate.py`), which scrubs the authored why FIRST and then
+// scans only the system-generated scaffolding for them — the correct place to enforce "the
+// system must never assert the ripple as fact" without touching the curated note.
 var forbiddenTokens = []string{"cause", "caused", "causes", "causing", "root cause", "because of", "due to"}
 
 // HasForbiddenToken reports whether a string contains any causal-claim token. It is a

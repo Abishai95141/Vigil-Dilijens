@@ -283,6 +283,18 @@ transitive-chain-gate:
       c=""; l=""; for s in $scns; do c="$c ../corpus/transitive-chain/chains-$s.jsonl"; l="$l ../corpus/transitive-chain/label-$s.json"; done; \
       uv run python -m harness.transitive_chain_gate --chains $c --labels $l
 
+# multi-hop projected cascade gate (doc 15 cap. D / doc 11 §3.5) over corpus/projected-transitive/
+# — certifies "forecast the ripple": ONE forecast root rippling to its transitive callers, each
+# inheriting the root's band WIDENED per hop. The ABSOLUTE-ZERO floor: the band never narrows
+# downstream (a downstream node tighter than its parent = instant fail). Each scenario folds the
+# REAL flow.ProjectedTransitiveChains (a pure fn) vs a label oracle. PROJECTED off-digest by class;
+# the gate certifies the JOIN. Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+projected-transitive-gate:
+    go test -race ./obsd/internal/flow/ -run 'ProjTrans|ProjectedTransitive'
+    cd harness && scns="linear-2hop fan-out two-roots open-horizon no-caller no-forecast midnight-wrap tight-root maxhops-bounded"; \
+      c=""; l=""; for s in $scns; do c="$c ../corpus/projected-transitive/chains-$s.jsonl"; l="$l ../corpus/projected-transitive/label-$s.json"; done; \
+      uv run python -m harness.projected_transitive_gate --chains $c --labels $l
+
 # --- Web surfaces (deferred install; Phase 0b+) -----------------------------
 
 web-install:

@@ -1,0 +1,20 @@
+{
+  "bundle": "projtrans-linear-2hop",
+  "scenario": "linear-2hop",
+  "expectChains": 1,
+  "expectRoots": [
+    "traffic/back"
+  ],
+  "expectPath": [
+    [
+      "traffic/back",
+      "traffic/mid"
+    ],
+    [
+      "traffic/mid",
+      "traffic/front"
+    ]
+  ],
+  "independentPairs": null,
+  "note": "one forecast root (back, working_set band +30..+50) ripples to mid then front; the band WIDENS per hop."
+}

@@ -1,0 +1,30 @@
+{
+  "bundle": "projtrans-two-roots",
+  "scenario": "two-roots",
+  "expectChains": 2,
+  "expectRoots": [
+    "a/ra",
+    "b/rb"
+  ],
+  "expectPath": [
+    [
+      "a/ra",
+      "a/ca"
+    ],
+    [
+      "b/rb",
+      "b/cb"
+    ]
+  ],
+  "independentPairs": [
+    [
+      "a/ca",
+      "b/cb"
+    ],
+    [
+      "a/ra",
+      "b/rb"
+    ]
+  ],
+  "note": "TWO independently-warned roots → TWO chains (one forecast root per chain), never merged."
+}

@@ -12,7 +12,7 @@ import (
 var rcNow = time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
 
 func TestRootCauseChainOff(t *testing.T) {
-	v := BuildRootCauseChain(nil, false, rcNow)
+	v := BuildRootCauseChain(nil, nil, false, false, rcNow)
 	if v.Enabled || v.Active || len(v.Chains) != 0 {
 		t.Fatalf("OFF state wrong: enabled=%v active=%v chains=%d", v.Enabled, v.Active, len(v.Chains))
 	}
@@ -22,9 +22,29 @@ func TestRootCauseChainOff(t *testing.T) {
 }
 
 func TestRootCauseChainQuiet(t *testing.T) {
-	v := BuildRootCauseChain(nil, true, rcNow)
+	v := BuildRootCauseChain(nil, nil, true, false, rcNow)
 	if !v.Enabled || v.Active {
 		t.Fatalf("quiet state wrong: enabled=%v active=%v", v.Enabled, v.Active)
+	}
+}
+
+// The multi-hop PROJECTED lane (cap. D) is WITHHELD while gate-pending, even with chains.
+func TestRootCauseChainProjectedGatePending(t *testing.T) {
+	projected := []flow.Chain{{
+		MostUpstreamDegradedNode: "traffic/back",
+		Path:                     []flow.PathStep{{Hop: 1, Upstream: "traffic/back", Downstream: "traffic/mid", Band: &flow.ProjectedBand{Class: "PROJECTED"}}},
+	}}
+	v := BuildRootCauseChain(nil, projected, true, false, rcNow) // gate NOT passed
+	if v.ProjectedActive || len(v.ProjectedChains) != 0 {
+		t.Fatalf("gate-pending must WITHHOLD the projected chains, got active=%v chains=%d", v.ProjectedActive, len(v.ProjectedChains))
+	}
+	if !strings.Contains(v.ProjectedNote, "gate") && !strings.Contains(v.ProjectedNote, "not") {
+		t.Errorf("gate-pending note must say so: %q", v.ProjectedNote)
+	}
+	// When the gate passes, the projected lane surfaces.
+	v2 := BuildRootCauseChain(nil, projected, true, true, rcNow)
+	if !v2.ProjectedActive || len(v2.ProjectedChains) != 1 {
+		t.Errorf("gate-passed must surface the projected chains, got active=%v chains=%d", v2.ProjectedActive, len(v2.ProjectedChains))
 	}
 }
 
@@ -38,7 +58,7 @@ func TestRootCauseChainActive(t *testing.T) {
 			Why: "An upstream service's degradation propagates to its downstream callers.", WhyClass: "AUTHORED",
 		}},
 	}}
-	v := BuildRootCauseChain(chains, true, rcNow)
+	v := BuildRootCauseChain(chains, nil, true, false, rcNow)
 	if !v.Enabled || !v.Active || len(v.Chains) != 1 {
 		t.Fatalf("active state wrong: enabled=%v active=%v chains=%d", v.Enabled, v.Active, len(v.Chains))
 	}

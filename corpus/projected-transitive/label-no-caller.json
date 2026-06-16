@@ -1,0 +1,9 @@
+{
+  "bundle": "projtrans-no-caller",
+  "scenario": "no-caller",
+  "expectChains": 0,
+  "expectRoots": null,
+  "expectPath": null,
+  "independentPairs": null,
+  "note": "a lone forecast root with no caller is a warning, not a cascade — no chain."
+}

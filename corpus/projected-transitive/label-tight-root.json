@@ -1,0 +1,16 @@
+{
+  "bundle": "projtrans-tight-root",
+  "scenario": "tight-root",
+  "expectChains": 1,
+  "expectRoots": [
+    "t/root"
+  ],
+  "expectPath": [
+    [
+      "t/root",
+      "t/caller"
+    ]
+  ],
+  "independentPairs": null,
+  "note": "a ZERO-WIDTH (over-confident) forecast root never collapses the band to a line — the far edge is OPEN (doc 01)."
+}

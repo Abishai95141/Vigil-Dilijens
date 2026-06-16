@@ -1,0 +1,20 @@
+{
+  "bundle": "projtrans-maxhops-bounded",
+  "scenario": "maxhops-bounded",
+  "expectChains": 1,
+  "expectRoots": [
+    "t/n1"
+  ],
+  "expectPath": [
+    [
+      "t/n1",
+      "t/n2"
+    ],
+    [
+      "t/n2",
+      "t/n3"
+    ]
+  ],
+  "independentPairs": null,
+  "note": "a 3-deep chain bounded at maxHops=2 → 2 steps + a stated hop-ceiling gap (the bounded config the operator runs)."
+}

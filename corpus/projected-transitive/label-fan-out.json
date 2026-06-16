@@ -1,0 +1,20 @@
+{
+  "bundle": "projtrans-fan-out",
+  "scenario": "fan-out",
+  "expectChains": 1,
+  "expectRoots": [
+    "t/shared"
+  ],
+  "expectPath": [
+    [
+      "t/shared",
+      "t/callerA"
+    ],
+    [
+      "t/shared",
+      "t/callerB"
+    ]
+  ],
+  "independentPairs": null,
+  "note": "one forecast root impacts TWO direct callers — both hop-1 bands widen equally vs the root."
+}

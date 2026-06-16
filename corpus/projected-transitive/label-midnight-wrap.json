@@ -1,0 +1,20 @@
+{
+  "bundle": "projtrans-midnight-wrap",
+  "scenario": "midnight-wrap",
+  "expectChains": 1,
+  "expectRoots": [
+    "t/back"
+  ],
+  "expectPath": [
+    [
+      "t/back",
+      "t/mid"
+    ],
+    [
+      "t/mid",
+      "t/front"
+    ]
+  ],
+  "independentPairs": null,
+  "note": "a forecast band straddling 00:00Z UTC still widens every hop — no midnight-wrap drop."
+}

@@ -391,7 +391,26 @@ isolated cluster until then.
   MEASURED observed-flow edge + AUTHORED why; the CARDINAL rule held live (none of the ~31 other workloads
   leaked in). RELEASED graph hash UNCHANGED (B adds no graph content — reuses the curated relation); full
   `-race` green; non-gating. The chain reaction is now STITCHED. `corpus/labels/transitive-chain-gate.md`.
-  Next: **Capability D** (forecast the chain's ripple), then **C** (anomaly).
+
+- [x] **Capability D — multi-hop projected cascade (forecast the ripple) (2026-06-16, v3).** The
+  one-hop anticipatory cascade made TRANSITIVE: a single FORECAST root rippling to its transitive
+  callers over observed-flow edges, each downstream node inheriting the root's band INHERITED and
+  WIDENED per hop. New: `flow/projected_transitive.go` `ProjectedTransitiveChains` (BFS over
+  `NeighboursInto`, deterministic; the widening DERIVED from the root band's own half-width, earliest
+  clamped to now; the clock run ONCE at the root, NEVER per hop); `flow.Chain` gains per-step
+  `Band *ProjectedBand` + chain-level `RootBand` (omitempty → the one-hop + MEASURED chains
+  byte-unchanged). Gate `just projected-transitive-gate` PASSED — 6 scenarios, the ABSOLUTE-ZERO
+  floor **BAND-MONOTONICITY** (the band never narrows downstream — a downstream node tighter than its
+  parent = instant fail) + projected-class/one-root-per-chain/fidelity/charter (denylist ALSO bans
+  propagation verbs); pure-fn frozen-corpus determinism guard; 8 unit + 9 python regression tests.
+  Warm-path wiring reuses the SAME warned forecast roots as Phase E, OFF-DIGEST; surface = the
+  PROJECTED lane on `/api/root-cause-chain`, **gate-pending** (`phaseDProjectedTransitiveGatePassed=
+  false`) — withheld until a real 2-hop lead+confirm capture (doc 15 §4.D: "stays dark until a genuine
+  2-hop is observed"; task #128 flips it). LIVE on kind: the lane is wired + computes every tick,
+  surfacing its honest gate-pending state alongside the active MEASURED B chain `back→mid→front`.
+  RELEASED graph hash UNCHANGED; full `-race` green; non-gating. The ripple is now FORECAST.
+  `corpus/labels/projected-transitive-gate.md`. Next: **C** (anomaly: capacity-crossing shipped with A;
+  band-departure = a new off-digest PROJECTED producer behind `--departure-enabled`, over corpus #75).
 
 ## Capability architecture (doc 15) — vertical depth for chain-reaction value (2026-06-16, v3)
 

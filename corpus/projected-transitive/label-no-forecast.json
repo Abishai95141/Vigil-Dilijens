@@ -1,0 +1,9 @@
+{
+  "bundle": "projtrans-no-forecast",
+  "scenario": "no-forecast",
+  "expectChains": 0,
+  "expectRoots": null,
+  "expectPath": null,
+  "independentPairs": null,
+  "note": "flow edges but NO forecast root — no projected cascade, never invented."
+}

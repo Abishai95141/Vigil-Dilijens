@@ -1,0 +1,16 @@
+{
+  "bundle": "projtrans-open-horizon",
+  "scenario": "open-horizon",
+  "expectChains": 1,
+  "expectRoots": [
+    "t/root"
+  ],
+  "expectPath": [
+    [
+      "t/root",
+      "t/caller"
+    ]
+  ],
+  "independentPairs": null,
+  "note": "a root whose far edge is open (crossing may exceed the horizon) propagates an OPEN band — never a collapsed line."
+}

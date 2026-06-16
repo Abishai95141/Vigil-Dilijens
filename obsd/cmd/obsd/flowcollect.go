@@ -34,6 +34,16 @@ const flowEdgeBudget = 90 * time.Second
 // Evidence: corpus/labels/flow-gate-projected-crossservice.md + corpus/crossservice-projected/.
 const phaseECrossServiceGatePassed = true
 
+// phaseDProjectedTransitiveGatePassed gates whether the MULTI-HOP projected cascade
+// (doc 15 cap. D) is surfaced to the operator. The DETERMINISTIC gate
+// (`just projected-transitive-gate`) PASSES — the producer is certified (one forecast
+// root, a band that widens every hop and never collapses, off-digest). But doc 15 §4.D
+// requires a REAL 2-hop lead+confirm capture on the cluster before the OPERATOR sees this
+// new PROJECTED class. FALSE until that live capture is recorded; the lane still COMPUTES
+// every tick (logged, off the digest), withheld from the surface. Mirrors the Phase-E
+// posture before it was flipped.
+const phaseDProjectedTransitiveGatePassed = false
+
 // The cross-service AUTHORED relation surfaced by the warm-path cascade is now
 // CURATED into the released ontology graph (doc 15 Phase C) and read via
 // flow.RelationFromGraph in main.go — no longer from an experimental file path.
