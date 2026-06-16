@@ -70,8 +70,11 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 				bindContainers(res, &cov, rule, em, pod, cfg, now)
 			}
 		case "Pod":
-			// No v1 rule uses Pod scope; fan-out shape is the container path minus
-			// the per-container loop. Listed for vocabulary completeness.
+			// Application-signal rules (doc 15 cap. A) bind to the pod that exposes
+			// the metric, resolving the bar from the pod's customer-declared SLO.
+			for _, pod := range pods {
+				bindPod(res, &cov, rule, em, pod, cfg, now)
+			}
 		case "Node":
 			for _, node := range nodes {
 				bindNode(res, &cov, rule, em, node, cfg, now)
@@ -105,6 +108,10 @@ func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule
 	case "Container":
 		for _, pod := range pods {
 			add(Binding{CEIKey: pod.CEI.Key(), RoleKey: pod.RoleCEI.Key(), Entity: "Container", RuleID: rule.ID, Metric: rule.Metric})
+		}
+	case "Pod":
+		for _, pod := range pods {
+			add(Binding{CEIKey: pod.CEI.Key(), RoleKey: pod.RoleCEI.Key(), Entity: "Pod", RuleID: rule.ID, Metric: rule.Metric})
 		}
 	case "Node":
 		for _, node := range nodes {
@@ -178,6 +185,58 @@ func bindContainers(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, e
 		}
 		res.Bindings = append(res.Bindings, b)
 	}
+}
+
+// bindPod instantiates a Pod-scoped rule against one identified pod (doc 15 cap. A:
+// application-signal rules bind to the pod that EXPOSES the metric, so the bar lives on
+// the same Pod CEI the app fingerprint resolves to). A config-relative rule resolves its
+// bar from the pod's CUSTOMER-DECLARED SLO (PodConfig.SLOs, read from a vigil.io/slo.*
+// annotation — borrowed normativity, exactly like a resources.limit). UNDECLARED =>
+// unbounded/listed, NEVER a learned or default capacity (the charter ban). An
+// absolute/rate Pod rule may carry a flagged default (defensible for a freshness/queue
+// floor, never for load capacity — an authoring discipline, not a code default).
+func bindPod(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, pod identity.InstanceRecord, cfg EntityConfig, now time.Time) {
+	b := Binding{
+		CEIKey: pod.CEI.Key(), RoleKey: pod.RoleCEI.Key(), Entity: "Pod",
+		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
+	}
+	cov.Instantiated++
+	switch rule.Kind {
+	case graph.RuleConfigRelative:
+		value, declared := 0.0, false
+		if pc, ok := cfg.Pod(pod.Namespace, pod.Name); ok {
+			value, declared = readSLOPath(rule.ConfigPath, pc)
+		}
+		if !declared {
+			b.Bar = nil
+			b.Reason = "unbounded: no declared SLO (" + rule.ConfigPath + " not set on the workload)"
+			cov.Unbounded++
+		} else {
+			b.Bar = &ResolvedBar{
+				Kind: rule.Kind, Source: SourceConfig, Flagged: false,
+				ConfigPath: rule.ConfigPath, Factor: rule.Factor,
+				Value: value * rule.Factor, Unit: "declared",
+				Direction: rule.Direction, Window: rule.Window, ResolvedAt: now,
+			}
+			cov.ConfigBound++
+		}
+	case graph.RuleAbsolute, graph.RuleRateOfChange:
+		b.Bar = defaultBar(rule, now)
+		cov.DefaultBound++
+	}
+	res.Bindings = append(res.Bindings, b)
+}
+
+// readSLOPath reads a customer-declared application SLO bar (doc 15 cap. A). The
+// vocabulary is the slo.* config-path family; the value is read verbatim from the pod's
+// declared SLOs (borrowed normativity), NEVER inferred from observed traffic. An absent
+// declaration is the resolvability hole, never silently defaulted.
+func readSLOPath(path string, pc PodConfig) (value float64, declared bool) {
+	if pc.SLOs == nil {
+		return 0, false
+	}
+	v, ok := pc.SLOs[path]
+	return v, ok
 }
 
 // bindNode instantiates a node-scoped rule against one identified node.

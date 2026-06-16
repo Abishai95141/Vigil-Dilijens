@@ -27,6 +27,14 @@ type EntityConfig interface {
 // the resolvability hole, never silently defaulted.
 type PodConfig struct {
 	Containers []ContainerConfig // in spec order (deterministic)
+
+	// SLOs are the pod's CUSTOMER-DECLARED application SLO bars (doc 15 cap. A),
+	// keyed by config-path ("slo.queue.max_depth" -> 1000). Read from the customer's
+	// OWN object (a vigil.io/slo.<metric> annotation) — borrowed normativity, exactly
+	// like a resources.limit. An absent key means UNDECLARED: the app rule binds
+	// unbounded/listed, NEVER a learned-or-default capacity (the charter ban). nil
+	// when the pod declares no SLO.
+	SLOs map[string]float64
 }
 
 // ContainerConfig carries one container's declared limits. 0 = not declared.

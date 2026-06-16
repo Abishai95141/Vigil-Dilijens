@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -11,6 +13,13 @@ import (
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/binding"
 )
+
+// sloAnnotationDomain is the workload-annotation key domain carrying customer-declared
+// application SLO bars (doc 15 cap. A): "vigil.io/slo.queue.max_depth: 1000" declares the
+// config-path slo.queue.max_depth = 1000 (the key minus the domain IS the config path).
+// Borrowed normativity — the customer's own number on the customer's own object, read
+// verbatim, never learned.
+const sloAnnotationDomain = "vigil.io/"
 
 // ConfigSnapshot is a point-in-time, read-only view of the customer's declared
 // configuration (limits, allocatable, storage requests) — the borrowed-normativity
@@ -49,6 +58,23 @@ func SnapshotConfig(ctx context.Context, cs kubernetes.Interface) (*ConfigSnapsh
 				cc.CPULimitMilli = q.MilliValue()
 			}
 			pc.Containers = append(pc.Containers, cc)
+		}
+		// Customer-declared application SLO bars (doc 15 cap. A) from vigil.io/slo.*
+		// annotations. The value is read verbatim; an unparseable value is SKIPPED so
+		// the app pair stays unbounded/listed — never a fabricated bar.
+		for k, v := range p.Annotations {
+			path, ok := strings.CutPrefix(k, sloAnnotationDomain)
+			if !ok || !strings.HasPrefix(path, "slo.") {
+				continue
+			}
+			f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if err != nil {
+				continue
+			}
+			if pc.SLOs == nil {
+				pc.SLOs = map[string]float64{}
+			}
+			pc.SLOs[path] = f
 		}
 		snap.pods[p.Namespace+"/"+p.Name] = pc
 	}

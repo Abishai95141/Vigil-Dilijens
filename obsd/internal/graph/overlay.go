@@ -53,6 +53,19 @@ var knownConfigPaths = map[string]bool{
 	PathNodeAllocatableMemory: true,
 }
 
+// SLOConfigPathPrefix names the customer-declared application-SLO config-path family
+// (doc 15 cap. A): "slo.queue.max_depth", "slo.freshness.max_age", etc. — resolved at
+// bind time from the workload's own vigil.io/slo.* annotation (borrowed normativity).
+// The family is open (any slo.* path), since SLO vocabulary is per-application, but the
+// VALUE is always customer-declared, never learned or defaulted.
+const SLOConfigPathPrefix = "slo."
+
+// knownConfigPath reports whether a config_path is resolvable: a fixed k8s-resource path,
+// or any customer-declared slo.* application SLO path.
+func knownConfigPath(p string) bool {
+	return knownConfigPaths[p] || strings.HasPrefix(p, SLOConfigPathPrefix)
+}
+
 var knownSpans = map[string]bool{SpanEntityLocal: true, SpanFirstOrder: true, SpanSecondOrder: true}
 
 // knownTraversalEdgeTypes is the instance-topology edge vocabulary spans may walk
@@ -549,12 +562,12 @@ func (g *Graph) validateRule(r *ThresholdRule) error {
 	if _, err := r.WindowDuration(); err != nil {
 		return fmt.Errorf("bad window: %w", err)
 	}
-	if r.Eligibility != "" && !knownConfigPaths[r.Eligibility] {
+	if r.Eligibility != "" && !knownConfigPath(r.Eligibility) {
 		return fmt.Errorf("unknown eligibility_config_path %q", r.Eligibility)
 	}
 	switch r.Kind {
 	case RuleConfigRelative:
-		if !knownConfigPaths[r.ConfigPath] {
+		if !knownConfigPath(r.ConfigPath) {
 			return fmt.Errorf("config-relative rule needs a known config_path, got %q", r.ConfigPath)
 		}
 		if r.Factor <= 0 {
