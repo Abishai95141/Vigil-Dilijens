@@ -20,10 +20,13 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-# Node / web (pnpm; lockfile IS committed)
+# Node / web console (pnpm; lockfile IS committed)
 node_modules/
-/web/dist/
-/web/.vite/
+dist/
+.vite/
+*.tsbuildinfo
+# the archived dummy testing UI (preserved in git history under web/, kept locally only)
+web-legacy/
 
 # Local kube context
 *.kubeconfig

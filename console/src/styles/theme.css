@@ -1,0 +1,227 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   Vigil design system — translated verbatim from the brand kit ("Kit. v0.1").
+   The plane stays monochrome. Color is reserved EXCLUSIVELY for operational
+   state (success / warning / error / info). Provenance (MEASURED / PROJECTED /
+   AUTHORED) is carried by FORM — solid / banded / quoted — never by a new hue.
+   "Shape, fill, and pattern carry meaning alongside hue."  The white-filled
+   "now" (Signal/000) is reserved for the single live observed node.
+   ============================================================================ */
+
+@theme {
+  /* — the monochrome plane (11 tiers, Plane/1000 → Signal/000) — */
+  --color-plane: #0a0a0a; /* 1000 · app background, the canvas */
+  --color-surface: #121212; /* 900  · cards, panels, side rails */
+  --color-surface-hi: #181818; /* 800  · hovered / focused / nested */
+  --color-mute: #3f3f3d; /* 700  · disabled, struck-through, retired */
+  --color-ink-low: #6a6a67; /* 500  · tertiary metadata, timestamps, run ids */
+  --color-ink-mid: #a5a5a2; /* 300  · captions, secondary copy, dim graph nodes */
+  --color-ink-soft: #d4d4d2; /* 200  · soft ink */
+  --color-ink: #f0efec; /* 100  · body text + primary UI labels (off-white) */
+  --color-signal: #ffffff; /* 000  · LIVE state. the single observed node. the now */
+
+  /* — hairline rules — */
+  --color-rule: rgba(245, 245, 244, 0.08);
+  --color-rule-strong: rgba(245, 245, 244, 0.16);
+
+  /* — semantic signals (state only, desaturated, never decoration) — */
+  --color-success: #5fbe8a;
+  --color-success-tint: rgba(95, 190, 138, 0.14);
+  --color-success-edge: rgba(95, 190, 138, 0.42);
+  --color-warning: #e6b450;
+  --color-warning-tint: rgba(230, 180, 80, 0.14);
+  --color-warning-edge: rgba(230, 180, 80, 0.42);
+  --color-error: #eb6b5e;
+  --color-error-tint: rgba(235, 107, 94, 0.14);
+  --color-error-edge: rgba(235, 107, 94, 0.42);
+  --color-info: #6ba4e5;
+  --color-info-tint: rgba(107, 164, 229, 0.14);
+  --color-info-edge: rgba(107, 164, 229, 0.42);
+
+  /* — typography — */
+  --font-display: "Plus Jakarta Sans", "Geist", system-ui, -apple-system, sans-serif;
+  --font-body: "Geist", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* — radii — restrained, architectural — */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* — motion — */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--color-rule);
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-plane);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    font-size: 14px;
+    line-height: 1.55;
+    font-feature-settings: "cv01", "ss01";
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    color: var(--color-ink);
+    margin: 0;
+  }
+
+  /* the display headline treatment: heavy lead, light trail ("Master the graph.") */
+  .v-display {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.022em;
+    line-height: 1.02;
+  }
+  .v-display em {
+    font-style: normal;
+    font-weight: 300;
+    color: var(--color-ink-mid);
+  }
+
+  code,
+  .v-mono,
+  pre {
+    font-family: var(--font-mono);
+    font-feature-settings: "zero", "ss01";
+  }
+
+  ::selection {
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--color-signal);
+  }
+
+  /* focus — a hairline ring, never a heavy glow */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 1px var(--color-plane), 0 0 0 2px var(--color-rule-strong);
+  }
+
+  /* scrollbars — thin, recede into the plane */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-mute) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--color-mute);
+    border-radius: 99px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-low);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* — surface tiers as composable panel classes — */
+  .v-panel {
+    background: var(--color-surface);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-lg);
+  }
+  .v-panel-inset {
+    background: var(--color-plane);
+    border: 1px solid var(--color-rule);
+    border-radius: var(--radius-md);
+  }
+
+  /* — the eyebrow / section number, mono, low ink — */
+  .v-eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ink-low);
+  }
+
+  /* — provenance carried by FORM (not hue) — */
+  .v-prov {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: var(--radius-xs);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  /* MEASURED — a fact: solid hairline border, ink fill */
+  .v-prov--measured {
+    color: var(--color-ink);
+    border: 1px solid var(--color-rule-strong);
+    background: var(--color-surface-hi);
+  }
+  /* PROJECTED — a forecast: a banded (striped) fill, never a flat solid */
+  .v-prov--projected {
+    color: var(--color-ink-mid);
+    border: 1px dashed var(--color-rule-strong);
+    background: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 3px,
+      rgba(245, 245, 244, 0.05) 3px,
+      rgba(245, 245, 244, 0.05) 6px
+    );
+  }
+  /* AUTHORED — a curated note: a quote rule on the lead edge */
+  .v-prov--authored {
+    color: var(--color-ink-mid);
+    border: 1px solid var(--color-rule);
+    border-left: 2px solid var(--color-ink-low);
+    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+    background: transparent;
+    font-style: italic;
+    letter-spacing: 0.02em;
+    text-transform: none;
+  }
+}
+
+@layer utilities {
+  /* live "now" — the white-filled state, reserved (the logo's center dot) */
+  .v-live {
+    color: var(--color-signal);
+  }
+  .v-grid-faint {
+    background-image: linear-gradient(var(--color-rule) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-rule) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+}

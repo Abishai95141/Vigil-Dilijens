@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "web",
+      "name": "console",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["-C", "web", "dev"],
+      "runtimeArgs": ["-C", "console", "dev"],
       "port": 5173
     }
   ]

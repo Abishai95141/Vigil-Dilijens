@@ -307,16 +307,20 @@ departure-gate:
       d=""; l=""; for s in $scns; do d="$d ../corpus/departure/departures-$s.jsonl"; l="$l ../corpus/departure/label-$s.json"; done; \
       uv run python -m harness.departure_gate --departures $d --labels $l
 
-# --- Web surfaces (deferred install; Phase 0b+) -----------------------------
+# --- Operator console (console/ — the doc-10 surfacing layer) ---------------
+# The dummy testing UI is archived at web-legacy/. The real console is console/.
 
-web-install:
-    cd web && pnpm install
+console-install:
+    cd console && pnpm install
 
-web-dev:
-    cd web && pnpm dev
+console-dev:
+    cd console && pnpm dev
 
-web-test:
-    cd web && pnpm test
+console-build:
+    cd console && pnpm build
+
+console-check:
+    cd console && pnpm lint && pnpm typecheck
 
 # --- Dev cluster (kind — runs on the Linux box) -----------------------------
 
