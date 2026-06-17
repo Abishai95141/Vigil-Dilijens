@@ -164,6 +164,36 @@ type PodTarget struct {
 	Path      string // e.g. "metrics" (no leading slash)
 }
 
+// FetchKSM fetches kube-state-metrics' /metrics payload(s) through the pods/proxy
+// subresource (the SAME reach as app-metrics), in sorted (ns,name) order for
+// determinism. Unlike FetchPodMetrics, KSM identity rides on the SERIES labels
+// (namespace/pod/uid/node), NOT the scrape-target pod: KSM is a cluster-singleton
+// that reports the whole cluster's object state, so PodNS/PodName are left empty
+// and ingestExposition routes every series through normalize.ksm() by its own
+// labels (doc 14 §3.2 row backbone). Family=FamilyKSM selects that dialect.
+func FetchKSM(ctx context.Context, f PodFetcher, targets []PodTarget) []NodePayload {
+	sorted := append([]PodTarget(nil), targets...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Namespace != sorted[j].Namespace {
+			return sorted[i].Namespace < sorted[j].Namespace
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	out := make([]NodePayload, 0, len(sorted))
+	for _, t := range sorted {
+		path := t.Path
+		if path == "" {
+			path = "metrics"
+		}
+		body, receivedAt, err := f.PodMetrics(ctx, t.Namespace, t.Name, t.Port, path)
+		out = append(out, NodePayload{
+			Node: t.Namespace + "/" + t.Name, Family: identity.FamilyKSM,
+			Body: body, ReceivedAt: receivedAt, Err: err,
+		})
+	}
+	return out
+}
+
 // FetchPodMetrics fetches every app target's /metrics payload (network only, no
 // store writes), in sorted (ns,name) order for determinism. Each payload carries
 // its target pod so ingest attributes every series to that pod's CEI — identity
@@ -327,11 +357,16 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node, 
 // (sub-variable normalization is the doc 02 data_type queue, not this layer).
 // cAdvisor/KSM identity rides on the labels themselves and stays unchanged.
 func streamSubID(family identity.Family, labels map[string]string) string {
-	// node-exporter AND app series both resolve EVERY series to ONE entity CEI (the
-	// node / the scrape-target pod), so without the full label set as part of the
-	// stream identity, unrelated label dimensions would collapse into one ring — a
-	// mis-join. cAdvisor/KSM carry their identity in the labels and stay unchanged.
-	if (family != identity.FamilyNodeExporter && family != identity.FamilyApp) || len(labels) == 0 {
+	// cAdvisor is one-series-per-(CEI,metric): its labels fold ENTIRELY into the
+	// container CEI, so no sub-id is needed. node-exporter, app, AND KSM each
+	// resolve MULTIPLE series to ONE entity CEI — node-exporter/app from the
+	// scrape-target's many label dimensions, KSM because one object's gauge family
+	// carries dimension labels (kube_node_status_condition{condition,status},
+	// kube_pod_status_reason{reason}). Without the full sorted label set as part of
+	// the stream identity, those unrelated dimensions would collapse into one ring
+	// — a mis-join. (A single-series KSM gauge like restarts_total just gets a
+	// redundant, harmless sub-id from its identity labels.)
+	if family == identity.FamilyCAdvisor || len(labels) == 0 {
 		return ""
 	}
 	keys := make([]string, 0, len(labels))

@@ -102,6 +102,8 @@ func run(args []string, stdout, stderr *os.File) error {
 		eventsInt    = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
 		refereeOn    = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
 		departureOn  = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
+		ksmEnabled   = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape, the KSM conditions overlay is not loaded). Detection wires via the authored ksm-conditions overlay.")
+		ksmConds     = fs.String("ksm-conditions", "ontology/graph/overlays/experimental/ksm-conditions-v1.yaml", "G2: the authored KSM detection-conditions overlay (experimental until the ksm-gate promotes it via governance to detect-conditions-v4)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -147,8 +149,18 @@ func run(args []string, stdout, stderr *os.File) error {
 		// hash, and the binding/detection digest, are identical to before.
 		var g *graph.Graph
 		var err error
+		// Experimental lane overlays are merged ON TOP of the released glob ONLY when
+		// their flag is on, so each lane's checks/members exist in the matcher graph
+		// without changing the released hash when off (the app-signal + KSM precedent).
+		var extra []string
 		if *appMetrics {
-			g, err = graph.LoadWithExtraOverlays(*ontology, *overlays, *appConds)
+			extra = append(extra, *appConds)
+		}
+		if *ksmEnabled {
+			extra = append(extra, *ksmConds)
+		}
+		if len(extra) > 0 {
+			g, err = graph.LoadWithExtraOverlays(*ontology, *overlays, extra...)
 		} else {
 			g, err = graph.LoadWithOverlays(*ontology, *overlays)
 		}
@@ -173,7 +185,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -248,7 +260,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -450,8 +462,19 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		logger.Info("app-metrics lane enabled (doc 15 cap. A)",
 			"discovery", "prometheus.io/scrape pods", "slo_source", "vigil.io/slo.* annotations")
 	}
+	// G2 KSM lane: with --ksm-enabled, the scrape cycle ALSO fetches kube-state-metrics'
+	// /metrics (the cluster object-state gauges) in the SAME gated cycle (whole-cycle
+	// ingest = the replay guarantee). KSM is discovered by its own workload identity —
+	// the SAME needle binding's tool-detection uses (obtain.go) — so the lane is
+	// cluster-agnostic: any KSM deployment is found, no service name is hard-coded.
+	var ksmTargets func(context.Context) []observe.PodTarget
+	if ksmEnabled {
+		ksmTargets = func(c context.Context) []observe.PodTarget { return discoverKSMTargets(c, client, logger) }
+		logger.Info("ksm lane enabled (G2 telemetry expansion)",
+			"discovery", "kube-state-metrics workload", "ingest", "kube_* object-state gauges -> CEI streams (in-digest)")
+	}
 	go scrapeLoop(ctx, logger, &gate, ingestor, proxyFetcher, watcher, p.Scrape.Interval.Duration(),
-		appMetricsEnabled, proxyFetcher, appTargets)
+		appMetricsEnabled, proxyFetcher, appTargets, ksmEnabled, ksmTargets)
 
 	// v2 flow lane (doc 15): observe conntrack from the per-node agent and assert
 	// observed-flow edges into the same EdgeStore the tick snapshots. Off by default;
@@ -1278,13 +1301,58 @@ func discoverAppTargets(ctx context.Context, cs kubernetes.Interface, logger *sl
 	return out
 }
 
+// ksmImageNeedle is the substring that identifies a kube-state-metrics workload —
+// the SAME needle binding's tool-detection uses (obtain.go toolNeedles). Selecting
+// by the workload's own identity (not a hard-coded namespace/name) keeps the lane
+// cluster-agnostic: any KSM deployment, in any namespace, is found.
+const ksmImageNeedle = "kube-state-metrics"
+
+// discoverKSMTargets finds running kube-state-metrics pods (by container image, the
+// cluster-agnostic identity) and returns their /metrics scrape targets. Port/path
+// honour the standard prometheus.io annotations when present, else KSM's defaults
+// (:8080/metrics). A failed list degrades the lane this cycle (logged), never fatal.
+func discoverKSMTargets(ctx context.Context, cs kubernetes.Interface, logger *slog.Logger) []observe.PodTarget {
+	pods, err := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Warn("ksm: pod discovery failed this cycle (lane degraded, never fatal)", "err", err)
+		return nil
+	}
+	var out []observe.PodTarget
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		isKSM := false
+		for _, c := range p.Spec.Containers {
+			if strings.Contains(c.Image, ksmImageNeedle) {
+				isKSM = true
+				break
+			}
+		}
+		if !isKSM {
+			continue
+		}
+		port := p.Annotations["prometheus.io/port"]
+		if port == "" {
+			port = "8080"
+		}
+		path := strings.TrimPrefix(p.Annotations["prometheus.io/path"], "/")
+		if path == "" {
+			path = "metrics"
+		}
+		out = append(out, observe.PodTarget{Namespace: p.Namespace, Name: p.Name, Port: port, Path: path})
+	}
+	return out
+}
+
 // scrapeLoop runs the observation ingest cycle (doc 05 M1): scrape every node's
 // cAdvisor endpoint each scrape interval, log the honest summary (resolved /
 // dropped / quarantined / node errors). The first cycle fires as soon as the
 // informers sync so identity joins are warm. Fetching happens outside the store
 // gate (network); ingest holds the write side so evaluation ticks never observe
 // a half-ingested cycle (the replay guarantee, doc 05 §3.5).
-func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration, appEnabled bool, podFetcher observe.PodFetcher, appTargets func(context.Context) []observe.PodTarget) {
+func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration, appEnabled bool, podFetcher observe.PodFetcher, appTargets func(context.Context) []observe.PodTarget, ksmEnabled bool, ksmTargets func(context.Context) []observe.PodTarget) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -1313,10 +1381,22 @@ func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in
 				payloads = append(payloads, observe.FetchPodMetrics(ctx, podFetcher, tg)...)
 			}
 		}
+		// G2 KSM lane (kube-state-metrics): the cluster object-state gauges, in the
+		// SAME gated cycle so eval ticks see whole cycles. KSM identity rides on the
+		// series labels (normalize.ksm), not the scrape target — FetchKSM stamps
+		// FamilyKSM. Only when the flag is on; off ⇒ this block never runs.
+		ksmCount := 0
+		if ksmEnabled && ksmTargets != nil {
+			tg := ksmTargets(ctx)
+			ksmCount = len(tg)
+			if len(tg) > 0 {
+				payloads = append(payloads, observe.FetchKSM(ctx, podFetcher, tg)...)
+			}
+		}
 		gate.Lock()
 		sum := in.IngestPayloads(payloads)
 		gate.Unlock()
-		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d app:%d", len(names), len(neNodes), appCount),
+		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d app:%d ksm:%d", len(names), len(neNodes), appCount, ksmCount),
 			"summary", sum.String(), "streams", in.Hot().Streams())
 	}
 	if waitForSync(ctx, watcher, every) {

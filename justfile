@@ -270,6 +270,22 @@ app-slo-gate:
       f=""; l=""; for s in $scns; do f="$f ../corpus/app-slo/findings-$s.jsonl"; l="$l ../corpus/app-slo/label-$s.json"; done; \
       uv run python -m harness.app_slo_gate --findings $f --labels $l
 
+# KSM lane gate (G2 telemetry expansion / doc 07 §3.1 / doc 11 §3.5) — certifies the
+# kube-state-metrics object-state lane end-to-end, deterministically and offline. KSM
+# rides the IN-digest fingerprint path (unlike the off-digest events lane), so the gate
+# is a golden-fixture gate over the REAL ingest -> normalize -> fingerprint -> matcher
+# pipeline. Floors proven: ingest-fidelity (the restart counter resolves to its container
+# CEI; the multi-dimensional node-condition family splits into DISTINCT streams — no
+# mis-join; the unmapped PDB object metric quarantines, never guessed); detection-fidelity
+# (a crossed restart-rate guard fires a DEGRADED PROBE_FAILURE_RESTART, 1-of-11 members,
+# the bar FLAGGED — borrowed-normativity); silence (under the guard / no variable => no
+# fabricated alarm); cascade-recognition (a throttled crash-looper lights the AUTHORED
+# THROTTLING_CASCADE -> PROBE_FAILURE_RESTART relation, "Probe cascade" verbatim, and
+# topologically-unrelated entities NEVER pair); non-gating (the experimental KSM overlay
+# is OFF the released graph hash). Exit 0 = PASSED; 1 = FAILED.
+ksm-gate:
+    go test -race ./obsd/internal/observe/ ./obsd/internal/detect/ -run 'KSM|ProbeFailureRestart|ThrottleToProbe|ThrottleProbeRestart'
+
 # transitive-chain gate (doc 15 cap. B / doc 11 §3.5) over the frozen corpus in
 # corpus/transitive-chain/ — certifies the transitive root-cause chain: MEASURED-degraded
 # workloads stitched into an ORDERED chain by walking the observed-flow topology, oriented
