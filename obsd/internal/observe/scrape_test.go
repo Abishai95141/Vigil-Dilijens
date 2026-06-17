@@ -65,6 +65,11 @@ func newTestIngestor(t *testing.T) (*Ingestor, *identity.Store) {
 	if _, err := st.Observe(identity.InstanceCoords{Cluster: cluster, Kind: "Node", Name: "worker-1", UID: "node-u1"}, identity.CEI{}, bornAt, identity.StateActive); err != nil {
 		t.Fatal(err)
 	}
+	// A PVC is now a first-class identity instance (the Watcher Observe()s claims): its
+	// KSM object-state series resolve to the real PVC CEI via PVCUID.
+	if _, err := st.Observe(identity.InstanceCoords{Cluster: cluster, Namespace: "shop", Kind: "PersistentVolumeClaim", Name: "data-cart", UID: "pvc-u1"}, identity.CEI{}, bornAt, identity.StateActive); err != nil {
+		t.Fatal(err)
+	}
 	return NewIngestor(identity.NewNormalizer(cluster, st), qss.NewHotStore()), st
 }
 

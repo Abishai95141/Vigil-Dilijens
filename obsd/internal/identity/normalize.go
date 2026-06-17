@@ -91,6 +91,7 @@ const (
 	ReasonMissingLabels  Reason = "missing-identity-labels"
 	ReasonUnknownPod     Reason = "unknown-pod"
 	ReasonUnknownNode    Reason = "unknown-node"
+	ReasonUnknownPVC     Reason = "unknown-pvc"
 	ReasonUnmappedMetric Reason = "unmapped-metric-class"
 	ReasonUnknownFamily  Reason = "unknown-exporter-family"
 	ReasonMissingSource  Reason = "missing-scrape-source"
@@ -162,6 +163,11 @@ type Result struct {
 type Lookup interface {
 	PodUID(namespace, name string, at time.Time) (uid string, ok bool)
 	NodeUID(name string, at time.Time) (uid string, ok bool)
+	// PVCUID returns the UID of the PersistentVolumeClaim that was (namespace, name)
+	// at instant at. Same time-aware contract as PodUID — a PVC is a namespaced,
+	// lifecycle-tracked object (doc 03), so its KSM object-state series join the same
+	// instance CEI its mounts edge uses, never a pseudo-key.
+	PVCUID(namespace, name string, at time.Time) (uid string, ok bool)
 }
 
 // Normalizer applies the per-family normalization maps.
@@ -327,6 +333,22 @@ func (n *Normalizer) ksm(s Series) Result {
 	case strings.HasPrefix(s.Metric, "kube_daemonset_"):
 		return n.role(FamilyKSM, s, "DaemonSet", s.Labels["daemonset"])
 
+	// PersistentVolumeClaims are namespaced, lifecycle-tracked instances (doc 03):
+	// their KSM object-state series (status_phase, status_condition, resource_requests)
+	// resolve to a PVC instance CEI via the time-aware lookup, so they join the SAME
+	// key the mounts edge (a pod mounts its PVC) already uses. A row whose claim is not
+	// in the control-plane view quarantines — never a guessed identity.
+	case strings.HasPrefix(s.Metric, "kube_persistentvolumeclaim_"):
+		ns, name := s.Labels["namespace"], s.Labels["persistentvolumeclaim"]
+		if ns == "" || name == "" {
+			return n.quarantine(FamilyKSM, ReasonMissingLabels)
+		}
+		uid, ok := n.lookup.PVCUID(ns, name, s.joinTime())
+		if !ok {
+			return n.quarantine(FamilyKSM, ReasonUnknownPVC)
+		}
+		return n.pvc(FamilyKSM, ns, name, uid, s.At)
+
 	default:
 		// kube_replicaset_* (an intermediate controller — anchoring it on its
 		// Deployment needs the owner chain, which is M3's resolver), services,
@@ -351,6 +373,16 @@ func (n *Normalizer) nodeExporter(s Series) Result {
 func (n *Normalizer) pod(f Family, ns, name, uid string, at time.Time) Result {
 	cei, err := MintInstance(InstanceCoords{
 		Cluster: n.cluster, Namespace: ns, Kind: "Pod", Name: name, UID: uid,
+	}, at)
+	if err != nil {
+		return n.quarantine(f, ReasonMalformed)
+	}
+	return n.resolved(f, cei)
+}
+
+func (n *Normalizer) pvc(f Family, ns, name, uid string, at time.Time) Result {
+	cei, err := MintInstance(InstanceCoords{
+		Cluster: n.cluster, Namespace: ns, Kind: "PersistentVolumeClaim", Name: name, UID: uid,
 	}, at)
 	if err != nil {
 		return n.quarantine(f, ReasonMalformed)

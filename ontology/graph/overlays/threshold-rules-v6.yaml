@@ -1,0 +1,35 @@
+# Threshold rules — authored overlay v6 (doc 04 §3.4 / G2 telemetry).
+#
+# The KSM object-state lane's PVC-binding bar. PHEN_VOLUME_MOUNT_FAILURE's PVC-anchor
+# member: a PersistentVolumeClaim stuck Pending. The derived single-series gauge
+# kube_persistentvolumeclaim_pending (the {phase="Pending"} row of
+# kube_persistentvolumeclaim_status_phase, selected at ingest) is present (=1) ONLY while
+# the claim IS Pending, so "above 0" IS the unbound state itself.
+#
+# A Pending PVC is a CRITICAL, common operator blind spot: a missing/misnamed storage
+# class, no matching PV, or a zonal mismatch leaves the claim unbound, and every pod that
+# mounts it is stuck unschedulable. Unlike PVC FILL (THR_PVC_USED_VS_REQUESTED, which needs
+# the kubelet's volume-stats — gated out on a CSI-less cluster), the phase gauge is emitted
+# by KSM on EVERY cluster. Structural flagged default — the Pending phase is itself the
+# signal; there is no customer config for a "Pending tolerance".
+overlay: threshold-rules-v6
+version: 6
+author: vigil-engineering
+status: released-v6 (KSM object-state lane — PVC stuck-Pending bar)
+
+rules:
+  - id: THR_PVC_PENDING
+    signal: SIG_kube_persistentvolumeclaim_status_phase_e2c54d37
+    metric: kube_persistentvolumeclaim_pending
+    kind: absolute
+    default: 0
+    direction: above
+    entity_scope: PVC
+    window: 5m
+    rationale: >-
+      PersistentVolumeClaim stuck Pending (PHEN_VOLUME_MOUNT_FAILURE PVC-anchor member).
+      kube_persistentvolumeclaim_pending is the ingest-derived single-series projection of
+      kube_persistentvolumeclaim_status_phase{phase="Pending"} — emitted only while the claim
+      is unbound, so a value above 0 is the Pending state itself. KSM emits the phase gauge on
+      every cluster (no CSI driver required), so this member is observable where the fill bar
+      is not. Structural flagged default; no API/config source for a Pending tolerance.

@@ -117,3 +117,42 @@ this cluster (the documented env constraint) — NOT triggered live.
 
 PID pressure shares this member signal and is a NAMED co-member (a follow-up once the
 derivation strips selector labels so disk|pid can share one derived stream).
+
+## Batch 4 — VOLUME_MOUNT_FAILURE (PVC stuck Pending) + the PVC dark-bar fix (v0.8.0, branch v4)
+Closes the documented PVC "dark bar" AND wires a CRITICAL, LIVE-VERIFIABLE PVC phenomenon. A
+PersistentVolumeClaim that cannot bind (a missing/misnamed storage class, no matching PV, a
+zonal mismatch) sits Pending, and every pod that mounts it is stuck unschedulable — previously
+invisible to Vigil.
+
+THE IDENTITY FIX (code, not graph): the PVC is now a FIRST-CLASS identity instance.
+- identity: the Watcher Observe()s PersistentVolumeClaims into the lifecycle store (upsertPVC,
+  mirroring upsertNode); Lookup gains PVCUID (Store.lookup over the PVC kind); normalize routes
+  kube_persistentvolumeclaim_* to the REAL PVC instance CEI (it was quarantined "unmapped");
+  the binding compiler reads PVCs from the IDENTITY INVENTORY like pods/nodes and keys bindPVC
+  on the real CEI (was a "pvc|ns|name" pseudo-key → StreamUID()="" → dark). This closes the gap
+  binding.go itself flagged ("join identity once 03 tracks PVC lifecycles").
+
+THE DETECTION (governed v0.8.0): threshold-rules-v6 (THR_PVC_PENDING, structural flagged
+default) + detect-conditions-v7 (the PVC-anchor check on PHEN_VOLUME_MOUNT_FAILURE + the PVC
+anchor). Fed by a NEW derivation: kube_persistentvolumeclaim_pending = the {phase="Pending"} row
+of kube_persistentvolumeclaim_status_phase (emitted only while the claim is unbound). Chosen
+over PVC FILL (THR_PVC_USED_VS_REQUESTED) deliberately: fill carries CAP_CSI_DRIVER and is
+correctly gated OUT-OF-SCOPE on a CSI-less cluster (local-path), whereas the phase gauge is
+emitted by KSM everywhere. `govern-classify v0.7.0 v0.8.0` = behavioural-medium.
+
+Go golden floors (-race, in `just ksm-gate`): normalize PVC resolution (resolved / missing-label
+/ unknown-pvc); derivation fidelity (Pending row -> one stream value 1; Bound/Lost NOT derived);
+FIRING (a Pending PVC -> DEGRADED VOLUME_MOUNT_FAILURE, the bar FLAGGED, unobserved members
+NAMED); SILENT (a Bound PVC -> no finding / non-gating); and the DARK-BAR-CLOSED silence test
+(the PVC pair is WATCHED with a real CEI, no PVC no-stream-key silence remains). Frozen-corpus
+regen drift = the GraphVersion stamp ONLY.
+
+LIVE (v0.8.0, kind-vigil) — FIRING CONFIRMED (unlike DISK, this trip is safe to induce): a PVC
+with a nonexistent storageClass (chaos/stuck-pending, zero resources) stays Pending; obsd loads
+v0.8.0 (15 rules, 15 overlays); THR_PVC_PENDING binds 2 PVCs as first-class entities; the KSM
+phase gauge routes to the real PVC CEI (i|<cluster>|chaos|PersistentVolumeClaim|stuck-pending|<uid>);
+the derivation emits kube_persistentvolumeclaim_pending=1; and /api/findings shows
+PHEN_VOLUME_MOUNT_FAILURE firing on it — "MEASURED match · AUTHORED pattern · graph 99aa7ab3",
+honestly DEGRADED (the mounting-pod neighbour member NAMED unobservable — no pod mounts the orphan
+claim). PVC fill (CSI volume-stats) remains the honest CSI-cluster follow-up (local-path emits
+zero kubelet_volume_stats — re-confirmed this session).

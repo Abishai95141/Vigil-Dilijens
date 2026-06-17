@@ -115,10 +115,10 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 		t.Fatalf("loadOverlays: %v", err)
 	}
 	// The production overlay glob (experimental/ excluded): cross-service-v0, spans-v1,
-	// threshold-rules-v1..v5, detect-conditions-v1..v6 = 13 (G2/G2b/DISK added the KSM
+	// threshold-rules-v1..v6, detect-conditions-v1..v7 = 15 (G2/G2b/DISK/PVC added the KSM
 	// object-state lane overlays).
-	if len(ovls) != 13 {
-		t.Fatalf("overlays = %d, want 13", len(ovls))
+	if len(ovls) != 15 {
+		t.Fatalf("overlays = %d, want 15", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {
@@ -132,9 +132,10 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 40 {
 		t.Errorf("merged spans = with %d / missing %d, want 40/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
 	}
-	// 8 v1 + 2 v2 + 2 v3 + 1 v4 (THR_POD_EVICTED, G2b) + 1 v5 (THR_NODE_DISK_PRESSURE, DISK).
-	if g.ThresholdRulesStructured != 14 {
-		t.Errorf("structured rules = %d, want 14", g.ThresholdRulesStructured)
+	// 8 v1 + 2 v2 + 2 v3 + 1 v4 (THR_POD_EVICTED) + 1 v5 (THR_NODE_DISK_PRESSURE) + 1 v6
+	// (THR_PVC_PENDING).
+	if g.ThresholdRulesStructured != 15 {
+		t.Errorf("structured rules = %d, want 15", g.ThresholdRulesStructured)
 	}
 	if g.hasGaps() {
 		t.Error("no gaps should remain with overlays applied (-strict must pass)")

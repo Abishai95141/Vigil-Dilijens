@@ -71,10 +71,20 @@ func silNode(t *testing.T, name, uid string) identity.InstanceRecord {
 	return identity.InstanceRecord{CEI: cei, Kind: "Node", Name: name, UID: uid}
 }
 
+func silPVC(t *testing.T, ns, name, uid string) identity.InstanceRecord {
+	t.Helper()
+	cei, err := identity.MintInstance(identity.InstanceCoords{Cluster: silCluster, Namespace: ns, Kind: "PersistentVolumeClaim", Name: name, UID: uid}, silAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity.InstanceRecord{CEI: cei, Kind: "PersistentVolumeClaim", Namespace: ns, Name: name, UID: uid}
+}
+
 // silCompile compiles a fixture exercising every silence class: two fully-declared
 // pods (watched), one pod with no limits (unbounded), one pod missing config
 // (unresolved), a pod whose CPU limit is absent (eligibility out-of-scope), a node
-// (watched), and a declared PVC (bar resolves but no stream key — the dark-bar).
+// (watched), and a declared PVC — now a first-class identity instance, so its bar binds
+// to a REAL CEI and the pair is WATCHED (the dark-bar, closed).
 func silCompile(t *testing.T) *binding.Result {
 	t.Helper()
 	g, err := graph.LoadWithOverlays(silKGPath, silOverlayDir)
@@ -87,6 +97,7 @@ func silCompile(t *testing.T) *binding.Result {
 		silPod(t, "shop", "payment-x", "uid-p", "payment"),
 		silPod(t, "shop", "ghost-x", "uid-g", "ghost"),
 		silNode(t, "worker-1", "node-uid-1"),
+		silPVC(t, "shop", "data-0", "uid-pvc-0"), // a first-class PVC identity (dark-bar closed)
 	}
 	cfg := silFakeConfig{
 		pods: map[string]binding.PodConfig{
@@ -168,23 +179,32 @@ func TestSilenceLedgerReconcilesWithCoverage(t *testing.T) {
 	}
 }
 
-// TestSilenceLedgerSurfacesPVCDarkBar proves the declared PVC (bar resolves) is
-// surfaced as a no-stream-key silence — the honest dark-bar the harness leads with.
-func TestSilenceLedgerSurfacesPVCDarkBar(t *testing.T) {
+// TestSilenceLedgerPVCDarkBarClosed proves the documented PVC dark-bar is FIXED: a
+// declared PVC is now a first-class identity instance, so its bar binds to the REAL
+// PVC instance CEI (StreamUID resolves) instead of a pseudo-key. The pair is therefore
+// WATCHED — it is no longer surfaced as a no-stream-key silence, and no PVC pseudo-key
+// silence remains in the ledger. (The KSM Pending member rides this exact CEI.)
+func TestSilenceLedgerPVCDarkBarClosed(t *testing.T) {
 	res := silCompile(t)
 	v := BuildSilenceLedger("gv", "v", silAt, res)
-	found := false
+
+	// The PVC's bindings resolve a real stream key, so none is silenced as no-stream-key.
 	for _, row := range v.Silent {
 		if row.Entity == "PVC" && row.ReasonClass == SilenceNoStreamKey {
-			found = true
+			t.Fatalf("the PVC dark-bar must be CLOSED — no PVC no-stream-key silence expected, got %+v", row)
+		}
+	}
+	// And at least one PVC binding is now genuinely WATCHED (a real CEI + a resolved bar).
+	pvcWatched := false
+	for i := range res.Bindings {
+		b := &res.Bindings[i]
+		if b.Entity == "PVC" && b.State == binding.StateBound && b.Bar != nil && b.StreamUID() != "" {
+			pvcWatched = true
 			break
 		}
 	}
-	if !found {
-		t.Fatal("expected a PVC no-stream-key silence (the dark-bar) in the ledger")
-	}
-	if v.Summary.ByReason[SilenceNoStreamKey] < 1 {
-		t.Fatal("expected at least one no-stream-key silence")
+	if !pvcWatched {
+		t.Fatal("expected at least one PVC binding to be watched (real CEI + resolved bar) after the dark-bar fix")
 	}
 }
 

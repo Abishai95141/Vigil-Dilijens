@@ -67,8 +67,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 14 {
-		t.Fatalf("rules = %d, want 14 (8 v1 + 2 v2 + 2 v3 + 1 v4: THR_POD_EVICTED + 1 v5: THR_NODE_DISK_PRESSURE)", len(g.Rules))
+	if len(g.Rules) != 15 {
+		t.Fatalf("rules = %d, want 15 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -122,9 +122,10 @@ func TestOverlayVersionPinning(t *testing.T) {
 	// restart check). v0.6.0 (G2b): + threshold-rules-v4 + detect-conditions-v5 (the
 	// KSM-derived pod-eviction member of EVICTION_MEMORY). v0.7.0 (DISK): +
 	// threshold-rules-v5 + detect-conditions-v6 (the KSM node-condition disk-pressure
-	// member of DISK_PID_INODE_PRESSURE), so 13.
-	if len(merged.Overlays) != 13 {
-		t.Fatalf("overlay provenance records = %d, want 13 (spans, rules v1-v5, conditions v1-v6, cross-service-v0)", len(merged.Overlays))
+	// member of DISK_PID_INODE_PRESSURE). v0.8.0 (PVC): + threshold-rules-v6 +
+	// detect-conditions-v7 (the KSM stuck-Pending member of VOLUME_MOUNT_FAILURE), so 15.
+	if len(merged.Overlays) != 15 {
+		t.Fatalf("overlay provenance records = %d, want 15 (spans, rules v1-v6, conditions v1-v7, cross-service-v0)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

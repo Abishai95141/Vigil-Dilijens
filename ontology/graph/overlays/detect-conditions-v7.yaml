@@ -1,0 +1,49 @@
+# Detection member-conditions — authored overlay v7 (doc 07 §3.1 / G2 telemetry).
+#
+# The KSM (kube-state-metrics) object-state lane, PVC binding. Wires the PVC-anchor member
+# of PHEN_VOLUME_MOUNT_FAILURE — a PersistentVolumeClaim stuck Pending — so a stuck claim
+# (a missing/misnamed storage class, no matching PV, a zonal mismatch) becomes a visible
+# MEASURED finding instead of an invisible reason pods cannot start.
+#
+# This is the payoff of making the PVC a first-class identity instance (doc 03): the claim's
+# KSM object-state series now resolve to the REAL PVC instance CEI (not a pseudo-key), so the
+# derived kube_persistentvolumeclaim_pending gauge lands on a PVC fingerprint the matcher can
+# evaluate. It closes the documented "dark bar" (binding.go: "join identity once 03 tracks PVC
+# lifecycles").
+#
+# Discipline (the per-phenomenon gated unit): the check binds an EXISTING participates_in
+# required member of the named phenomenon (SIG_kube_persistentvolumeclaim_status_phase...,
+# referentially validated at load and by graphlint); the bar (THR_PVC_PENDING) is a structural
+# flagged default (borrowed-normativity clean — Pending IS the state); the metric is a
+# cluster-agnostic derived name, never a service. A Pending claim is a MEASURED required-member
+# observation, never a causal claim. The phenomenon's other required members (the FailedMount /
+# FailedAttachVolume events, the PV-side phase, the scheduler/kube-proxy members) have no check
+# on this signal set and are NAMED unobservable on the finding (degrade-never-fabricate) — so
+# this match is honestly DEGRADED.
+#
+# Non-gating preserved: the CHECK ships in the released graph, but a finding is produced ONLY
+# when obsd actually scrapes KSM (--ksm-enabled) AND a claim IS Pending. Without the scrape
+# there is no kube_persistentvolumeclaim_pending stream; with the scrape but every claim Bound
+# the derived row is never emitted (the Bound/Lost rows carry phase!="Pending"), so the member
+# is unobservable and the per-tick digest is unchanged — every cluster with no stuck PVC behaves
+# byte-identically.
+overlay: detection-conditions-v7
+version: 7
+author: vigil-engineering
+status: released-v7 (KSM object-state lane — PVC stuck-Pending member of VOLUME_MOUNT_FAILURE)
+
+# Anchor (doc 07 §3.2): the PVC-phase member evaluates on the PersistentVolumeClaim itself —
+# the evaluation site is authored, never inferred. (VOLUME_MOUNT_FAILURE is a first-order span;
+# its mount events land on the mounting pod one mounts/runs-on hop away, but the claim-phase
+# anchor member checked here is PVC-local.)
+anchors:
+  PHEN_VOLUME_MOUNT_FAILURE: PVC
+
+checks:
+  PHEN_VOLUME_MOUNT_FAILURE:
+    - signal: SIG_kube_persistentvolumeclaim_status_phase_e2c54d37
+      metric: kube_persistentvolumeclaim_pending
+      facet: level
+      expect: crossed
+      on: anchor
+      note: "the claim's own status phase is Pending (THR_PVC_PENDING, structural flagged default — the derived KSM gauge exists only while the claim is unbound). The PVC-anchor member, observable now that the KSM lane is ingested, the PVC is a first-class identity instance, and the Pending row is derived. A stuck PVC means its mounting pods cannot start; this surfaces that, never a cause."

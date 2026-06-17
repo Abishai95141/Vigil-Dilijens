@@ -1,0 +1,47 @@
+# Graph release v0.8.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.8.0
+graph_version: "sha256:99aa7ab3aed6fccb207b73cddb35ebefd7b364e38c5689f926b688020f142f80"
+created: "2026-06-17"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  KSM object-state lane, batch 4 (PVC coverage — VOLUME_MOUNT_FAILURE): wires the PVC-anchor
+  member of PHEN_VOLUME_MOUNT_FAILURE — a PersistentVolumeClaim stuck Pending — so a claim that
+  cannot bind (a missing/misnamed storage class, no matching PV, a zonal mismatch) becomes a
+  visible MEASURED finding instead of an invisible reason pods cannot start. Adds
+  threshold-rules-v6.yaml (THR_PVC_PENDING) + detect-conditions-v7.yaml (the PVC-anchor check +
+  the PVC anchor declaration). The member is fed by a NEW ingest-time LABEL-SELECT DERIVATION:
+  kube_persistentvolumeclaim_pending is the single-series projection of
+  kube_persistentvolumeclaim_status_phase{phase="Pending"} (emitted only while the claim is
+  unbound). This is the payoff of a deeper change shipped alongside (code, not graph): the PVC
+  is now a FIRST-CLASS identity instance — the Watcher Observe()s PersistentVolumeClaims into the
+  lifecycle store, identity.Lookup gains PVCUID, normalize routes kube_persistentvolumeclaim_*
+  to the REAL PVC instance CEI (no pseudo-key), and the binding compiler keys PVC bindings on
+  that CEI — closing the documented "dark bar" (binding.go: join identity once 03 tracks PVC
+  lifecycles). Chosen over PVC FILL (THR_PVC_USED_VS_REQUESTED) deliberately: fill needs the
+  kubelet's volume-stats, which carry CAP_CSI_DRIVER and are correctly gated OUT-OF-SCOPE on a
+  CSI-less cluster (local-path), whereas the phase gauge is emitted by KSM everywhere — so this
+  member is live-verifiable where fill is not. BEHAVIOURAL-MEDIUM class (a new flagged rule + a
+  new check on an EXISTING required member; no new phenomenon, no edited default). NON-GATING:
+  the check is INERT without the KSM scrape, and even with it the derived row is emitted only
+  while a claim IS Pending (the Bound/Lost rows carry phase!="Pending"), so every cluster with no
+  stuck PVC behaves byte-identically.

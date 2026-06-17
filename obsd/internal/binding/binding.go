@@ -16,8 +16,10 @@ type EntityConfig interface {
 	// Node returns a node's declared (API-reported) allocatable capacity.
 	Node(name string) (NodeConfig, bool)
 	// PVCs enumerates the cluster's PersistentVolumeClaims at discovery time.
-	// (PVC instances are not yet part of the identity inventory; the enumeration
-	// is config-sourced and joins identity once 03 tracks PVC lifecycles.)
+	// (Retained for the config view; PVC bindings are now driven by the IDENTITY
+	// inventory — the Watcher Observe()s claims into the lifecycle store — so a PVC
+	// binding carries the real instance CEI, not a pseudo-key. The compiler reads PVCs
+	// from the inventory like pods/nodes.)
 	PVCs() []PVCRef
 	// PVC returns a claim's declared storage request.
 	PVC(namespace, name string) (PVCConfig, bool)
@@ -131,8 +133,10 @@ type Binding struct {
 
 // StreamUID returns the CEI UID a binding's observation stream carries — the
 // (CEI UID, metric) join key into the hot store. Container streams are keyed by
-// podUID/container (the cAdvisor scope); pod/node by the bare UID. Returns "" for
-// entities with no scraped channel yet (PVC pseudo-keys).
+// podUID/container (the cAdvisor scope); pod/node/PVC by the bare UID (PVCs are now
+// first-class identity instances, so their bars join a real CEI). Returns "" only for
+// keys that carry no instance UID — role-layer (aggregation) CEIs and any entity whose
+// identity has not resolved.
 func (b *Binding) StreamUID() string {
 	parts := strings.Split(b.CEIKey, "|")
 	if len(parts) < 6 || parts[0] != "i" {

@@ -24,6 +24,11 @@ kube_node_status_condition{node="worker-1",condition="DiskPressure",status="fals
 # TYPE kube_pod_status_reason gauge
 kube_pod_status_reason{namespace="shop",pod="web-a",uid="pod-x",reason="Evicted"} 1
 kube_pod_status_reason{namespace="shop",pod="web-a",uid="pod-x",reason="NodeLost"} 0
+# HELP kube_persistentvolumeclaim_status_phase PVC phase (Pending/Bound/Lost).
+# TYPE kube_persistentvolumeclaim_status_phase gauge
+kube_persistentvolumeclaim_status_phase{namespace="shop",persistentvolumeclaim="data-cart",phase="Pending"} 1
+kube_persistentvolumeclaim_status_phase{namespace="shop",persistentvolumeclaim="data-cart",phase="Bound"} 0
+kube_persistentvolumeclaim_status_phase{namespace="shop",persistentvolumeclaim="data-cart",phase="Lost"} 0
 # HELP kube_poddisruptionbudget_status_current_healthy PDB.
 # TYPE kube_poddisruptionbudget_status_current_healthy gauge
 kube_poddisruptionbudget_status_current_healthy{namespace="shop",poddisruptionbudget="web"} 1
@@ -39,12 +44,13 @@ func TestScrapeKSMResolvesByLabelIdentity(t *testing.T) {
 	targets := []PodTarget{{Namespace: "monitoring", Name: "kube-state-metrics", Port: "8080", Path: "metrics"}}
 	sum := in.IngestPayloads(FetchKSM(context.Background(), f, targets))
 
-	// 8 series resolve: 1 restart counter (container) + 5 node-condition series (node:
+	// 11 series resolve: 1 restart counter (container) + 5 node-condition series (node:
 	// Ready true/false, MemoryPressure false, DiskPressure true/false) + 2
-	// pod-status-reason rows (pod). The PDB object metric is unmapped → quarantined.
+	// pod-status-reason rows (pod) + 3 PVC status-phase rows (the claim — now a
+	// first-class identity instance). The PDB object metric is unmapped → quarantined.
 	// (Derived rows are projections, not counted in the scrape accounting.)
-	if sum.SeriesResolved != 8 || sum.SamplesStored != 8 {
-		t.Fatalf("resolved=%d stored=%d, want 8/8 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
+	if sum.SeriesResolved != 11 || sum.SamplesStored != 11 {
+		t.Fatalf("resolved=%d stored=%d, want 11/11 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
 	}
 	if sum.SeriesQuarantine["unmapped-metric-class"] != 1 {
 		t.Errorf("quarantines = %v, want unmapped-metric-class:1 (the PDB object metric)", sum.SeriesQuarantine)
@@ -92,5 +98,18 @@ func TestScrapeKSMResolvesByLabelIdentity(t *testing.T) {
 	}
 	if s, ok := in.Latest(dp[0]); !ok || s.Value != 1 {
 		t.Errorf("derived disk-pressure sample = %+v (ok=%v), want value 1", s, ok)
+	}
+
+	// The PVC DERIVATION (VOLUME_MOUNT_FAILURE): the kube_persistentvolumeclaim_status_phase
+	// rows resolve to the REAL PVC instance CEI (the dark-bar fix — a PVC is now a first-class
+	// identity), and the active Pending row is re-emitted as the clean single-series
+	// kube_persistentvolumeclaim_pending on that PVC CEI. The healthy Bound/Lost rows (value 0)
+	// are NOT derived, so a check never fires on a bound claim.
+	pp := in.StreamsByUIDMetric("pvc-u1", "kube_persistentvolumeclaim_pending")
+	if len(pp) != 1 {
+		t.Fatalf("derived pvc-pending streams = %v, want exactly 1 (the Pending row, value>0)", pp)
+	}
+	if s, ok := in.Latest(pp[0]); !ok || s.Value != 1 {
+		t.Errorf("derived pvc-pending sample = %+v (ok=%v), want value 1", s, ok)
 	}
 }

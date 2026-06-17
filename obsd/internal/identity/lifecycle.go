@@ -346,6 +346,14 @@ func (s *Store) NodeUID(name string, at time.Time) (string, bool) {
 	return s.lookup("Node", "", name, at)
 }
 
+// PVCUID returns the UID of the PersistentVolumeClaim that was (namespace, name) at
+// instant at. Implements Lookup. PVCs are Observe()d into the store like pods/nodes
+// (the Watcher's PVC informer), so the same time-aware succession disambiguation
+// applies — a recreated claim of the same name resolves to the correct generation.
+func (s *Store) PVCUID(namespace, name string, at time.Time) (string, bool) {
+	return s.lookup("PersistentVolumeClaim", namespace, name, at)
+}
+
 func (s *Store) lookup(kind, namespace, name string, at time.Time) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

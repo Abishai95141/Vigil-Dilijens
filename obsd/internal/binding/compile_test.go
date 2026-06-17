@@ -24,8 +24,8 @@ func loadGraph(t *testing.T) *graph.Graph {
 	if err != nil {
 		t.Fatalf("LoadWithOverlays: %v", err)
 	}
-	if len(g.Rules) != 14 {
-		t.Fatalf("rules = %d, want 14 (8 v1 + 2 v2 + 2 v3 + 1 v4: THR_POD_EVICTED + 1 v5: THR_NODE_DISK_PRESSURE)", len(g.Rules))
+	if len(g.Rules) != 15 {
+		t.Fatalf("rules = %d, want 15 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING)", len(g.Rules))
 	}
 	return g
 }
@@ -50,6 +50,15 @@ func node(t *testing.T, name, uid string) identity.InstanceRecord {
 		t.Fatal(err)
 	}
 	return identity.InstanceRecord{CEI: cei, Kind: "Node", Name: name, UID: uid}
+}
+
+func pvc(t *testing.T, ns, name, uid string) identity.InstanceRecord {
+	t.Helper()
+	cei, err := identity.MintInstance(identity.InstanceCoords{Cluster: cluster, Namespace: ns, Kind: "PersistentVolumeClaim", Name: name, UID: uid}, compileAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity.InstanceRecord{CEI: cei, Kind: "PersistentVolumeClaim", Namespace: ns, Name: name, UID: uid}
 }
 
 // fakeConfig is a deterministic EntityConfig backed by maps.
@@ -93,6 +102,7 @@ func boutiqueFixture(t *testing.T) ([]identity.InstanceRecord, fakeConfig) {
 		pod(t, "shop", "payment-x", "uid-p", "Deployment", "payment"),
 		pod(t, "shop", "ghost-x", "uid-g", "Deployment", "ghost"),
 		node(t, "worker-1", "node-uid-1"),
+		pvc(t, "shop", "data-0", "uid-pvc-0"), // PVCs are now first-class identity instances
 	}
 	cfg := fakeConfig{
 		pods: map[string]PodConfig{

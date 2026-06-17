@@ -17,6 +17,7 @@ type interval struct {
 type fakeLookup struct {
 	pods  map[string][]interval // key: ns + "/" + name
 	nodes map[string][]interval // key: node name
+	pvcs  map[string][]interval // key: ns + "/" + name
 }
 
 func lookupIn(ivs []interval, at time.Time) (string, bool) {
@@ -36,6 +37,10 @@ func (f *fakeLookup) NodeUID(name string, at time.Time) (string, bool) {
 	return lookupIn(f.nodes[name], at)
 }
 
+func (f *fakeLookup) PVCUID(ns, name string, at time.Time) (string, bool) {
+	return lookupIn(f.pvcs[ns+"/"+name], at)
+}
+
 // --- fixtures ----------------------------------------------------------------
 
 var (
@@ -48,6 +53,9 @@ var (
 		},
 		nodes: map[string][]interval{
 			"worker-1": {{uid: "uid-node-1", from: tBase}},
+		},
+		pvcs: map[string][]interval{
+			"shop/data-cart": {{uid: "uid-pvc-1", from: tBase}},
 		},
 	}
 )
@@ -393,7 +401,7 @@ func TestKSMDeploymentBindsRoleMatchingDeriveRole(t *testing.T) {
 // Unmapped KSM classes (e.g. ReplicaSet — needs the owner chain) quarantine with a
 // stated reason rather than guessing an anchor.
 func TestKSMUnmappedClassQuarantines(t *testing.T) {
-	for _, metric := range []string{"kube_replicaset_status_replicas", "kube_persistentvolumeclaim_info", "kube_service_info"} {
+	for _, metric := range []string{"kube_replicaset_status_replicas", "kube_service_info"} {
 		r := newNorm().Normalize(Series{
 			Family: FamilyKSM, Metric: metric,
 			Labels: map[string]string{"namespace": "shop"},
@@ -402,6 +410,41 @@ func TestKSMUnmappedClassQuarantines(t *testing.T) {
 		if r.Outcome != OutcomeQuarantined || r.Reason != ReasonUnmappedMetric {
 			t.Errorf("%s: outcome=%s reason=%q, want quarantined/%s", metric, r.Outcome, r.Reason, ReasonUnmappedMetric)
 		}
+	}
+}
+
+// kube_persistentvolumeclaim_* resolves to the PVC instance CEI via the time-aware
+// lookup (the dark-bar fix: PVC object-state series join the real claim, not a
+// pseudo-key). A row missing the claim label is malformed (missing-identity-labels); a
+// claim the control plane has not seen quarantines (unknown-pvc) — never guessed.
+func TestKSMPVCResolvesToInstanceCEI(t *testing.T) {
+	// Resolved: the known claim shop/data-cart -> a PersistentVolumeClaim instance CEI.
+	r := newNorm().Normalize(Series{
+		Family: FamilyKSM, Metric: "kube_persistentvolumeclaim_status_phase",
+		Labels: map[string]string{"namespace": "shop", "persistentvolumeclaim": "data-cart", "phase": "Pending"},
+		At:     at(time.Minute),
+	})
+	if r.Outcome != OutcomeResolved {
+		t.Fatalf("PVC status_phase: outcome=%s reason=%q, want resolved", r.Outcome, r.Reason)
+	}
+	if r.CEI.Kind != "PersistentVolumeClaim" || r.CEI.UID != "uid-pvc-1" {
+		t.Errorf("PVC CEI = %+v, want Kind=PersistentVolumeClaim UID=uid-pvc-1", r.CEI)
+	}
+	// Missing the claim label: malformed, not guessed.
+	miss := newNorm().Normalize(Series{
+		Family: FamilyKSM, Metric: "kube_persistentvolumeclaim_status_phase",
+		Labels: map[string]string{"namespace": "shop"}, At: at(time.Minute),
+	})
+	if miss.Outcome != OutcomeQuarantined || miss.Reason != ReasonMissingLabels {
+		t.Errorf("PVC without claim label: %s/%q, want quarantined/%s", miss.Outcome, miss.Reason, ReasonMissingLabels)
+	}
+	// Unknown claim: quarantined unknown-pvc, never a guessed identity.
+	unk := newNorm().Normalize(Series{
+		Family: FamilyKSM, Metric: "kube_persistentvolumeclaim_status_phase",
+		Labels: map[string]string{"namespace": "shop", "persistentvolumeclaim": "ghost"}, At: at(time.Minute),
+	})
+	if unk.Outcome != OutcomeQuarantined || unk.Reason != ReasonUnknownPVC {
+		t.Errorf("unknown PVC: %s/%q, want quarantined/%s", unk.Outcome, unk.Reason, ReasonUnknownPVC)
 	}
 }
 

@@ -23,25 +23,24 @@ import (
 func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConfig, avail *AvailabilityReport, now time.Time) *Result {
 	res := &Result{GraphVersion: g.Version, At: now}
 
-	// Deterministic input views: pods and nodes sorted by CEI key; PVC list sorted.
-	var pods, nodes []identity.InstanceRecord
+	// Deterministic input views: pods, nodes, and PVCs sorted by CEI key. PVCs are now
+	// first-class identity instances (the Watcher Observe()s them, doc 03), so they ride
+	// the SAME inventory as pods/nodes — their KSM object-state series join the real
+	// instance CEI, not a pseudo-key (the documented dark-bar fix).
+	var pods, nodes, pvcs []identity.InstanceRecord
 	for _, r := range inventory {
 		switch r.Kind {
 		case "Pod":
 			pods = append(pods, r)
 		case "Node":
 			nodes = append(nodes, r)
+		case "PersistentVolumeClaim":
+			pvcs = append(pvcs, r)
 		}
 	}
 	sort.Slice(pods, func(i, j int) bool { return pods[i].CEI.Key() < pods[j].CEI.Key() })
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].CEI.Key() < nodes[j].CEI.Key() })
-	pvcs := cfg.PVCs()
-	sort.Slice(pvcs, func(i, j int) bool {
-		if pvcs[i].Namespace != pvcs[j].Namespace {
-			return pvcs[i].Namespace < pvcs[j].Namespace
-		}
-		return pvcs[i].Name < pvcs[j].Name
-	})
+	sort.Slice(pvcs, func(i, j int) bool { return pvcs[i].CEI.Key() < pvcs[j].CEI.Key() })
 
 	// Rules are already sorted by ID (graph loader invariant).
 	for _, rule := range g.Rules {
@@ -95,7 +94,7 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 // out-of-scope state with one stated reason (signal unobtainable here). The pairs
 // still EXIST in the report — "recorded as out-of-scope, not failure" and never
 // silently absent (doc 04 §3.1.1, §3.5).
-func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, reason string, pods, nodes []identity.InstanceRecord, pvcs []PVCRef) {
+func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, reason string, pods, nodes, pvcs []identity.InstanceRecord) {
 	add := func(b Binding) {
 		b.State = StateOutOfScope
 		b.Validation = ValidationSuspect
@@ -118,8 +117,8 @@ func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule
 			add(Binding{CEIKey: node.CEI.Key(), Entity: "Node", RuleID: rule.ID, Metric: rule.Metric})
 		}
 	case "PVC":
-		for _, ref := range pvcs {
-			add(Binding{CEIKey: "pvc|" + ref.Namespace + "|" + ref.Name, Entity: "PVC", RuleID: rule.ID, Metric: rule.Metric})
+		for _, rec := range pvcs {
+			add(Binding{CEIKey: rec.CEI.Key(), Entity: "PVC", RuleID: rule.ID, Metric: rule.Metric})
 		}
 	}
 }
@@ -302,14 +301,18 @@ func bindNode(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emis
 	res.Bindings = append(res.Bindings, b)
 }
 
-// bindPVC instantiates a PVC-scoped rule against one claim.
-func bindPVC(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, ref PVCRef, cfg EntityConfig, now time.Time) {
+// bindPVC instantiates a PVC-scoped rule against one claim. The claim is a first-class
+// identity instance (rec), so its binding carries the REAL instance CEI key — the same
+// key its KSM object-state streams and its mounts edge use — not a pseudo-key. This is
+// the documented dark-bar fix (binding.go: "join identity once 03 tracks PVC lifecycles"):
+// StreamUID() now resolves, so a PVC pair becomes genuinely watchable.
+func bindPVC(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, rec identity.InstanceRecord, cfg EntityConfig, now time.Time) {
 	b := Binding{
-		CEIKey: "pvc|" + ref.Namespace + "|" + ref.Name, Entity: "PVC",
+		CEIKey: rec.CEI.Key(), Entity: "PVC",
 		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
 	}
 	cov.Instantiated++
-	pc, ok := cfg.PVC(ref.Namespace, ref.Name)
+	pc, ok := cfg.PVC(rec.Namespace, rec.Name)
 	if rule.Kind == graph.RuleConfigRelative {
 		if !ok || pc.RequestedStorageBytes == 0 {
 			b.Bar = nil

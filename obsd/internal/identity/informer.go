@@ -115,6 +115,11 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 			UpdateFunc: func(_, obj any) { w.upsertNode(obj) },
 			DeleteFunc: w.deleteNode,
 		}},
+		{"pvc", pvcInformer, cache.ResourceEventHandlerFuncs{
+			AddFunc:    func(obj any) { w.upsertPVC(obj) },
+			UpdateFunc: func(_, obj any) { w.upsertPVC(obj) },
+			DeleteFunc: w.deletePVC,
+		}},
 		{"endpointslice", sliceInformer, cache.ResourceEventHandlerFuncs{
 			AddFunc:    w.onEndpointSliceAdd,
 			UpdateFunc: w.onEndpointSliceUpdate,
@@ -262,6 +267,44 @@ func (w *Watcher) deleteNode(obj any) {
 	inst := InstanceCoords{Cluster: w.cluster, Kind: "Node", Name: node.Name, UID: string(node.UID)}
 	w.store.TerminateInstance(inst, deletionTime(node.DeletionTimestamp, w.clock))
 	w.deleteNodeEdges(node)
+}
+
+// upsertPVC observes a PersistentVolumeClaim into the lifecycle store so its KSM
+// object-state series (status_phase, resource_requests) resolve to a real instance
+// CEI — the documented "join identity once 03 tracks PVC lifecycles" gap (binding.go),
+// now closed. A PVC is a namespaced object with no role layer (RoleCEI stays zero); it
+// is StateActive once it exists (its phase — Pending/Bound — is a separate MEASURED
+// observation, not the identity state). The pvcLister already feeds the mounts edge;
+// this makes the same claim a first-class observable entity.
+func (w *Watcher) upsertPVC(obj any) {
+	pvc, ok := obj.(*corev1.PersistentVolumeClaim)
+	if !ok {
+		return
+	}
+	inst := InstanceCoords{
+		Cluster: w.cluster, Namespace: pvc.Namespace, Kind: "PersistentVolumeClaim",
+		Name: pvc.Name, UID: string(pvc.UID),
+	}
+	if _, err := w.store.Observe(inst, CEI{}, pvc.CreationTimestamp.Time, StateActive); err != nil {
+		w.logger.Warn("identity: pvc observe failed", "namespace", pvc.Namespace, "pvc", pvc.Name, "err", err)
+	}
+}
+
+func (w *Watcher) deletePVC(obj any) {
+	pvc, ok := obj.(*corev1.PersistentVolumeClaim)
+	if !ok {
+		if tomb, isTomb := obj.(cache.DeletedFinalStateUnknown); isTomb {
+			pvc, ok = tomb.Obj.(*corev1.PersistentVolumeClaim)
+		}
+		if !ok {
+			return
+		}
+	}
+	inst := InstanceCoords{
+		Cluster: w.cluster, Namespace: pvc.Namespace, Kind: "PersistentVolumeClaim",
+		Name: pvc.Name, UID: string(pvc.UID),
+	}
+	w.store.TerminateInstance(inst, deletionTime(pvc.DeletionTimestamp, w.clock))
 }
 
 // --- helpers -----------------------------------------------------------------

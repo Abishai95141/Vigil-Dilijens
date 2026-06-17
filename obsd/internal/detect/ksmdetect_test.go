@@ -310,6 +310,75 @@ func TestDiskPressureSilentWhenHealthy(t *testing.T) {
 	}
 }
 
+// pvcPendingFP: a PersistentVolumeClaim stuck Pending — the derived KSM gauge
+// kube_persistentvolumeclaim_pending exists (=1, above the structural flagged bar of 0)
+// ONLY while the claim is unbound. The fingerprint Kind is "PVC" (the binding Entity),
+// the matcher's authored anchor for VOLUME_MOUNT_FAILURE.
+func pvcPendingFP(at time.Time, pending bool) observe.Fingerprint {
+	fp := observe.Fingerprint{
+		CEIKey:    "i|cl|shop|PersistentVolumeClaim|data-cart|pvc-u1",
+		Namespace: "shop", Name: "data-cart", Kind: "PVC", EvaluatedAt: at,
+	}
+	if pending {
+		fp.Thresholds = []observe.VariableThreshold{{
+			RuleID: "THR_PVC_PENDING", Metric: "kube_persistentvolumeclaim_pending",
+			State: observe.StateAbove, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-pvc", SampleAt: at, How: "gauge-level"},
+		}}
+	}
+	return fp
+}
+
+// VOLUME_MOUNT_FAILURE (PVC): a PersistentVolumeClaim stuck Pending produces a DEGRADED
+// MEASURED finding — the PVC-anchor member observable now that the PVC is a first-class
+// identity instance (the dark-bar fix) and the Pending row is derived. Honestly DEGRADED:
+// only the claim-phase member is observable; the FailedMount/FailedAttachVolume events, the
+// PV-side phase, and the scheduler/kube-proxy members are NAMED unobserved.
+func TestPVCPendingFiresVolumeMountFailure(t *testing.T) {
+	m := NewMatcher(loadKSMGraph(t))
+	topo := edgeStore(t, evalAt.Add(-10*time.Second))
+
+	out := m.Match([]observe.Fingerprint{pvcPendingFP(evalAt, true)}, nil, topo, w)
+	f := findPhen(out, "PHEN_VOLUME_MOUNT_FAILURE")
+	if f == nil {
+		t.Fatalf("PHEN_VOLUME_MOUNT_FAILURE must fire when a PVC is stuck Pending; findings: %+v", out)
+	}
+	if f.Quality != QualityDegraded {
+		t.Errorf("quality = %s, want degraded (only the PVC-phase member is observable here)", f.Quality)
+	}
+	if f.RequiredMet != 1 {
+		t.Errorf("RequiredMet = %d, want 1 (the Pending claim)", f.RequiredMet)
+	}
+	hasPending := false
+	for _, mem := range f.Members {
+		if mem.Metric == "kube_persistentvolumeclaim_pending" {
+			hasPending = true
+			if !mem.BarFlagged {
+				t.Errorf("the PVC-pending bar must be a FLAGGED structural default")
+			}
+		}
+	}
+	if !hasPending {
+		t.Errorf("the KSM-derived PVC-pending member must be in the finding evidence: %+v", f.Members)
+	}
+	if len(f.Unobservable) == 0 {
+		t.Errorf("the unobservable required members must be NAMED (degrade-never-fabricate)")
+	}
+}
+
+// A bound PVC (no Pending → the derived gauge is never emitted, so no pending variable)
+// produces NO finding. This is also the NON-GATING assertion: the released v7 check is
+// INERT without a stuck claim, so a cluster whose PVCs are all Bound sees byte-identical
+// detection.
+func TestPVCBoundSilent(t *testing.T) {
+	m := NewMatcher(loadKSMGraph(t))
+	topo := edgeStore(t, evalAt.Add(-10*time.Second))
+	out := m.Match([]observe.Fingerprint{pvcPendingFP(evalAt, false)}, nil, topo, w)
+	if f := findPhen(out, "PHEN_VOLUME_MOUNT_FAILURE"); f != nil {
+		t.Fatalf("a Bound PVC must not fire VOLUME_MOUNT_FAILURE; got %+v", f)
+	}
+}
+
 // A throttle on one pod and a restart burst on an UNRELATED pod is two findings, not
 // one story — the cascade must NOT pair topologically-unrelated entities.
 func TestThrottleProbeRestartUnrelatedNoCascade(t *testing.T) {

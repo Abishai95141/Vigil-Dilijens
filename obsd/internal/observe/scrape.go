@@ -429,6 +429,14 @@ var ksmDerivations = []ksmDerivation{
 	// NAMED co-member on the degraded finding, a trivial follow-up once the derivation strips
 	// selector labels so disk|pid can share one derived stream.)
 	{source: "kube_node_status_condition", match: map[string]string{"condition": "DiskPressure", "status": "true"}, derived: "kube_node_status_disk_pressure"},
+	// PVC stuck Pending: the Pending row of a claim's status-phase gauge (PHEN_VOLUME_MOUNT_FAILURE
+	// PVC-anchor member). A PVC that cannot bind (no matching PV, a missing/misnamed storage class,
+	// a zonal mismatch) sits Pending, and every pod that mounts it is stuck unschedulable — a
+	// CRITICAL, common operator blind spot. The {phase="Pending"} row is =1 only while the claim IS
+	// Pending (the Bound/Lost rows carry phase!="Pending"), so "above 0" is the stuck state itself.
+	// The derived name keeps the kube_persistentvolumeclaim_ prefix so normalize.ksm() routes it to
+	// the SAME PVC instance CEI as its parent. Cluster-agnostic: KSM emits this on every cluster.
+	{source: "kube_persistentvolumeclaim_status_phase", match: map[string]string{"phase": "Pending"}, derived: "kube_persistentvolumeclaim_pending"},
 }
 
 // deriveKSM re-emits the active selected rows of a KSM series under their clean
