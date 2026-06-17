@@ -1,0 +1,37 @@
+# Graph release v0.5.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.5.0
+graph_version: "sha256:3cae50c4c6a92d2097ce3acccec34de011027e834478b172f4367c48eb65bb5c"
+created: "2026-06-17"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+summary: >-
+  KSM object-state lane wiring (graph-robustness #2 G2): the FIRST released detection
+  condition sourced from a kube-state-metrics gauge. Adds detect-conditions-v4.yaml,
+  binding the container restart-counter member of PHEN_PROBE_FAILURE_RESTART
+  (SIG_container_restart_count..., metric kube_pod_container_status_restarts_total) to
+  the already-released rate guard THR_CONTAINER_RESTARTS_RATE (>3 restarts / 15m, a
+  FLAGGED ontology default — borrowed-normativity clean, there is no customer config for
+  restart tolerance). detect-conditions-v3 deliberately left this member UNCHECKED
+  ("the KSM-side restart/lastState members have no scrapable channel here"); the G2 KSM
+  ingest lane provides the channel. BEHAVIOURAL-MEDIUM class: a new detection CHECK on an
+  EXISTING required member (no new phenomenon, no new member, no edited default). The
+  check is the FIRST in-digest member-check for this phenomenon (until now it was only
+  reachable off-digest via the CrashLoopBackOff event lane) and completes the authored
+  THROTTLING_CASCADE -> PROBE_FAILURE_RESTART relation for live cascade recognition.
+  NON-GATING: the check is INERT until obsd scrapes KSM (--ksm-enabled) — without the
+  scrape there is no restart stream, the member is unobservable, and every cluster's
+  per-tick detection digest is byte-identical. Live-verified on kind-vigil: the cascade
+  lit up end-to-end ("Probe cascade" verbatim) on a real CPU-throttled crash-looper.

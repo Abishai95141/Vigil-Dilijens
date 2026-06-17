@@ -18,15 +18,15 @@ import (
 // THROTTLING_CASCADE -> PROBE_FAILURE_RESTART relation for live cascade recognition,
 // while staying honestly DEGRADED (1 of 11 required members observable here).
 
-const ksmOverlayPath = "../../../ontology/graph/overlays/experimental/ksm-conditions-v1.yaml"
-
-// loadKSMGraph loads the base KG + the RELEASED overlays + the experimental KSM
-// overlay — the graph obsd's matcher uses behind --ksm-enabled.
+// loadKSMGraph loads the base KG + the RELEASED overlays — which now include the
+// KSM checks (detect-conditions-v4, promoted via governance). The check is part of
+// the released graph; a finding is produced only when obsd actually scrapes KSM
+// (--ksm-enabled), which is what makes the restart member observable.
 func loadKSMGraph(t *testing.T) *graph.Graph {
 	t.Helper()
-	g, err := graph.LoadWithExtraOverlays(kgPath, overlayDir, ksmOverlayPath)
+	g, err := graph.LoadWithOverlays(kgPath, overlayDir)
 	if err != nil {
-		t.Fatalf("LoadWithExtraOverlays(ksm): %v", err)
+		t.Fatalf("LoadWithOverlays: %v", err)
 	}
 	return g
 }
@@ -139,27 +139,20 @@ func TestThrottleToProbeRestartCascade(t *testing.T) {
 	}
 }
 
-// NON-GATING: the KSM conditions overlay lives under overlays/experimental/, which
-// the production glob skips — so it NEVER changes the released graph hash. Loading the
-// production overlays alone yields one version; adding the KSM overlay yields a
-// DIFFERENT (lane-specific) version. The released hash — and thus the deterministic
-// detection digest for every cluster without --ksm-enabled — is untouched.
-func TestKSMOverlayOffTheReleasedHash(t *testing.T) {
-	released, err := graph.LoadWithOverlays(kgPath, overlayDir)
-	if err != nil {
-		t.Fatalf("LoadWithOverlays(production): %v", err)
+// NON-GATING: the v4 KSM check is part of the released graph, but it is INERT until
+// obsd scrapes KSM. A fingerprint with NO restart variable (the off-by-default state,
+// no --ksm-enabled) produces no PROBE_FAILURE_RESTART finding — so a cluster without
+// the KSM scrape sees byte-identical detection. (The keystone "silent when unobserved"
+// case proves this directly; this is the explicit released-but-inert assertion.)
+func TestKSMCheckReleasedButInertWithoutScrape(t *testing.T) {
+	m := NewMatcher(loadKSMGraph(t))
+	// A fully-formed container fingerprint carrying every NON-KSM signature (so the
+	// graph is exercised) but no KSM restart variable: no finding is invented.
+	noKSM := observe.Fingerprint{
+		CEIKey: containerKey, Namespace: "shop", Name: "app", Kind: "Container", EvaluatedAt: evalAt,
 	}
-	withKSM := loadKSMGraph(t)
-	if released.Version == "" || withKSM.Version == "" {
-		t.Fatalf("graph versions must be set (released=%q withKSM=%q)", released.Version, withKSM.Version)
-	}
-	if released.Version == withKSM.Version {
-		t.Errorf("the KSM overlay must change the LANE version (else it is silently in the released hash)")
-	}
-	// And the production-only load is stable (no hidden dependence on the experimental dir).
-	again, _ := graph.LoadWithOverlays(kgPath, overlayDir)
-	if again.Version != released.Version {
-		t.Errorf("released hash must be reproducible: %q vs %q", again.Version, released.Version)
+	if f := findPhen(m.MatchFingerprint(noKSM), "PHEN_PROBE_FAILURE_RESTART"); f != nil {
+		t.Fatalf("the released v4 check must be INERT without a KSM restart stream; got %+v", f)
 	}
 }
 

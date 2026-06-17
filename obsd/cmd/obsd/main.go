@@ -102,8 +102,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		eventsInt    = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
 		refereeOn    = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
 		departureOn  = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
-		ksmEnabled   = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape, the KSM conditions overlay is not loaded). Detection wires via the authored ksm-conditions overlay.")
-		ksmConds     = fs.String("ksm-conditions", "ontology/graph/overlays/experimental/ksm-conditions-v1.yaml", "G2: the authored KSM detection-conditions overlay (experimental until the ksm-gate promotes it via governance to detect-conditions-v4)")
+		ksmEnabled   = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -151,13 +150,13 @@ func run(args []string, stdout, stderr *os.File) error {
 		var err error
 		// Experimental lane overlays are merged ON TOP of the released glob ONLY when
 		// their flag is on, so each lane's checks/members exist in the matcher graph
-		// without changing the released hash when off (the app-signal + KSM precedent).
+		// without changing the released hash when off (the app-signal precedent). The
+		// KSM checks are now RELEASED (detect-conditions-v4, in the glob), so --ksm-enabled
+		// gates only the SCRAPE — without it the kube_* streams are absent and the v4
+		// checks stay unobservable (the per-tick digest is unchanged).
 		var extra []string
 		if *appMetrics {
 			extra = append(extra, *appConds)
-		}
-		if *ksmEnabled {
-			extra = append(extra, *ksmConds)
 		}
 		if len(extra) > 0 {
 			g, err = graph.LoadWithExtraOverlays(*ontology, *overlays, extra...)

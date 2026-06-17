@@ -281,8 +281,9 @@ app-slo-gate:
 # the bar FLAGGED — borrowed-normativity); silence (under the guard / no variable => no
 # fabricated alarm); cascade-recognition (a throttled crash-looper lights the AUTHORED
 # THROTTLING_CASCADE -> PROBE_FAILURE_RESTART relation, "Probe cascade" verbatim, and
-# topologically-unrelated entities NEVER pair); non-gating (the experimental KSM overlay
-# is OFF the released graph hash). Exit 0 = PASSED; 1 = FAILED.
+# topologically-unrelated entities NEVER pair); non-gating (the released v4 check is INERT
+# without the KSM scrape — no restart stream => no finding => byte-identical detection).
+# Exit 0 = PASSED; 1 = FAILED.
 ksm-gate:
     go test -race ./obsd/internal/observe/ ./obsd/internal/detect/ -run 'KSM|ProbeFailureRestart|ThrottleToProbe|ThrottleProbeRestart'
 

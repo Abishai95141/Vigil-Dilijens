@@ -118,9 +118,10 @@ func TestOverlayVersionPinning(t *testing.T) {
 	if !strings.HasPrefix(merged.Version, "sha256:") {
 		t.Errorf("version %q not a sha256 pin", merged.Version)
 	}
-	// Provenance travels with the content.
-	if len(merged.Overlays) != 8 {
-		t.Fatalf("overlay provenance records = %d, want 8 (spans, rules v1-v3, conditions v1-v3, cross-service-v0)", len(merged.Overlays))
+	// Provenance travels with the content. v0.5.0 (G2): + detect-conditions-v4 (the
+	// KSM restart-counter check), so 9.
+	if len(merged.Overlays) != 9 {
+		t.Fatalf("overlay provenance records = %d, want 9 (spans, rules v1-v3, conditions v1-v4, cross-service-v0)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

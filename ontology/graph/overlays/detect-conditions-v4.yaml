@@ -1,0 +1,44 @@
+# Detection member-conditions — authored overlay v4 (doc 07 §3.1 / G2 telemetry).
+#
+# The KSM (kube-state-metrics) object-state lane. detect-conditions-v3 stated
+# verbatim that "the KSM-side restart/lastState members have no scrapable channel
+# here — degraded, stated"; the G2 KSM ingest lane provides that channel, and this
+# overlay binds the check. This is the FIRST released detection wiring sourced from
+# a kube_* object-state gauge.
+#
+# Discipline (the per-phenomenon gated unit): every check binds an EXISTING
+# participates_in member of the named phenomenon (referentially validated at load and
+# by graphlint); the bar is the already-released THR_CONTAINER_RESTARTS_RATE (a
+# FLAGGED ontology default — there is no customer config for restart tolerance, so
+# borrowed-normativity stays clean); the signal is a cluster-agnostic metric NAME,
+# never a service. A KSM gauge is a MEASURED required-member observation / a
+# co-occurrence, never a causal claim.
+#
+# Non-gating preserved: the CHECK ships in the released graph, but a finding is
+# produced ONLY when obsd actually scrapes KSM (--ksm-enabled). Without the scrape
+# there is no kube_pod_container_status_restarts_total stream, so the member is
+# unobservable and the per-tick digest is unchanged — every cluster without the KSM
+# scrape behaves byte-identically.
+overlay: detection-conditions-v4
+version: 4
+author: vigil-engineering
+status: released-v4 (KSM object-state lane — restart-counter member of PROBE_FAILURE_RESTART)
+
+checks:
+  # Probe failure -> restart (entity-local on the probed pod; the restart counter is
+  # the container's own). Crash-loop guard: more than 3 restarts inside the 15m
+  # window (THR_CONTAINER_RESTARTS_RATE, flagged default). This is the FIRST
+  # in-digest member-check for this phenomenon — until KSM was ingested it was only
+  # reachable off-digest via the CrashLoopBackOff event lane. The other ~10 required
+  # members (prober Unhealthy/Killing events, image-pull backoff, lastState) remain
+  # unobservable on this signal set and are NAMED on the finding
+  # (degrade-never-fabricate) — so this match is honestly DEGRADED. Completing the
+  # authored THROTTLING_CASCADE -> PROBE_FAILURE_RESTART relation for live cascade
+  # recognition is the payoff.
+  PHEN_PROBE_FAILURE_RESTART:
+    - signal: SIG_container_restart_count_kube_pod_container_status_restarts_t_268d5088
+      metric: kube_pod_container_status_restarts_total
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: ">3 container restarts in the 15m window (THR_CONTAINER_RESTARTS_RATE, flagged ontology default — the crash-loop guard); the restart-counter member, observable now that the KSM lane is ingested (G2)"
