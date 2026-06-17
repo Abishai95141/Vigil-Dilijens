@@ -1,67 +1,127 @@
 import { plane, signal } from "@/lib/tokens";
 
-// The graph's visual language, in the brand plane. Color is reserved for state;
-// shape + fill + dash carry meaning alongside hue. The white fill ("now") is
-// reserved for the focused/selected node — the single observed node.
-// Typed loosely: cytoscape validates the stylesheet at runtime, and its static
-// property typing is over-strict for the selectors/props we use here.
+// ─────────────────────────────────────────────────────────────────────────────
+// The cluster graph's visual language — Neo4j-grade node-link clarity, rendered
+// in the Vigil brand plane. The discipline holds: COLOR is reserved for
+// operational STATE (success/warning/error/info); SHAPE + SIZE + DASH carry the
+// rest (node kind, edge relation, provenance). The white fill ("now", Signal/000)
+// is reserved for the single focused node. Labels sit below the node with a faint
+// plane-colored halo so they stay legible under density; zoom-based level-of-
+// detail (driven from ClusterGraph) hides captions and edge labels when zoomed out.
+// cytoscape validates the stylesheet at runtime; its static prop typing is
+// over-strict for the selectors we use, so we type loosely.
+// ─────────────────────────────────────────────────────────────────────────────
 type CyStyle = { selector: string; style: Record<string, string | number> };
+
+const LABEL_FONT = "Geist, Inter, system-ui, sans-serif";
+const MONO_FONT = "JetBrains Mono, monospace";
+
 export const cyStyle: CyStyle[] = [
-  // ── namespace compound groups ──
+  // ── namespace compound groups (subtle container, label top-left) ──
   {
     selector: "node.group",
     style: {
       "background-color": plane.surface,
-      "background-opacity": 0.45,
+      "background-opacity": 0.35,
       "border-color": plane.rule,
       "border-width": 1,
+      "border-style": "solid",
       shape: "round-rectangle",
       label: "data(label)",
       color: plane.inkLow,
-      "font-family": "JetBrains Mono, monospace",
-      "font-size": 9,
+      "font-family": MONO_FONT,
+      "font-size": 10,
+      "font-weight": 500,
       "text-transform": "uppercase",
       "text-valign": "top",
       "text-halign": "left",
-      "text-margin-x": 8,
-      "text-margin-y": 12,
-      padding: 18,
+      "text-margin-x": 10,
+      "text-margin-y": 14,
+      "letter-spacing": 1.5,
+      padding: 26,
       "z-index": 1,
     },
   },
-  // ── entity nodes (base) ──
+  { selector: "node.group:active", style: { "overlay-opacity": 0 } },
+
+  // ── entity nodes (base = a workload) — bigger, Neo4j-like discs ──
   {
     selector: "node.entity",
     style: {
-      width: 13,
-      height: 13,
+      // size scales with connection degree (set per node in data.diam)
+      width: "data(diam)",
+      height: "data(diam)",
       shape: "ellipse",
       "background-color": plane.surfaceHi,
       "background-opacity": 1,
-      "border-width": 1.4,
+      "border-width": 2,
       "border-color": plane.inkLow,
       label: "data(label)",
-      color: plane.inkMid,
-      "font-family": "Geist, sans-serif",
-      "font-size": 8.5,
+      color: plane.inkSoft,
+      "font-family": LABEL_FONT,
+      "font-size": 11,
+      "font-weight": 500,
       "text-valign": "bottom",
       "text-halign": "center",
-      "text-margin-y": 3,
-      "text-max-width": "90px",
+      "text-margin-y": 5,
+      "text-max-width": "120px",
       "text-wrap": "ellipsis",
-      "min-zoomed-font-size": 7,
+      "text-background-color": plane.plane,
+      "text-background-opacity": 0.72,
+      "text-background-padding": 2,
+      "text-background-shape": "round-rectangle",
+      "min-zoomed-font-size": 9, // LOD: caption fades out when zoomed far out
       "z-index": 10,
-      "transition-property": "border-color, background-color, width, height",
-      "transition-duration": 150,
+      "transition-property": "border-color, background-color, width, height, border-width",
+      "transition-duration": 140,
     },
   },
-  // kind: a k8s Node is a square; a Pod is a circle (shape carries meaning)
+  // kind glyphs (shape carries meaning, never color):
+  //   k8s Node       → rounded square (infrastructure)
+  //   DaemonSet      → hexagon (one-per-node system workload)
+  //   StaticPod      → diamond (control-plane static)
+  //   Pod (expanded) → small circle
   {
     selector: 'node.entity[kind = "Node"]',
-    style: { shape: "round-rectangle", width: 16, height: 16 },
+    style: { shape: "round-rectangle", "border-width": 2 },
+  },
+  { selector: 'node.entity[kind = "DaemonSet"]', style: { shape: "hexagon" } },
+  { selector: 'node.entity[kind = "StaticPod"]', style: { shape: "diamond" } },
+  // Service (routing endpoint) → tag · PVC (storage) → barrel. Secondary layers,
+  // styled neutral (they carry no phenomenon state) so they never read as "healthy".
+  {
+    selector: 'node.entity[kind = "Service"]',
+    style: { shape: "tag", width: 17, height: 17, "background-color": plane.surface },
+  },
+  {
+    selector: 'node.entity[kind = "PVC"]',
+    style: { shape: "barrel", width: 17, height: 17, "background-color": plane.surface },
+  },
+  {
+    selector: "node.entity.secondary",
+    style: { "border-color": plane.mute, "background-color": plane.surface, color: plane.inkLow },
+  },
+  {
+    selector: "node.pod",
+    style: {
+      width: 9,
+      height: 9,
+      shape: "ellipse",
+      "background-color": plane.surfaceHi,
+      "border-width": 1.2,
+      "border-color": plane.mute,
+      label: "data(label)",
+      color: plane.inkLow,
+      "font-family": MONO_FONT,
+      "font-size": 8,
+      "text-valign": "bottom",
+      "text-margin-y": 2,
+      "min-zoomed-font-size": 11,
+      "z-index": 9,
+    },
   },
 
-  // ── health marks (color reserved for state) ──
+  // ── health marks — COLOR = operational STATE only ──
   { selector: "node.sev-ok", style: { "border-color": signal.success } },
   {
     selector: "node.sev-info",
@@ -69,25 +129,34 @@ export const cyStyle: CyStyle[] = [
   },
   {
     selector: "node.sev-degraded",
-    style: {
-      "border-color": signal.warning,
-      "background-color": signal.warningTint,
-      width: 15,
-      height: 15,
-    },
+    style: { "border-color": signal.warning, "background-color": signal.warningTint },
   },
   {
     selector: "node.sev-firing",
     style: {
       "border-color": signal.error,
       "background-color": signal.error,
-      width: 17,
-      height: 17,
       color: plane.ink,
+      "border-width": 2.5,
     },
   },
-  // "warned" = a PROJECTED early warning: a dashed outer ring ("might", separate language)
-  { selector: "node.warned", style: { "border-style": "dashed", "border-color": signal.info } },
+  // "warned" = a PROJECTED early warning: a dashed ring ("might", a separate language)
+  {
+    selector: "node.warned",
+    style: { "border-style": "dashed", "border-color": signal.info },
+  },
+
+  // ── interaction states ──
+  // hover halo (Neo4j-style ring on the node under the cursor)
+  {
+    selector: "node.entity.hover",
+    style: {
+      "border-width": 3,
+      "overlay-color": plane.signal,
+      "overlay-opacity": 0.05,
+      "overlay-padding": 6,
+    },
+  },
   // focused / selected = the white-filled "now"
   {
     selector: "node.entity.focus",
@@ -95,36 +164,63 @@ export const cyStyle: CyStyle[] = [
       "background-color": plane.signal,
       "border-color": plane.signal,
       color: plane.signal,
+      "border-width": 2.5,
       "z-index": 30,
     },
   },
-  // dimmed (out of the focused neighborhood)
-  { selector: "node.dim", style: { opacity: 0.16 } },
+  // soft neighbor highlight on hover (Neo4j shows a node's neighbors on hover)
+  { selector: "node.focus-soft", style: { "border-width": 2.5, "z-index": 20 } },
+  // on a highlighted cascade/root-cause path
+  {
+    selector: "node.path",
+    style: { "border-color": plane.signal, "border-width": 3, "z-index": 28 },
+  },
+  // dimmed (out of the focused neighborhood / search)
+  { selector: "node.dim", style: { opacity: 0.12, "text-opacity": 0.12 } },
   { selector: "node.hidden", style: { display: "none" } },
 
   // ── edges ──
   {
     selector: "edge",
     style: {
-      width: 1,
+      width: 1.1,
       "line-color": plane.rule,
       "curve-style": "bezier",
       "target-arrow-color": plane.ruleStrong,
       "target-arrow-shape": "none",
-      opacity: 0.9,
+      "font-family": MONO_FONT,
+      "font-size": 8,
+      color: plane.inkLow,
+      "text-background-color": plane.plane,
+      "text-background-opacity": 0.85,
+      "text-background-padding": 2,
+      "min-zoomed-font-size": 13, // LOD: edge labels only at high zoom
+      opacity: 0.85,
       "z-index": 2,
     },
   },
-  // dependency (observed flow) edges are directed + brighter
+  // dependency (observed flow) = the call graph: directed, brighter, labelled "calls"
   {
     selector: 'edge[etype = "flow"]',
     style: {
-      width: 1.2,
+      width: 1.4,
       "line-color": plane.inkLow,
       "target-arrow-shape": "triangle-backcurve",
       "target-arrow-color": plane.inkLow,
-      "arrow-scale": 0.7,
+      "arrow-scale": 0.85,
+      label: "data(rel)",
+      "text-rotation": "autorotate",
     },
+  },
+  // placement (runs-on) = infrastructure: faint, undirected, recedes
+  {
+    selector: 'edge[etype = "runs-on"]',
+    style: { width: 0.8, "line-color": plane.rule, "line-style": "dotted", opacity: 0.5 },
+  },
+  // service routing (selects) = which workload a Service fronts: thin, dashed
+  {
+    selector: 'edge[etype = "selects"]',
+    style: { width: 0.9, "line-color": plane.mute, "line-style": "dashed", opacity: 0.6 },
   },
   // suspect edges: dashed + amber (detection degrades across them — never silent)
   {
@@ -135,18 +231,29 @@ export const cyStyle: CyStyle[] = [
       "target-arrow-color": signal.warning,
     },
   },
-  { selector: 'edge[status = "retracted"]', style: { opacity: 0.25, "line-style": "dotted" } },
-  // highlighted (a focused node's incident edges)
+  { selector: 'edge[status = "retracted"]', style: { opacity: 0.22, "line-style": "dotted" } },
+
+  // edge interaction states
   {
     selector: "edge.hl",
     style: {
-      width: 2,
+      width: 2.4,
       "line-color": plane.signal,
       "target-arrow-color": plane.signal,
       opacity: 1,
       "z-index": 25,
     },
   },
-  { selector: "edge.dim", style: { opacity: 0.06 } },
+  {
+    selector: "edge.path",
+    style: {
+      width: 2.6,
+      "line-color": signal.error,
+      "target-arrow-color": signal.error,
+      opacity: 1,
+      "z-index": 26,
+    },
+  },
+  { selector: "edge.dim", style: { opacity: 0.05 } },
   { selector: "edge.hidden", style: { display: "none" } },
 ];

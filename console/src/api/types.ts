@@ -320,6 +320,8 @@ export interface TopoNode {
   kind: string;
   namespace: string;
   name: string;
+  layer?: string;               // workload | node | service | storage — for view-mode filtering (omitempty)
+  replicas?: number;            // pods rolled into this workload (omitempty; absent for Node/Service/PVC)
   selected: boolean;            // Tier-A (doc 06)
   matched: boolean;             // a current phenomenon match (doc 07) — "is"
   degraded: boolean;            // the match(es) here are degraded
