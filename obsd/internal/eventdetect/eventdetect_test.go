@@ -167,8 +167,8 @@ func TestRealOverlayReferentialIntegrity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEventDetections: %v", err)
 	}
-	if len(dets) != 2 {
-		t.Fatalf("want 2 authored detections, got %d", len(dets))
+	if len(dets) != 3 {
+		t.Fatalf("want 3 authored detections (OOMKilled, CrashLoopBackOff, ImagePullBackOff), got %d", len(dets))
 	}
 	for _, d := range dets {
 		p := g.Phenomena[d.Phenomenon]

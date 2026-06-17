@@ -151,6 +151,11 @@ func gateScenarios() []scenarioDef {
 			note:     "THROTTLING_CASCADE (gauge) + CrashLoopBackOff (event) on the SAME workload -> the authored THROTTLING_CASCADE->PROBE_FAILURE_RESTART cascade lights up.",
 		},
 		{
+			name:   "image-pull-failure",
+			events: []rawEvent{{evtPod("currency-abc", "u-currency"), "ImagePullBackOff"}},
+			note:   "ImagePullBackOff on a resolved workload -> ONE degraded IMAGE_PULL_FAILURE event finding (closes a CRITICAL, common operator blind spot: a bad tag / missing pull-secret / unreachable registry). No trigger -> no cascade.",
+		},
+		{
 			name:   "role-unresolved-no-upgrade",
 			events: []rawEvent{{events.Involved{Name: "vigil-worker", Kind: "Node", UID: "u-node"}, "OOMKilled"}},
 			note:   "OOMKilled on a role-less Node -> ZERO phenomenon findings (never assert a workload phenomenon on an unidentified entity).",
@@ -209,15 +214,18 @@ func runScenarios(t *testing.T, g *graph.Graph, m *detect.Matcher, store *identi
 		noUpgrade := 0
 		for _, re := range sc.events {
 			ent, _, unresolved := events.ResolveEventRole(store, clusterID, re.in)
-			authored := re.reason == "OOMKilled" || re.reason == "CrashLoopBackOff"
+			authored := re.reason == "OOMKilled" || re.reason == "CrashLoopBackOff" || re.reason == "ImagePullBackOff"
 			if unresolved || !authored {
 				noUpgrade++
 				continue
 			}
 			phen := "PHEN_OOM_KILL_CGROUP"
 			total := 8
-			if re.reason == "CrashLoopBackOff" {
+			switch re.reason {
+			case "CrashLoopBackOff":
 				phen, total = "PHEN_PROBE_FAILURE_RESTART", 11
+			case "ImagePullBackOff":
+				phen, total = "PHEN_IMAGE_PULL_FAILURE", 12
 			}
 			fOracle = append(fOracle, eventFindingOracle{
 				Phenomenon: phen, EntityCEI: ent, Quality: "degraded", RequiredMet: 1, RequiredTotal: total,

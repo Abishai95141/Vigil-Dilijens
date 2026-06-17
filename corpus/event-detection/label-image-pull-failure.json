@@ -1,0 +1,18 @@
+{
+  "bundle": "eventdetect-image-pull-failure",
+  "scenario": "image-pull-failure",
+  "digestBefore": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "digestAfter": "c5bc0642ca1c06655a150179bb45c5af5cf57876715bcdce074f237e4b3db218",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_IMAGE_PULL_FAILURE",
+      "entityCei": "i|evt-cluster|online-boutique|Pod|currency-abc|u-currency",
+      "quality": "degraded",
+      "requiredMet": 1,
+      "requiredTotal": 12
+    }
+  ],
+  "expectCascades": null,
+  "expectNoUpgrade": 0,
+  "note": "ImagePullBackOff on a resolved workload -\u003e ONE degraded IMAGE_PULL_FAILURE event finding (closes a CRITICAL, common operator blind spot: a bad tag / missing pull-secret / unreachable registry). No trigger -\u003e no cascade."
+}

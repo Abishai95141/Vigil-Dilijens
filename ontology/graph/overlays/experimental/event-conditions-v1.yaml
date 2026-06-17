@@ -54,6 +54,20 @@ event_conditions:
       never inferred into an explanation and never auto-upgraded to a phenomenon
       match it lacks the required members for.
 
+  # ImagePullBackOff (Pod) -> watched so the events lane reads the pod waiting-state
+  # reason; surfaced standalone as a MEASURED fact. It is ALSO an event_detections
+  # member below (the image-pull-failure phenomenon's required pull-events member).
+  - reason: ImagePullBackOff
+    involved_kind: Pod
+    corroborates: ""
+    role: corroborating
+    temporal_order: "T0"
+    why: >-
+      Per the curated ontology: an ImagePullBackOff waiting-state on a pod is a MEASURED
+      fact that the kubelet cannot pull the container image (a bad tag, a missing pull
+      secret, or an unreachable registry). It is surfaced standalone — a visible MEASURED
+      finding — never inferred into a cause.
+
 # ─────────────────────────────────────────────────────────────────────────────
 # event_detections (graph-robustness #2, G1) — a discrete event that the KG already
 # authors as a REQUIRED member of a phenomenon produces a DEGRADED, MEASURED finding
@@ -103,3 +117,20 @@ event_detections:
       MEASURED occurrence of that member, so the phenomenon is recognized DEGRADED on
       this workload — the probe-failure counters, Killing/Unhealthy events and KSM
       restart count are unobservable on this signal set and are stated, never assumed.
+
+  # ImagePullBackOff (Pod) IS the image-pull-failure phenomenon's required pull-events
+  # member. Closes a CRITICAL, extremely common operator blind spot: a bad image tag, a
+  # missing pull secret, or an unreachable registry leaves pods stuck unable to start,
+  # and Vigil could not see it. The kubelet records it as the container's waiting reason.
+  - reason: ImagePullBackOff
+    involved_kind: Pod
+    phenomenon: PHEN_IMAGE_PULL_FAILURE
+    member_signal: SIG_image_pull_events_pulling_pulled_failed_backoff_imagepullbac_0183d1d7
+    temporal_order: "T0+sustained"
+    why: >-
+      Per the curated ontology, an ImagePullBackOff waiting reason on a pod IS the
+      image-pull-failure phenomenon's required pull-events member. Observing it is a
+      MEASURED occurrence of that member, so the phenomenon is recognized DEGRADED on this
+      workload — the container-runtime / CRI logs and containerd metrics are unobservable
+      on this signal set and are stated, never assumed. It asserts nothing about why the
+      image could not be pulled.
