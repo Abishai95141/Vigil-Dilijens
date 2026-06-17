@@ -48,6 +48,7 @@ type TopoNode struct {
 	Kind      string   `json:"kind"`
 	Namespace string   `json:"namespace"`
 	Name      string   `json:"name"`
+	Layer     string   `json:"layer,omitempty"`    // workload | node | service | storage — for view-mode filtering
 	Replicas  int      `json:"replicas,omitempty"` // pods rolled into this workload (0 for a Node)
 	Selected  bool     `json:"selected"`           // Tier-A (06)
 	Matched   bool     `json:"matched"`            // a current phenomenon match (07) — "is"
@@ -196,8 +197,12 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 			phens = append(phens, p)
 		}
 		sort.Strings(phens)
+		layer := "workload"
+		if m.kind == "Node" {
+			layer = "node"
+		}
 		node := TopoNode{
-			CEIKey: k, Kind: m.kind, Namespace: m.ns, Name: m.name, Replicas: m.replicas,
+			CEIKey: k, Kind: m.kind, Namespace: m.ns, Name: m.name, Layer: layer, Replicas: m.replicas,
 			Selected: sel[k], Matched: len(phens) > 0, Degraded: degraded[k],
 			Loud: loud[k], Warned: warn[k], Phenomena: phens,
 		}
@@ -244,6 +249,65 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 			v.Summary.SuspectEdges++
 		}
 	}
+
+	// ── 5. service-routing + storage layers: the k8s relationships the identity
+	//        layer already reconciles (selects = Service→Pod, mounts = Pod→PVC) but
+	//        the workload-centric default dropped. Fold each to the workload role
+	//        (Service→workload, workload→PVC) and mint the Service/PVC node, tagged
+	//        with a Layer so the surface shows routing/storage on demand without
+	//        cluttering the dependency view. Generic: every cluster has Services,
+	//        EndpointSlices and PVCs — nothing here is app-specific. These nodes are
+	//        secondary (an operator toggles them per view) and are appended without
+	//        re-running the workload cap. ──
+	extra := map[string]TopoNode{}
+	for _, e := range edgeSnap {
+		var svc, pvc, wl string
+		switch e.Type {
+		case "selects": // Service → Pod  ⇒  Service → workload
+			svc, wl = e.From, roll(e.To)
+		case "mounts": // Pod → PVC  ⇒  workload → PVC
+			pvc, wl = e.To, roll(e.From)
+		default:
+			continue
+		}
+		// Honesty guard: Service/PVC endpoints are not tracked instances, so the
+		// only proof the relationship currently exists is a LIVE (non-retracted)
+		// edge. A retracted selects/mounts edge is a dangling endpoint (the Service
+		// or PVC was deleted) — never mint a ghost node for it. (flow/runs-on edges
+		// are surfaced even when retracted, ghosted, because their endpoints ARE
+		// tracked workloads/nodes; these are not.)
+		if !e.RetractedAt.IsZero() {
+			continue
+		}
+		if !included[wl] {
+			continue // the fronted/mounting workload was capped or absent — stay honest
+		}
+		status := edgeStatus(e, budgets, now)
+		if svc != "" {
+			if _, ok := extra[svc]; !ok {
+				ns, _, name := parseInstanceCEI(svc)
+				extra[svc] = TopoNode{CEIKey: svc, Kind: "Service", Namespace: ns, Name: name, Layer: "service", Phenomena: []string{}}
+			}
+			if id := svc + "\x00" + wl + "\x00selects"; !seen[id] {
+				seen[id] = true
+				v.Edges = append(v.Edges, TopoEdge{Type: "selects", From: svc, To: wl, Status: status})
+			}
+		} else {
+			if _, ok := extra[pvc]; !ok {
+				ns, _, name := parseInstanceCEI(pvc)
+				extra[pvc] = TopoNode{CEIKey: pvc, Kind: "PVC", Namespace: ns, Name: name, Layer: "storage", Phenomena: []string{}}
+			}
+			if id := wl + "\x00" + pvc + "\x00mounts"; !seen[id] {
+				seen[id] = true
+				v.Edges = append(v.Edges, TopoEdge{Type: "mounts", From: wl, To: pvc, Status: status})
+			}
+		}
+	}
+	for _, n := range extra {
+		v.Nodes = append(v.Nodes, n)
+	}
+	sort.Slice(v.Nodes, func(i, j int) bool { return v.Nodes[i].CEIKey < v.Nodes[j].CEIKey })
+
 	sort.Slice(v.Edges, func(i, j int) bool {
 		a, b := v.Edges[i], v.Edges[j]
 		if a.Type != b.Type {
@@ -258,6 +322,18 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 	v.Summary.Nodes = len(v.Nodes)
 	v.Summary.Edges = len(v.Edges)
 	return v
+}
+
+// parseInstanceCEI extracts namespace/kind/name from an instance CEI key
+// ("i|cluster|ns|kind|name|uid"). Returns empties on a malformed or non-instance
+// key — callers mint a node from it only for Service/PVC endpoints, which are
+// always minted as instances (identity.MintInstance), so the shape is stable.
+func parseInstanceCEI(key string) (ns, kind, name string) {
+	p := strings.Split(key, "|")
+	if len(p) >= 5 && p[0] == "i" {
+		return p[2], p[3], p[4]
+	}
+	return "", "", ""
 }
 
 // splitRoleKey turns a role key ("Deployment/currencyservice") into its workload

@@ -104,7 +104,7 @@ func TestBuildTopology(t *testing.T) {
 	edges := []identity.EdgeSnap{
 		{Type: "runs-on", From: podKey, To: nodeKey, LastConfirmed: at.Add(-10 * time.Second)},                      // valid
 		{Type: "runs-on", From: "i|cl|shop|Pod|quiet|uid-q", To: nodeKey, LastConfirmed: at.Add(-10 * time.Minute)}, // suspect
-		{Type: "mounts", From: podKey, To: "i|cl|shop|PVC|gone|uid-x", LastConfirmed: at},                           // dangling (PVC not in inventory)
+		{Type: "mounts", From: podKey, To: "i|cl|shop|PVC|gone|uid-x", LastConfirmed: at, RetractedAt: at},          // dangling: PVC deleted (edge retracted) ⇒ no ghost node
 	}
 	budgets := map[string]time.Duration{"runs-on": 90 * time.Second}
 	findings := []detect.Finding{{Phenomenon: "PHEN_THROTTLING_CASCADE", EntityCEI: podKey, Quality: detect.QualityFull}}
@@ -129,6 +129,45 @@ func TestBuildTopology(t *testing.T) {
 	node := nodeByKey(v.Nodes, nodeKey)
 	if node == nil || !node.Loud || node.Matched {
 		t.Errorf("node should be loud (unexplained) but not matched: %+v", node)
+	}
+}
+
+// TestBuildTopologyServiceLayer covers the generic service-routing + storage
+// surfacing: a LIVE selects (Service→Pod) edge folds to Service→workload and mints
+// a layer-tagged Service node (the pod-to-service relationship), while a retracted
+// selects/mounts edge is excluded with no ghost node. Nothing here is app-specific.
+func TestBuildTopologyServiceLayer(t *testing.T) {
+	inv := []identity.InstanceRecord{
+		{CEI: mustCEI(t, podKey), Kind: "Pod", Namespace: "shop", Name: "web-a"},
+		{CEI: mustCEI(t, nodeKey), Kind: "Node", Name: "worker-1"},
+	}
+	svcKey := "i|cl|shop|Service|web|uid-svc"
+	gonePVC := "i|cl|shop|PVC|gone|uid-x"
+	edges := []identity.EdgeSnap{
+		{Type: "runs-on", From: podKey, To: nodeKey, LastConfirmed: at},
+		{Type: "selects", From: svcKey, To: podKey, LastConfirmed: at},                  // live ⇒ surfaced
+		{Type: "mounts", From: podKey, To: gonePVC, LastConfirmed: at, RetractedAt: at}, // retracted ⇒ excluded
+	}
+	v := BuildTopology("cl", "v", at, inv, edges, nil, nil, nil, nil, nil)
+
+	svc := nodeByKey(v.Nodes, svcKey)
+	if svc == nil || svc.Kind != "Service" || svc.Layer != "service" || svc.Namespace != "shop" || svc.Name != "web" {
+		t.Fatalf("service node not surfaced correctly: %+v", svc)
+	}
+	if nodeByKey(v.Nodes, gonePVC) != nil {
+		t.Errorf("retracted mounts edge must not mint a ghost PVC node")
+	}
+	var sel *TopoEdge
+	for i := range v.Edges {
+		if v.Edges[i].Type == "selects" {
+			sel = &v.Edges[i]
+		}
+	}
+	if sel == nil || sel.From != svcKey || sel.To != podKey {
+		t.Fatalf("selects edge Service→workload not surfaced: %+v", sel)
+	}
+	if pod := nodeByKey(v.Nodes, podKey); pod == nil || pod.Layer != "workload" {
+		t.Errorf("workload layer tag wrong: %+v", pod)
 	}
 }
 
