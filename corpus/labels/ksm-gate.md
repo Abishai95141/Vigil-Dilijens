@@ -53,11 +53,28 @@ regenerated corpus → PASSED.
   `THROTTLING_CASCADE → PROBE_FAILURE_RESTART ("Probe cascade")` on a CPU-throttled
   crash-looper (a previously-DARK cascade, now recognized live).
 
-## Honest scope
-PROBE_FAILURE_RESTART is the clean lead (single-series counter, rides findRate with no
-new machinery). NODE_NOT_READY + EVICTION_MEMORY are the next KSM targets but need a
-label-selecting derivation (their KSM gauges are multi-series:
-`kube_node_status_condition{condition,status}`, `kube_pod_status_reason{reason}`).
-PDB_VIOLATION is deferred: `kube_poddisruptionbudget_*` has no CEI mapping (quarantined)
-and PHEN_PDB_VIOLATION has zero base KG members — it needs identity-layer work + an
-authored member, a larger change. Stated, not hidden.
+## G2b — label-select derivation + EVICTION_MEMORY (released v0.6.0, sha256:6d8f88be...)
+The reusable keystone for multi-series KSM gauges: `observe.deriveKSM` re-emits the active
+labelled row of a multi-dimensional gauge under a clean single-series metric (the matcher
+needs one series per (entity,metric)). `kube_pod_status_evicted` is the Evicted-row
+projection of `kube_pod_status_reason{reason}`, emitted only while a pod IS Evicted — a
+deterministic projection (the KSM dialect, NOT learned); the bar stays authored.
+PHEN_EVICTION_MEMORY (first-order, Node anchor) upgraded degraded->fuller via threshold-rules-v4
+(THR_POD_EVICTED, structural flagged default) + detect-conditions-v5 (the evicted-pod
+neighbour check, one runs-on hop). `just govern-classify v0.5.0 v0.6.0` = behavioural-medium.
+Floors added (Go golden, -race): derivation fidelity (Evicted row -> single stream; inactive
+rows not derived); EVICTION fuller (RequiredMet>=2 with the evicted member); validity contract
+(no runs-on edge => the evicted member is NOT fabricated). FIRING is golden-certified only —
+a real memory eviction is OOM-risky, NOT triggered live. v0.6.0 loads clean live.
+
+## Honest scope — what is NOT wired
+- PROBE_FAILURE_RESTART is the clean lead (single-series counter, no new machinery);
+  EVICTION_MEMORY (G2b) is the first multi-series gauge wired via the derivation.
+- **NODE_NOT_READY** is NOT cleanly KSM-wireable: its base KG members are node EVENTS +
+  noise (node_lifecycle_events, node_netstat, hubble), not the `kube_node_status_condition`
+  Ready gauge — it needs a NEW authored member (a bigger governance change) or the EVENTS
+  lane (the NodeNotReady event). Stated, not forced.
+- **PDB_VIOLATION** deferred: `kube_poddisruptionbudget_*` has no CEI mapping (quarantined)
+  and PHEN_PDB_VIOLATION has zero base KG members — identity-layer work + an authored member.
+- Next derivations (cheap, on this keystone): `kube_pod_status_phase{phase=Pending}` ->
+  SCHEDULING_FAILURE; `kube_pod_container_status_last_terminated_reason{reason=OOMKilled}`.
