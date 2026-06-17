@@ -1,0 +1,28 @@
+# Detection member-conditions — authored overlay v5 (doc 07 §3.2 / G2 telemetry).
+#
+# PHEN_EVICTION_MEMORY upgrade (degraded -> fuller): the KSM pod-eviction member.
+# EVICTION_MEMORY is first-order (Node anchor, runs-on); detect-conditions-v2 binds
+# only its node-memory anchor member and states the pod-side members "need KSM or the
+# kubelet main endpoint (not ingested) — degraded, stated". The G2 KSM lane ingests
+# them: the derived kube_pod_status_evicted gauge (the Evicted row of
+# kube_pod_status_reason) lands on the evicted pod, one runs-on hop from the node.
+# The anchor is already declared in detect-conditions-v2 (PHEN_EVICTION_MEMORY: Node);
+# this overlay only adds the neighbour check.
+#
+# Discipline: the signal is an EXISTING required member of EVICTION_MEMORY; the bar
+# (THR_POD_EVICTED) is a structural flagged default (borrowed-normativity clean); the
+# metric is a cluster-agnostic derived name, never a service. An evicted pod is a
+# MEASURED state co-occurring with node memory pressure — never a causal claim.
+overlay: detection-conditions-v5
+version: 5
+author: vigil-engineering
+status: released-v5 (KSM object-state lane — EVICTION_MEMORY pod-eviction member)
+
+checks:
+  PHEN_EVICTION_MEMORY:
+    - signal: SIG_pod_eviction_evicted_7e816318
+      metric: kube_pod_status_evicted
+      facet: level
+      expect: crossed
+      on: neighbour
+      note: "an Evicted pod one runs-on hop from the node anchor (THR_POD_EVICTED, structural flagged default — the derived KSM evicted gauge exists only for evicted pods). The KSM-side pod-eviction member, observable now that the KSM lane is ingested + the Evicted row is derived (G2)."

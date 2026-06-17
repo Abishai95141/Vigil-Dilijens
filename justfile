@@ -285,7 +285,7 @@ app-slo-gate:
 # without the KSM scrape — no restart stream => no finding => byte-identical detection).
 # Exit 0 = PASSED; 1 = FAILED.
 ksm-gate:
-    go test -race ./obsd/internal/observe/ ./obsd/internal/detect/ -run 'KSM|ProbeFailureRestart|ThrottleToProbe|ThrottleProbeRestart'
+    go test -race ./obsd/internal/observe/ ./obsd/internal/detect/ -run 'KSM|ProbeFailureRestart|ThrottleToProbe|ThrottleProbeRestart|Eviction'
 
 # transitive-chain gate (doc 15 cap. B / doc 11 §3.5) over the frozen corpus in
 # corpus/transitive-chain/ — certifies the transitive root-cause chain: MEASURED-degraded

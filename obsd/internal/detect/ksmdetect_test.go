@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 )
 
@@ -153,6 +154,88 @@ func TestKSMCheckReleasedButInertWithoutScrape(t *testing.T) {
 	}
 	if f := findPhen(m.MatchFingerprint(noKSM), "PHEN_PROBE_FAILURE_RESTART"); f != nil {
 		t.Fatalf("the released v4 check must be INERT without a KSM restart stream; got %+v", f)
+	}
+}
+
+// EVICTION_MEMORY upgrade (degraded → fuller): the node-memory anchor was the only
+// scrapable member; the KSM-derived evicted-pod gauge (kube_pod_status_evicted, one
+// runs-on hop from the node) adds the pod-side member. With both, the first-order
+// match observes 2 required members, not 1 — a fuller, more confident DEGRADED finding.
+func TestEvictionMemoryFullerWithEvictedPod(t *testing.T) {
+	m := NewMatcher(loadKSMGraph(t))
+	topo := edgeStore(t, evalAt.Add(-10*time.Second)) // podKey runs-on nodeKey
+
+	nodeFP := observe.Fingerprint{ // the node-memory anchor (config-relative bar crossed)
+		CEIKey: nodeKey, Name: "worker-1", Kind: "Node", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_NODE_MEMAVAILABLE_VS_ALLOCATABLE", Metric: "node_memory_MemAvailable_bytes",
+			State: observe.StateAbove, BarSource: "config",
+			Deriv: observe.DerivationRef{StreamID: "s-mem", SampleAt: evalAt, How: "gauge-level"},
+		}},
+	}
+	podFP := observe.Fingerprint{ // the evicted-pod neighbour (the derived KSM gauge)
+		CEIKey: podKey, Namespace: "shop", Name: "app-7d9", Kind: "Pod", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_POD_EVICTED", Metric: "kube_pod_status_evicted",
+			State: observe.StateAbove, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-evicted", SampleAt: evalAt, How: "gauge-level"},
+		}},
+	}
+
+	out := m.Match([]observe.Fingerprint{nodeFP, podFP}, nil, topo, w)
+	f := findPhen(out, "PHEN_EVICTION_MEMORY")
+	if f == nil {
+		t.Fatalf("EVICTION_MEMORY should fire; got %+v", out)
+	}
+	if f.RequiredMet < 2 {
+		t.Errorf("with the evicted-pod neighbour member observed, RequiredMet should be >=2 "+
+			"(node memory + evicted pod), got %d/%d", f.RequiredMet, f.RequiredTotal)
+	}
+	hasEvicted := false
+	for _, mem := range f.Members {
+		if mem.Metric == "kube_pod_status_evicted" {
+			hasEvicted = true
+		}
+	}
+	if !hasEvicted {
+		t.Errorf("the KSM-derived evicted-pod member must be in the finding evidence: %+v", f.Members)
+	}
+}
+
+// Absent the runs-on edge, an evicted pod and a memory-pressured node are NOT one
+// story — the neighbour member must NOT be fabricated across an unconfirmed topology
+// (the validity contract: an absent edge contributes nothing).
+func TestEvictionMemoryNoEvictedMemberWithoutEdge(t *testing.T) {
+	m := NewMatcher(loadKSMGraph(t))
+	// An edge store with NO runs-on asserted: the pod and node are unrelated.
+	noEdges := identity.NewEdgeStore(func() time.Time { return evalAt },
+		map[identity.EdgeType]time.Duration{identity.EdgeRunsOn: 90 * time.Second}, 24*time.Hour)
+
+	nodeFP := observe.Fingerprint{
+		CEIKey: nodeKey, Name: "worker-1", Kind: "Node", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_NODE_MEMAVAILABLE_VS_ALLOCATABLE", Metric: "node_memory_MemAvailable_bytes",
+			State: observe.StateAbove, BarSource: "config",
+			Deriv: observe.DerivationRef{StreamID: "s-mem", SampleAt: evalAt, How: "gauge-level"},
+		}},
+	}
+	podFP := observe.Fingerprint{
+		CEIKey: podKey, Namespace: "shop", Name: "app-7d9", Kind: "Pod", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_POD_EVICTED", Metric: "kube_pod_status_evicted",
+			State: observe.StateAbove, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-evicted", SampleAt: evalAt, How: "gauge-level"},
+		}},
+	}
+
+	f := findPhen(m.Match([]observe.Fingerprint{nodeFP, podFP}, nil, noEdges, w), "PHEN_EVICTION_MEMORY")
+	if f == nil {
+		t.Fatalf("EVICTION_MEMORY should still fire on the node anchor; got nil")
+	}
+	for _, mem := range f.Members {
+		if mem.Metric == "kube_pod_status_evicted" {
+			t.Errorf("without a runs-on edge the evicted-pod member must NOT be observed: %+v", f.Members)
+		}
 	}
 }
 

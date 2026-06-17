@@ -336,6 +336,15 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node, 
 				}
 				sum.SeriesResolved++
 				sum.SamplesStored++
+				// KSM derivation: a multi-dimensional KSM gauge (kube_pod_status_reason
+				// {reason}, kube_node_status_condition{condition,status}) is ambiguous to
+				// the matcher (it needs ONE series per (entity,metric)). Re-emit the
+				// labelled row that carries the signal under a clean single-series metric
+				// when the row is ACTIVE (value>0) — a deterministic projection, part of
+				// the KSM dialect like normalize.ksm itself; the BAR stays authored.
+				if family == identity.FamilyKSM && value > 0 {
+					in.deriveKSM(s, typ, sampleAt, receivedAt)
+				}
 			case identity.OutcomeDropped:
 				sum.SeriesDropped[string(res.Reason)]++
 			case identity.OutcomeQuarantined:
@@ -386,6 +395,76 @@ func streamSubID(family identity.Family, labels map[string]string) string {
 	}
 	b.WriteByte('}')
 	return b.String()
+}
+
+// ksmDerivation selects ONE labelled row of a multi-series KSM gauge and re-emits it
+// under a clean single-series metric name. The matcher's variable lookup requires
+// exactly one series per (entity, metric); a raw multi-dimensional KSM family —
+// kube_pod_status_reason{reason}, kube_node_status_condition{condition,status} — has
+// several, so a check could not bind it. The selection is a deterministic projection
+// of a MEASURED fact (which row carries the signal), part of the KSM dialect the way
+// normalize.ksm() is — NOT a learned threshold; the BAR stays authored in the overlay.
+// derived keeps the source's kube_pod_/kube_node_ prefix so normalize.ksm() routes the
+// derived series to the SAME CEI as its parent.
+type ksmDerivation struct {
+	source  string            // the multi-series KSM metric, e.g. "kube_pod_status_reason"
+	match   map[string]string // ALL must match the row's labels, e.g. {"reason":"Evicted"}
+	derived string            // the clean single-series name, e.g. "kube_pod_status_evicted"
+}
+
+// ksmDerivations is the authored selection set (the KSM dialect's multi-series rows).
+// Each is referenced by an overlay check's `metric:` and must keep its parent's prefix.
+var ksmDerivations = []ksmDerivation{
+	// Memory-pressure eviction: the Evicted reason row of a pod's status-reason gauge
+	// (PHEN_EVICTION_MEMORY pod-side member, one runs-on hop from the node anchor).
+	{source: "kube_pod_status_reason", match: map[string]string{"reason": "Evicted"}, derived: "kube_pod_status_evicted"},
+}
+
+// deriveKSM re-emits the active selected rows of a KSM series under their clean
+// single-series metric names (see ksmDerivation). Called only for FamilyKSM rows whose
+// value is non-zero, so a derived stream exists EXACTLY for the entities in that state.
+// It mirrors the resolved-store path; the derived sample rides the SAME tap (replay
+// capture) so detection over it stays deterministic. Derived samples are projections,
+// not scrapes — they are not counted in the ingest summary's scrape accounting.
+func (in *Ingestor) deriveKSM(orig identity.Series, typ string, sampleAt, receivedAt time.Time) {
+	for _, d := range ksmDerivations {
+		if d.source != orig.Metric {
+			continue
+		}
+		ok := true
+		for k, v := range d.match {
+			if orig.Labels[k] != v {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		ds := orig
+		ds.Metric = d.derived
+		res := in.norm.Normalize(ds)
+		if res.Outcome != identity.OutcomeResolved {
+			continue
+		}
+		streamID := res.CEI.Key() + "|" + d.derived + streamSubID(identity.FamilyKSM, ds.Labels)
+		sample := qss.Sample{At: sampleAt, Value: 1}
+		in.hot.Append(streamID, sample)
+		in.mu.Lock()
+		if _, seen := in.meta[streamID]; !seen {
+			in.meta[streamID] = StreamMeta{
+				CEIKey: res.CEI.Key(), UID: res.CEI.UID, Kind: res.CEI.Kind,
+				Metric: d.derived, Type: typ, Node: ds.SourceNode, Cadence: "scrape",
+			}
+		}
+		in.mu.Unlock()
+		if in.tap != nil {
+			in.tap(qss.StreamDef{
+				ID: streamID, CEIKey: res.CEI.Key(), UID: res.CEI.UID, Kind: res.CEI.Kind,
+				Metric: d.derived, Type: typ, Node: ds.SourceNode, Cadence: "scrape",
+			}, receivedAt, sample)
+		}
+	}
 }
 
 // scalarType maps an exposition family to a scalar sample type; histogram and

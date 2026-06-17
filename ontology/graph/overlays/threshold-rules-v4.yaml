@@ -1,0 +1,29 @@
+# Threshold rules — authored overlay v4 (doc 04 §3.4 / G2 telemetry).
+#
+# The KSM object-state lane's first config-less state bar. PHEN_EVICTION_MEMORY's
+# pod-side member: a pod evicted under memory pressure. The derived single-series
+# gauge kube_pod_status_evicted (the Evicted row of kube_pod_status_reason, selected
+# at ingest) is present (=1) ONLY for pods whose status reason is Evicted, so
+# "above 0" IS the presence of an eviction. Structural flagged default — the Evicted
+# state is itself the signal; there is no customer config for an eviction tolerance,
+# so borrowed-normativity stays clean (the bar rides as lower-trust on every finding).
+overlay: threshold-rules-v4
+version: 4
+author: vigil-engineering
+status: released-v4 (KSM object-state lane — pod-eviction bar)
+
+rules:
+  - id: THR_POD_EVICTED
+    signal: SIG_pod_eviction_evicted_7e816318
+    metric: kube_pod_status_evicted
+    kind: absolute
+    default: 0
+    direction: above
+    entity_scope: Pod
+    window: 5m
+    rationale: >-
+      Pod evicted under memory pressure (PHEN_EVICTION_MEMORY pod-side member, one
+      runs-on hop from the node anchor). kube_pod_status_evicted is the ingest-derived
+      single-series projection of kube_pod_status_reason{reason="Evicted"} — emitted
+      only while the pod IS Evicted, so a value above 0 is the eviction itself.
+      Structural flagged default; no API/config source for an eviction tolerance.

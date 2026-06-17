@@ -1,0 +1,39 @@
+# Graph release v0.6.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.6.0
+graph_version: "sha256:6d8f88befe46c6d45bd19f7e4bd96aa82abd2726e1590221327e96aa97e8bae2"
+created: "2026-06-17"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+summary: >-
+  KSM object-state lane, batch 2 (graph-robustness #2 G2b): PHEN_EVICTION_MEMORY
+  upgraded from a node-memory-only DEGRADED match to a fuller one by wiring its
+  pod-side member. Adds threshold-rules-v4.yaml (THR_POD_EVICTED) + detect-conditions-v5.yaml
+  (the evicted-pod neighbour check, one runs-on hop from the Node anchor). The member
+  is fed by a NEW ingest-time LABEL-SELECT DERIVATION: kube_pod_status_evicted is the
+  single-series projection of the Evicted row of the multi-series kube_pod_status_reason
+  gauge (emitted only while a pod IS Evicted), so the matcher's one-series-per-(entity,
+  metric) lookup can bind it. The derivation is part of the KSM dialect (like
+  normalize.ksm itself), a deterministic projection of a MEASURED fact — NOT a learned
+  threshold; the bar stays an authored structural flagged default (borrowed-normativity
+  clean). BEHAVIOURAL-MEDIUM class (a new rule with a flagged default + a new detection
+  check on an EXISTING required member; no new phenomenon, no edited default). NON-GATING:
+  the check is INERT without the KSM scrape (no eviction stream => unobservable =>
+  byte-identical detection). Replay-diff bounded to the GraphVersion stamp (the off-digest
+  eventdetect lane is unperturbed). detect-conditions-v3's stated gap — "eviction events /
+  node conditions / kubelet evictions counters need KSM or the kubelet main endpoint (not
+  ingested) — degraded, stated" — is now partially closed for the eviction-events member.

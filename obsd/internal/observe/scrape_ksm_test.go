@@ -18,6 +18,10 @@ kube_pod_container_status_restarts_total{namespace="shop",pod="web-a",uid="pod-x
 kube_node_status_condition{node="worker-1",condition="Ready",status="true"} 1
 kube_node_status_condition{node="worker-1",condition="Ready",status="false"} 0
 kube_node_status_condition{node="worker-1",condition="MemoryPressure",status="false"} 0
+# HELP kube_pod_status_reason The reason a pod is in its current state.
+# TYPE kube_pod_status_reason gauge
+kube_pod_status_reason{namespace="shop",pod="web-a",uid="pod-x",reason="Evicted"} 1
+kube_pod_status_reason{namespace="shop",pod="web-a",uid="pod-x",reason="NodeLost"} 0
 # HELP kube_poddisruptionbudget_status_current_healthy PDB.
 # TYPE kube_poddisruptionbudget_status_current_healthy gauge
 kube_poddisruptionbudget_status_current_healthy{namespace="shop",poddisruptionbudget="web"} 1
@@ -33,13 +37,27 @@ func TestScrapeKSMResolvesByLabelIdentity(t *testing.T) {
 	targets := []PodTarget{{Namespace: "monitoring", Name: "kube-state-metrics", Port: "8080", Path: "metrics"}}
 	sum := in.IngestPayloads(FetchKSM(context.Background(), f, targets))
 
-	// 4 series resolve: 1 restart counter (container) + 3 node-condition series (node).
-	// The PDB object metric is unmapped → quarantined, never guessed onto a workload.
-	if sum.SeriesResolved != 4 || sum.SamplesStored != 4 {
-		t.Fatalf("resolved=%d stored=%d, want 4/4 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
+	// 6 series resolve: 1 restart counter (container) + 3 node-condition series (node)
+	// + 2 pod-status-reason rows (pod). The PDB object metric is unmapped → quarantined.
+	// (Derived rows are projections, not counted in the scrape accounting.)
+	if sum.SeriesResolved != 6 || sum.SamplesStored != 6 {
+		t.Fatalf("resolved=%d stored=%d, want 6/6 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
 	}
 	if sum.SeriesQuarantine["unmapped-metric-class"] != 1 {
 		t.Errorf("quarantines = %v, want unmapped-metric-class:1 (the PDB object metric)", sum.SeriesQuarantine)
+	}
+
+	// The DERIVATION: the active Evicted row of kube_pod_status_reason is re-emitted as
+	// the clean single-series kube_pod_status_evicted on the POD CEI — the member a
+	// detect-condition can bind (the raw multi-reason family is ambiguous). The inactive
+	// NodeLost row (value 0) is NOT derived (the derived stream exists only for the
+	// entities actually in that state).
+	ev := in.StreamsByUIDMetric("pod-x", "kube_pod_status_evicted")
+	if len(ev) != 1 {
+		t.Fatalf("derived evicted streams = %v, want exactly 1 (the Evicted row, value>0)", ev)
+	}
+	if s, ok := in.Latest(ev[0]); !ok || s.Value != 1 {
+		t.Errorf("derived evicted sample = %+v (ok=%v), want value 1", s, ok)
 	}
 
 	// The restart counter: ONE stream under the CONTAINER CEI (UID = podUID/container).

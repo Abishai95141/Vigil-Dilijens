@@ -67,8 +67,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 12 {
-		t.Fatalf("rules = %d, want 12 (8 v1 + 2 v2 + 2 v3)", len(g.Rules))
+	if len(g.Rules) != 13 {
+		t.Fatalf("rules = %d, want 13 (8 v1 + 2 v2 + 2 v3 + 1 v4: THR_POD_EVICTED)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -118,10 +118,11 @@ func TestOverlayVersionPinning(t *testing.T) {
 	if !strings.HasPrefix(merged.Version, "sha256:") {
 		t.Errorf("version %q not a sha256 pin", merged.Version)
 	}
-	// Provenance travels with the content. v0.5.0 (G2): + detect-conditions-v4 (the
-	// KSM restart-counter check), so 9.
-	if len(merged.Overlays) != 9 {
-		t.Fatalf("overlay provenance records = %d, want 9 (spans, rules v1-v3, conditions v1-v4, cross-service-v0)", len(merged.Overlays))
+	// Provenance travels with the content. v0.5.0 (G2): + detect-conditions-v4 (KSM
+	// restart check). v0.6.0 (G2b): + threshold-rules-v4 + detect-conditions-v5 (the
+	// KSM-derived pod-eviction member of EVICTION_MEMORY), so 11.
+	if len(merged.Overlays) != 11 {
+		t.Fatalf("overlay provenance records = %d, want 11 (spans, rules v1-v4, conditions v1-v5, cross-service-v0)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")
@@ -249,7 +250,7 @@ func TestFirstOrderConditionsAuthored(t *testing.T) {
 		checks int
 	}{
 		"PHEN_THROTTLING_CASCADE":   {"Container", 2},
-		"PHEN_EVICTION_MEMORY":      {"Node", 1},
+		"PHEN_EVICTION_MEMORY":      {"Node", 2}, // v2 node-memory anchor + v5 evicted-pod neighbour (G2b)
 		"PHEN_CONNTRACK_EXHAUSTION": {"Node", 2},
 		"PHEN_OOM_KILL_SYSTEM":      {"Node", 1},
 	}
