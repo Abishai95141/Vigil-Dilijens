@@ -1,0 +1,53 @@
+# Detection member-conditions — authored overlay v6 (doc 07 §3.1 / G2 telemetry).
+#
+# The KSM (kube-state-metrics) object-state lane, node-condition pressure. Wires the
+# node-anchor member of PHEN_DISK_PID_INODE_PRESSURE — the kubelet's own DiskPressure
+# verdict — so disk / inode exhaustion (a CRITICAL operator blind spot: a node shedding
+# pods because nodefs, imagefs, or inodes ran out) becomes a visible MEASURED finding.
+#
+# Why the node condition and not node_filesystem_avail_bytes: node-exporter reports avail
+# PER (device, mountpoint, fstype) — overlay, tmpfs, shm, the root fs, the image fs — and a
+# raw ratio crossing on the WRONG mountpoint is a false positive (or the wrong one healthy is
+# a false negative). DiskPressure is the kubelet's SINGLE authoritative judgment over exactly
+# the filesystems it evicts on, evaluated against ITS configured thresholds. That is both
+# cluster-agnostic (every kubelet computes it) and free of mountpoint ambiguity — the robust
+# member to bind.
+#
+# Discipline (the per-phenomenon gated unit): the check binds an EXISTING participates_in
+# required member of the named phenomenon (SIG_node_status_conditions..., referentially
+# validated at load and by graphlint); the bar (THR_NODE_DISK_PRESSURE) is a structural
+# flagged default (borrowed-normativity clean — the kubelet's own condition); the metric is a
+# cluster-agnostic derived name, never a service. A pressed node condition is a MEASURED
+# required-member observation, never a causal claim. The phenomenon's other required members
+# (the kubelet_evictions counter, the per-mountpoint node-exporter ratio, the NodeNotReady /
+# eviction lifecycle events) have no check on this signal set and are NAMED unobservable on
+# the finding (degrade-never-fabricate) — so this match is honestly DEGRADED. PID pressure
+# shares this member signal and is a named co-member (a follow-up once the derivation strips
+# selector labels so disk|pid can share one derived stream).
+#
+# Non-gating preserved: the CHECK ships in the released graph, but a finding is produced ONLY
+# when obsd actually scrapes KSM (--ksm-enabled) AND a node IS under disk pressure. Without
+# the scrape there is no kube_node_status_disk_pressure stream; with the scrape but no
+# pressure the derived row is never emitted (the healthy status="false" row carries
+# status!="true"), so the member is unobservable and the per-tick digest is unchanged —
+# every cluster without an actively disk-pressured node behaves byte-identically.
+overlay: detection-conditions-v6
+version: 6
+author: vigil-engineering
+status: released-v6 (KSM object-state lane — node disk/inode-pressure member of DISK_PID_INODE_PRESSURE)
+
+# Anchor (doc 07 §3.2): the node-condition member evaluates on the Node itself — the
+# evaluation site is authored, never inferred. (DISK_PID_INODE_PRESSURE is a first-order
+# span; its eviction-event members land on pods one runs-on hop away, but the node-condition
+# anchor member checked here is node-local.)
+anchors:
+  PHEN_DISK_PID_INODE_PRESSURE: Node
+
+checks:
+  PHEN_DISK_PID_INODE_PRESSURE:
+    - signal: SIG_node_status_conditions_ready_memorypressure_diskpressure_pid_8581abf4
+      metric: kube_node_status_disk_pressure
+      facet: level
+      expect: crossed
+      on: anchor
+      note: "the node's own DiskPressure condition is set (THR_NODE_DISK_PRESSURE, structural flagged default — the derived KSM gauge exists only while the kubelet reports disk/inode pressure). The node-anchor member, observable now that the KSM lane is ingested + the DiskPressure row is derived (G2). The kubelet evaluated its own nodefs/imagefs/inode eviction thresholds; this surfaces that verdict, never a Vigil-invented bar or a per-mountpoint guess."

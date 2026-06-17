@@ -78,3 +78,42 @@ a real memory eviction is OOM-risky, NOT triggered live. v0.6.0 loads clean live
   and PHEN_PDB_VIOLATION has zero base KG members — identity-layer work + an authored member.
 - Next derivations (cheap, on this keystone): `kube_pod_status_phase{phase=Pending}` ->
   SCHEDULING_FAILURE; `kube_pod_container_status_last_terminated_reason{reason=OOMKilled}`.
+
+## Batch 3 — DISK_PID_INODE_PRESSURE (v0.7.0, branch v4)
+Wires the node-anchor member of PHEN_DISK_PID_INODE_PRESSURE (a CRITICAL operator blind
+spot: a node shedding pods because nodefs / imagefs / inodes ran out). The member is the
+kubelet's OWN `DiskPressure` node condition, fed by a NEW label-select derivation:
+`kube_node_status_disk_pressure` = the `{condition="DiskPressure",status="true"}` row of
+`kube_node_status_condition`, emitted ONLY while the kubelet reports the condition.
+
+WHY the node condition, not node-exporter `node_filesystem_avail_bytes`: node-exporter
+reports avail PER (device, mountpoint, fstype) — overlay, tmpfs, shm, root, image fs — so a
+raw-ratio crossing on the WRONG mount is a false positive and the wrong one healthy is a
+false negative. `DiskPressure` is the kubelet's SINGLE authoritative verdict over exactly
+the filesystems it evicts on, evaluated against ITS configured thresholds: cluster-agnostic
+(every kubelet computes it) and free of mountpoint ambiguity. Borrowed normativity at its
+cleanest — the kubelet's number, never Vigil's, and never a guessed ratio.
+
+Overlays: threshold-rules-v5 (THR_NODE_DISK_PRESSURE, absolute / above 0 / Node — structural
+flagged default) + detect-conditions-v6 (the node-condition anchor check + the Node anchor
+declaration). `govern-classify v0.6.0 v0.7.0` = behavioural-medium (new flagged rule + new
+check on an EXISTING required member; no new phenomenon, no edited default). Frozen-corpus
+drift on regen = the GraphVersion stamp ONLY (10 lines, all sha256/graph_version), proving
+detection is byte-identical (the in-digest check is INERT without a disk-pressure stream).
+
+Go golden floors (-race, in `just ksm-gate`): derivation fidelity (the DiskPressure=true row
+-> ONE clean single-series stream value 1; the healthy status="false" row is NOT derived, so
+a check never fires on a healthy node); FIRING (a node's disk-pressure variable produces a
+DEGRADED DISK_PID_INODE_PRESSURE, the bar FLAGGED, the unobserved members NAMED); SILENT (a
+healthy node -> no finding, also the non-gating assertion).
+
+LIVE (v0.7.0, kind-vigil): obsd loads release v0.7.0 (14 rules, 13 overlays); the KSM lane
+scrapes `kube_node_status_condition` every cycle (38 condition rows, ksm:1); THR_NODE_DISK_PRESSURE
+binds to ALL 3 nodes (instantiated 3 / defaultBound 3). All 3 nodes report DiskPressure=false,
+so the derived gauge has 0 streams and the bar is WATCHED-awaiting (zero false positives — the
+kubelet's verdict is "no pressure"). A positive FIRING is golden-certified only: tripping real
+kubelet disk-pressure needs filling the shared ~405 GB Docker-VM disk to nodefs<10%, unsafe on
+this cluster (the documented env constraint) — NOT triggered live.
+
+PID pressure shares this member signal and is a NAMED co-member (a follow-up once the
+derivation strips selector labels so disk|pid can share one derived stream).

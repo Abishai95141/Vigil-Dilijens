@@ -297,8 +297,11 @@ func TestSnapshotRoundTripIdenticalFindings(t *testing.T) {
 // (second-order, evaluated by the two-hop walk — never skipped).
 func TestSpannedCensus(t *testing.T) {
 	m := NewMatcher(loadGraph(t))
-	if m.FirstOrderCount() != 5 {
-		t.Errorf("first-order phenomena with checks = %d, want 5", m.FirstOrderCount())
+	// v0.2.0: four first-order; v0.3.0: +OOM_KILL_CGROUP (5); v0.6.0 (G2b): EVICTION
+	// neighbour check (still 5 phenomena); v0.7.0 (DISK): +DISK_PID_INODE_PRESSURE
+	// node-condition anchor check (6).
+	if m.FirstOrderCount() != 6 {
+		t.Errorf("first-order phenomena with checks = %d, want 6", m.FirstOrderCount())
 	}
 	if m.SecondOrderCount() != 1 {
 		t.Errorf("second-order phenomena with checks = %d, want 1 (STORAGE_SATURATION)", m.SecondOrderCount())

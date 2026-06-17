@@ -1,0 +1,48 @@
+# Graph release v0.7.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.7.0
+graph_version: "sha256:c4569ecfef96bf62dc0e0352d332a34c7d96e809ba9f8525f365d38511a8f14c"
+created: "2026-06-17"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+summary: >-
+  KSM object-state lane, batch 3 (graph-robustness #2, DISK_PID_INODE_PRESSURE): wires the
+  node-anchor member of PHEN_DISK_PID_INODE_PRESSURE — the kubelet's own DiskPressure
+  condition — so disk / inode exhaustion (a CRITICAL operator blind spot: a node shedding
+  pods because nodefs, imagefs, or inodes ran out) becomes a visible MEASURED finding. Adds
+  threshold-rules-v5.yaml (THR_NODE_DISK_PRESSURE) + detect-conditions-v6.yaml (the
+  node-condition anchor check + the Node anchor declaration). The member is fed by a NEW
+  ingest-time LABEL-SELECT DERIVATION: kube_node_status_disk_pressure is the single-series
+  projection of kube_node_status_condition{condition="DiskPressure",status="true"} (emitted
+  only while the kubelet reports the condition), so the matcher's one-series-per-(entity,
+  metric) lookup can bind it. Chosen over node-exporter node_filesystem_avail_bytes
+  deliberately: DiskPressure is the kubelet's SINGLE authoritative verdict over exactly the
+  filesystems it evicts on, evaluated against ITS configured thresholds — cluster-agnostic
+  and free of the per-(device,mountpoint,fstype) ambiguity a raw avail ratio carries (a
+  ratio crossing on the wrong mount is a false positive; the wrong one healthy is a false
+  negative). The derivation is part of the KSM dialect (like normalize.ksm itself), a
+  deterministic projection of a MEASURED fact — NOT a learned threshold; the bar stays an
+  authored structural flagged default (borrowed-normativity clean — the kubelet's own
+  number, never Vigil's). BEHAVIOURAL-MEDIUM class (a new rule with a flagged default + a
+  new detection check on an EXISTING required member; no new phenomenon, no edited default).
+  NON-GATING: the check is INERT without the KSM scrape, and even with it the derived row is
+  emitted only while a node IS disk-pressured (the healthy status="false" row never matches),
+  so every cluster without an actively disk-pressured node behaves byte-identically. PID
+  pressure shares this member signal and is a NAMED co-member on the degraded finding (a
+  follow-up once the derivation strips selector labels so disk|pid can share one stream).

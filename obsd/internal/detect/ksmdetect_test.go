@@ -239,6 +239,77 @@ func TestEvictionMemoryNoEvictedMemberWithoutEdge(t *testing.T) {
 	}
 }
 
+// diskPressureNodeFP: a node whose own DiskPressure condition is set — the derived
+// KSM gauge kube_node_status_disk_pressure exists (=1, above the structural flagged
+// bar of 0) ONLY while the kubelet reports disk/inode pressure.
+func diskPressureNodeFP(at time.Time, pressured bool) observe.Fingerprint {
+	fp := observe.Fingerprint{
+		CEIKey: nodeKey, Name: "worker-1", Kind: "Node", EvaluatedAt: at,
+	}
+	if pressured {
+		fp.Thresholds = []observe.VariableThreshold{{
+			RuleID: "THR_NODE_DISK_PRESSURE", Metric: "kube_node_status_disk_pressure",
+			State: observe.StateAbove, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-disk", SampleAt: at, How: "gauge-level"},
+		}}
+	}
+	return fp
+}
+
+// DISK_PID_INODE_PRESSURE (DISK): a node under its own kubelet-reported DiskPressure
+// produces a DEGRADED MEASURED finding — the node-condition anchor member observable now
+// that the KSM lane is ingested + the DiskPressure row is derived. Honestly DEGRADED: only
+// the node-condition member is observable here; the kubelet_evictions counter, the
+// per-mountpoint node-exporter ratio, and the eviction-lifecycle events are NAMED unobserved.
+func TestDiskPressureFiresOnNodeCondition(t *testing.T) {
+	m := NewMatcher(loadKSMGraph(t))
+	topo := edgeStore(t, evalAt.Add(-10*time.Second))
+
+	out := m.Match([]observe.Fingerprint{diskPressureNodeFP(evalAt, true)}, nil, topo, w)
+	f := findPhen(out, "PHEN_DISK_PID_INODE_PRESSURE")
+	if f == nil {
+		t.Fatalf("PHEN_DISK_PID_INODE_PRESSURE must fire when the node's DiskPressure condition is set; findings: %+v", out)
+	}
+	if f.Quality != QualityDegraded {
+		t.Errorf("quality = %s, want degraded (only the node-condition member is observable here)", f.Quality)
+	}
+	if f.RequiredMet != 1 {
+		t.Errorf("RequiredMet = %d, want 1 (the DiskPressure node-condition)", f.RequiredMet)
+	}
+	hasDisk := false
+	for _, mem := range f.Members {
+		if mem.Metric == "kube_node_status_disk_pressure" {
+			hasDisk = true
+			// Borrowed normativity: the kubelet's own verdict — a FLAGGED structural default
+			// (there is no customer config for a disk-pressure tolerance), never invented.
+			if !mem.BarFlagged {
+				t.Errorf("the disk-pressure bar must be a FLAGGED structural default")
+			}
+		}
+	}
+	if !hasDisk {
+		t.Errorf("the KSM-derived disk-pressure member must be in the finding evidence: %+v", f.Members)
+	}
+	// degrade-never-fabricate: the unobserved required members are NAMED, not faked.
+	if len(f.Unobservable) == 0 {
+		t.Errorf("the unobservable required members must be NAMED on the finding (degrade-never-fabricate)")
+	}
+}
+
+// A healthy node (no DiskPressure → the derived gauge is never emitted, so no
+// disk-pressure variable) produces NO finding through the in-digest path. This is also
+// the NON-GATING assertion: the released v6 check is INERT without an actively
+// disk-pressured node, so a cluster with healthy nodes sees byte-identical detection —
+// and there is no per-mountpoint avail-ratio guess to false-positive on.
+func TestDiskPressureSilentWhenHealthy(t *testing.T) {
+	m := NewMatcher(loadKSMGraph(t))
+	topo := edgeStore(t, evalAt.Add(-10*time.Second))
+	out := m.Match([]observe.Fingerprint{diskPressureNodeFP(evalAt, false)}, nil, topo, w)
+	if f := findPhen(out, "PHEN_DISK_PID_INODE_PRESSURE"); f != nil {
+		t.Fatalf("a healthy node (no DiskPressure) must not fire DISK_PID_INODE_PRESSURE; got %+v", f)
+	}
+}
+
 // A throttle on one pod and a restart burst on an UNRELATED pod is two findings, not
 // one story — the cascade must NOT pair topologically-unrelated entities.
 func TestThrottleProbeRestartUnrelatedNoCascade(t *testing.T) {

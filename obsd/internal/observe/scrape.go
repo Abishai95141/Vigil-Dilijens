@@ -418,6 +418,17 @@ var ksmDerivations = []ksmDerivation{
 	// Memory-pressure eviction: the Evicted reason row of a pod's status-reason gauge
 	// (PHEN_EVICTION_MEMORY pod-side member, one runs-on hop from the node anchor).
 	{source: "kube_pod_status_reason", match: map[string]string{"reason": "Evicted"}, derived: "kube_pod_status_evicted"},
+	// Disk/inode pressure: the DiskPressure condition-true row of a node's status-condition
+	// gauge (PHEN_DISK_PID_INODE_PRESSURE node anchor). DiskPressure IS the kubelet's own
+	// eviction verdict — it already evaluated ITS configured nodefs.available / imagefs.available
+	// / nodefs.inodesFree thresholds and set the condition. That is borrowed normativity at its
+	// cleanest (the kubelet's number, never ours) with NO per-mountpoint ambiguity. The row is
+	// =1 only while the node IS under disk/inode pressure (the status="false" healthy row carries
+	// status!="true", so it never matches), so "above 0" is the pressure itself. Cluster-agnostic:
+	// every kubelet computes this condition. (PID pressure shares this signal member; it is a
+	// NAMED co-member on the degraded finding, a trivial follow-up once the derivation strips
+	// selector labels so disk|pid can share one derived stream.)
+	{source: "kube_node_status_condition", match: map[string]string{"condition": "DiskPressure", "status": "true"}, derived: "kube_node_status_disk_pressure"},
 }
 
 // deriveKSM re-emits the active selected rows of a KSM series under their clean

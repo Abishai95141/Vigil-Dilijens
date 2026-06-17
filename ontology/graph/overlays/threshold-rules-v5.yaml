@@ -1,0 +1,37 @@
+# Threshold rules — authored overlay v5 (doc 04 §3.4 / G2 telemetry).
+#
+# The KSM object-state lane's node-condition pressure bar. PHEN_DISK_PID_INODE_PRESSURE's
+# node-anchor member: the kubelet's own DiskPressure verdict. The derived single-series
+# gauge kube_node_status_disk_pressure (the {condition="DiskPressure",status="true"} row of
+# kube_node_status_condition, selected at ingest) is present (=1) ONLY while a node IS under
+# disk/inode pressure, so "above 0" IS the pressure itself.
+#
+# Borrowed normativity at its cleanest: DiskPressure is set by the kubelet AFTER it evaluates
+# ITS OWN configured eviction thresholds (nodefs.available / imagefs.available /
+# nodefs.inodesFree). We surface the kubelet's number, never invent one — there is no
+# per-mountpoint ambiguity and no guessed ratio (contrast THR_NODE_FS_AVAIL_RATIO, a flagged
+# upstream-default mirror). Structural flagged default — the pressed condition is itself the
+# signal; there is no customer config for a "disk-pressure tolerance".
+overlay: threshold-rules-v5
+version: 5
+author: vigil-engineering
+status: released-v5 (KSM object-state lane — node disk/inode-pressure bar)
+
+rules:
+  - id: THR_NODE_DISK_PRESSURE
+    signal: SIG_node_status_conditions_ready_memorypressure_diskpressure_pid_8581abf4
+    metric: kube_node_status_disk_pressure
+    kind: absolute
+    default: 0
+    direction: above
+    entity_scope: Node
+    window: 5m
+    rationale: >-
+      Node under disk/inode pressure (PHEN_DISK_PID_INODE_PRESSURE node-anchor member).
+      kube_node_status_disk_pressure is the ingest-derived single-series projection of
+      kube_node_status_condition{condition="DiskPressure",status="true"} — emitted only while
+      the kubelet reports the DiskPressure condition, so a value above 0 is the pressure
+      itself. The kubelet sets DiskPressure after evaluating its OWN configured nodefs /
+      imagefs / inode eviction thresholds, so the bar is the kubelet's verdict (borrowed
+      normativity), not a Vigil-invented number and not a per-mountpoint guess. Structural
+      flagged default; no API/config source for a disk-pressure tolerance.

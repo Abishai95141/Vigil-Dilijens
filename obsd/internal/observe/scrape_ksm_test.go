@@ -18,6 +18,8 @@ kube_pod_container_status_restarts_total{namespace="shop",pod="web-a",uid="pod-x
 kube_node_status_condition{node="worker-1",condition="Ready",status="true"} 1
 kube_node_status_condition{node="worker-1",condition="Ready",status="false"} 0
 kube_node_status_condition{node="worker-1",condition="MemoryPressure",status="false"} 0
+kube_node_status_condition{node="worker-1",condition="DiskPressure",status="true"} 1
+kube_node_status_condition{node="worker-1",condition="DiskPressure",status="false"} 0
 # HELP kube_pod_status_reason The reason a pod is in its current state.
 # TYPE kube_pod_status_reason gauge
 kube_pod_status_reason{namespace="shop",pod="web-a",uid="pod-x",reason="Evicted"} 1
@@ -37,11 +39,12 @@ func TestScrapeKSMResolvesByLabelIdentity(t *testing.T) {
 	targets := []PodTarget{{Namespace: "monitoring", Name: "kube-state-metrics", Port: "8080", Path: "metrics"}}
 	sum := in.IngestPayloads(FetchKSM(context.Background(), f, targets))
 
-	// 6 series resolve: 1 restart counter (container) + 3 node-condition series (node)
-	// + 2 pod-status-reason rows (pod). The PDB object metric is unmapped → quarantined.
+	// 8 series resolve: 1 restart counter (container) + 5 node-condition series (node:
+	// Ready true/false, MemoryPressure false, DiskPressure true/false) + 2
+	// pod-status-reason rows (pod). The PDB object metric is unmapped → quarantined.
 	// (Derived rows are projections, not counted in the scrape accounting.)
-	if sum.SeriesResolved != 6 || sum.SamplesStored != 6 {
-		t.Fatalf("resolved=%d stored=%d, want 6/6 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
+	if sum.SeriesResolved != 8 || sum.SamplesStored != 8 {
+		t.Fatalf("resolved=%d stored=%d, want 8/8 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
 	}
 	if sum.SeriesQuarantine["unmapped-metric-class"] != 1 {
 		t.Errorf("quarantines = %v, want unmapped-metric-class:1 (the PDB object metric)", sum.SeriesQuarantine)
@@ -69,11 +72,25 @@ func TestScrapeKSMResolvesByLabelIdentity(t *testing.T) {
 		t.Errorf("restart stream meta = %+v, want Container/counter", meta)
 	}
 
-	// The node-condition family: THREE DISTINCT streams under the SAME (node CEI,
+	// The node-condition family: FIVE DISTINCT streams under the SAME (node CEI,
 	// metric) — the sub-id (full label set) prevents the dimension mis-join. Without
 	// the fix these would collapse into one ring and interleave unrelated conditions.
 	c := in.StreamsByUIDMetric("node-u1", "kube_node_status_condition")
-	if len(c) != 3 {
-		t.Fatalf("node-condition streams = %v, want 3 distinct (condition×status dimensions, not collapsed)", c)
+	if len(c) != 5 {
+		t.Fatalf("node-condition streams = %v, want 5 distinct (condition×status dimensions, not collapsed)", c)
+	}
+
+	// The DISK DERIVATION (DISK_PID_INODE_PRESSURE): the active DiskPressure=true row of
+	// kube_node_status_condition is re-emitted as the clean single-series
+	// kube_node_status_disk_pressure on the NODE CEI — the kubelet's own disk/inode
+	// eviction verdict, the member a detect-condition can bind. The healthy
+	// DiskPressure=false row (value 0) is NOT derived (the derived stream exists only for
+	// a node ACTUALLY under disk pressure), so a check never fires on a healthy node.
+	dp := in.StreamsByUIDMetric("node-u1", "kube_node_status_disk_pressure")
+	if len(dp) != 1 {
+		t.Fatalf("derived disk-pressure streams = %v, want exactly 1 (the DiskPressure=true row, value>0)", dp)
+	}
+	if s, ok := in.Latest(dp[0]); !ok || s.Value != 1 {
+		t.Errorf("derived disk-pressure sample = %+v (ok=%v), want value 1", s, ok)
 	}
 }
