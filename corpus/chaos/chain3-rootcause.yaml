@@ -1,0 +1,137 @@
+# Cap B (doc 15) live rig — a 3-tier flow-connected leak chain so the TRANSITIVE
+# root-cause chain lights: chain-front -> chain-mid -> chain-back (flow edges, caller->callee).
+# Each tier leaks container_memory_working_set_bytes while RISING (PHEN_MEMORY_LEAK is
+# slope-based, doc 07), prefilled just under its 0.95*limit bar so all three cross + stay
+# rising-above-bar together for a ~3min window, then OOM (leak resets). Root = chain-back
+# (deepest degraded callee); ordered chain back<-mid<-front. The orientation is the AUTHORED
+# PHEN_UPSTREAM_DEGRADATION->PHEN_DOWNSTREAM_IMPACT relation; impact travels callee->caller.
+# limit 320Mi, prefill 250Mi, +6Mi/min: bar 0.95*320=304 crossed ~t+9min, OOM 320 ~t+11.7min.
+apiVersion: v1
+kind: Namespace
+metadata: { name: chaos }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: chain-back, namespace: chaos, labels: { app: chain-back } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: chain-back } }
+  template:
+    metadata: { labels: { app: chain-back } }
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              buf = [bytearray(1024*1024) for _ in range(250)]   # prefill ~250Mi (just under the 304Mi bar)
+              def leak():
+                  while True:
+                      buf.append(bytearray(1024*1024)); time.sleep(10)   # +6Mi/min, rising => PHEN_MEMORY_LEAK
+              threading.Thread(target=leak, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 8080)); s.listen(32)
+              held = []
+              while True:
+                  c, _ = s.accept(); held.append(c)
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 20m, memory: 128Mi }
+            limits:   { cpu: 200m, memory: 320Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: chain-back, namespace: chaos }
+spec:
+  selector: { app: chain-back }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: chain-mid, namespace: chaos, labels: { app: chain-mid } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: chain-mid } }
+  template:
+    metadata: { labels: { app: chain-mid } }
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              buf = [bytearray(1024*1024) for _ in range(250)]
+              def leak():
+                  while True:
+                      buf.append(bytearray(1024*1024)); time.sleep(10)
+              threading.Thread(target=leak, daemon=True).start()
+              # client thread: durable conntrack edge chain-mid -> chain-back:8080
+              def call():
+                  while True:
+                      try:
+                          c = socket.create_connection(("chain-back.chaos.svc.cluster.local", 8080), timeout=5)
+                          while True:
+                              time.sleep(8); c.sendall(b"ping")
+                      except Exception:
+                          time.sleep(3)
+              threading.Thread(target=call, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 8080)); s.listen(32)
+              held = []
+              while True:
+                  c, _ = s.accept(); held.append(c)
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 20m, memory: 128Mi }
+            limits:   { cpu: 200m, memory: 320Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: chain-mid, namespace: chaos }
+spec:
+  selector: { app: chain-mid }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: chain-front, namespace: chaos, labels: { app: chain-front } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: chain-front } }
+  template:
+    metadata: { labels: { app: chain-front } }
+    spec:
+      containers:
+        - name: server
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              buf = [bytearray(1024*1024) for _ in range(250)]
+              def leak():
+                  while True:
+                      buf.append(bytearray(1024*1024)); time.sleep(10)
+              threading.Thread(target=leak, daemon=True).start()
+              # client thread: durable conntrack edge chain-front -> chain-mid:8080
+              def call():
+                  while True:
+                      try:
+                          c = socket.create_connection(("chain-mid.chaos.svc.cluster.local", 8080), timeout=5)
+                          while True:
+                              time.sleep(8); c.sendall(b"ping")
+                      except Exception:
+                          time.sleep(3)
+              threading.Thread(target=call, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 8080)); s.listen(32)
+              while True:
+                  time.sleep(3600)
+          ports: [{ containerPort: 8080 }]
+          resources:
+            requests: { cpu: 20m, memory: 128Mi }
+            limits:   { cpu: 200m, memory: 320Mi }
