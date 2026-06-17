@@ -65,6 +65,10 @@ type Providers struct {
 	// Referee validates an EXTERNAL claim against the charter + authored graph (v3
 	// T-D). Advisory — it NEVER blocks. nil ⇒ the referee is not enabled.
 	Referee func(claim string) ClaimVerdict
+	// AuthoredRelations returns the curated causal map (v3.1) — the authored
+	// phenomenon_relation edges + phenomenon vocabulary, class AUTHORED. nil ⇒ the
+	// graph is not loaded; the route then serves an honest empty map.
+	AuthoredRelations func() *AuthoredRelationsView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -285,6 +289,21 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		if v == nil {
 			v = BuildRootCauseChain(nil, nil, false, false, timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/authored-relations", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *AuthoredRelationsView
+		if p.AuthoredRelations != nil {
+			v = p.AuthoredRelations()
+		}
+		if v == nil {
+			v = BuildAuthoredRelations(nil, nil, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

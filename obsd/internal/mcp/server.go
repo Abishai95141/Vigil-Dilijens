@@ -26,6 +26,21 @@ type Sources struct {
 	Warnings      func() *api.WarningsView
 	Incidents     func() *api.IncidentsView
 	Events        func() *api.EventsView
+	// --- the synthesis relay (v3.1): the full classed picture, so an MCP-connected
+	// AI can SYNTHESIZE a cause + a suggested remediation from grounded facts rather
+	// than guess. The charter discipline moves from input-withholding to output-
+	// labeling: every payload below is already provenance-classed; the AI's synthesis
+	// is disciplined at the boundary (cite, label-its-own-inference, validate_claim).
+	// All are read-only snapshot funcs (no writer in scope ⇒ no-write-back STRUCTURAL).
+	Insights       func() *api.InsightsView       // MEASURED ⋈ AUTHORED — evidence trail + authored why
+	RootCauseChain func() *api.RootCauseChainView // MEASURED ⋈ AUTHORED — the transitive chain (the cause spine)
+	CrossService   func() *api.CrossServiceView   // MEASURED ⋈ AUTHORED — the one-hop cascade
+	Topology       func() *api.TopologyView       // MEASURED — the bound dependency graph
+	Unexplained    func() *api.UnexplainedView    // MEASURED — loud-but-unmatched + the stated blind spot
+	Departures     func() *api.DepartureView      // PROJECTED — band-departure anomalies
+	// AuthoredRelations is the curated causal map (AUTHORED) — the only legitimate
+	// causal basis, so the agent can tell an authored cause from a co-occurrence.
+	AuthoredRelations func() *api.AuthoredRelationsView
 	// Referee validates an external claim against the charter + authored graph
 	// (v3 T-D). Advisory — NEVER blocks. nil ⇒ the validate_claim tool reports off.
 	Referee func(claim string) api.ClaimVerdict
@@ -109,7 +124,7 @@ func (s *Server) dispatch(method string, params json.RawMessage) (json.RawMessag
 			"protocolVersion": protocolVersion,
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 			"serverInfo":      map[string]any{"name": s.serverName, "version": s.serverVersion},
-			"instructions":    "Vigil read-only observability harness. Tools return already-classed facts (MEASURED/PROJECTED) verbatim — never restate a projection as a measurement or assert a cause. Lead with get_silence_ledger for a provable account of what is NOT watched and why.",
+			"instructions":    synthesisInstructions,
 		}), nil
 	case "ping":
 		return mustRaw(map[string]any{}), nil
@@ -136,9 +151,37 @@ const (
 	toolWarnings      = "get_warnings"
 	toolIncidents     = "get_incidents"
 	toolEvents        = "get_events"
+	// the synthesis relay (v3.1)
+	toolInsights       = "get_insights"
+	toolRootCauseChain = "get_root_cause_chain"
+	toolCrossService   = "get_cross_service"
+	toolTopology       = "get_topology"
+	toolUnexplained    = "get_unexplained"
+	toolDepartures     = "get_departures"
+	toolAuthoredRels   = "get_authored_relations"
+
 	toolValidateClaim = "validate_claim"
 	toolEmitAdvisory  = "emit_advisory"
 )
+
+// synthesisInstructions is the server-level guide handed to the model at
+// `initialize`. It frames Vigil as the classed-fact substrate and the AI as the
+// synthesizer, with the discipline that keeps the separation honest.
+const synthesisInstructions = "Vigil is a read-only, deterministic observability substrate for AI synthesis. " +
+	"Every tool returns ALREADY-CLASSED facts: MEASURED (read from the store or an arithmetic consequence), " +
+	"PROJECTED (a forecast band — never a single line, never the word \"will\"), AUTHORED (a curated graph note, " +
+	"surfaced verbatim with author+version). YOUR job is to SYNTHESIZE the cause and a suggested remediation FROM " +
+	"these facts — Vigil never authors prose or fixes. The separation is preserved at the OUTPUT, not by starving you: " +
+	"(1) ground every claim in a tool result and cite it; (2) get_root_cause_chain + get_cross_service ARE Vigil's " +
+	"already-computed cause — relay/narrate them, never derive a different one; (3) get_topology is structure (raw " +
+	"adjacency), not causation; (4) anything you infer BEYOND an authored relation (get_authored_relations is the only " +
+	"legitimate causal basis) is YOUR hypothesis — label it so, never as a Vigil fact; (5) run every causal/forecast " +
+	"sentence through validate_claim, then emit via emit_advisory. " +
+	"Incident playbook: get_root_cause_chain (the spine) -> get_insights (evidence + the authored why) -> " +
+	"get_cross_service + get_topology (blast radius) -> get_warnings (what crosses a bar soon + the lead time) -> " +
+	"get_incidents (has it recurred / how often) -> get_events (discrete failures) -> get_unexplained + " +
+	"get_silence_ledger (the honest blind spots) -> draft -> validate_claim -> emit_advisory. The remediation is YOURS " +
+	"to reason from ops knowledge + application context you gather; Vigil supplies only the grounded, classed facts."
 
 var emptyObjectSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 
@@ -169,14 +212,50 @@ func toolDefs() []toolDef {
 			Description: "MEASURED. The discrete-event lane: k8s Events (OOMKilled, CrashLoopBackOff) ingested as findings and JOINED by shared role CEI to gauge phenomena (corroborate, never fuse). A corroboration carries an AUTHORED why verbatim; a standalone event is visible but never upgraded to a match. An event is a co-occurrence, never a cause.",
 			InputSchema: emptyObjectSchema,
 		},
+		// --- the synthesis relay (v3.1): the full classed picture for cause synthesis ---
+		{
+			Name:        toolRootCauseChain,
+			Description: "MEASURED ⋈ AUTHORED — the SPINE of a cause; start here for an incident. The transitive root-cause chain: MEASURED-degraded workloads stitched into an ORDERED chain over observed-flow edges, oriented ONLY by an authored relation, with the deepest degraded callee marked ROOT and the orientation “why” quoted verbatim (author+version). Silent intermediates are stated GAPS, never bridged. This chain IS Vigil's already-computed cause — relay/narrate it; never derive a different root. Also carries the gate-pending PROJECTED multi-hop ripple, clearly marked (do not present it as measured).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolInsights,
+			Description: "MEASURED ⋈ AUTHORED — the why-feed and your primary GROUNDING. Every phenomenon matched right now, each with its MEASURED evidence trail (the member signals that crossed, their config-sourced bar + state) AND the AUTHORED member note — the only curated “why”, attributed verbatim. Also carries recognized cascades (co-occurrence ⋈ authored relation). Use it to ground WHAT is degraded and to QUOTE the authored why; never invent a why the note does not state.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolCrossService,
+			Description: "MEASURED ⋈ AUTHORED — the one-hop cascade: a degraded callee reaching its impacted callers over an observed-flow edge, impact traveling AGAINST the call arrow (callee → caller), oriented by the authored relation. A narrower, higher-confidence view than the transitive chain; use it to confirm the immediate blast direction.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolTopology,
+			Description: "MEASURED — the bound cluster graph: workloads, nodes, services and their edges (observed call/flow, runs-on, service-routing, storage), each node carrying its current health mark. Use it to reason about DEPENDENCIES and a fix's blast radius, and to GROUND a cause in the chain — NOT to infer a cause the chain does not show (raw adjacency is not causation).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolUnexplained,
+			Description: "MEASURED — the loud-but-unmatched channel: signals anomalous against a resolved bar that match NO known phenomenon, plus candidate patterns proposed for human curation, plus the channel's OWN stated blind spot. Read as “there is more here than the known patterns explain” — investigate, do not alarm. These are co-occurrences, never causes.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolDepartures,
+			Description: "PROJECTED — band-departure anomalies: a MEASURED sample that left its OWN recent forecast band beyond a structural margin (the band IS the bar; never learned). Gate-pending until a live capture flips the gate — it states that honestly. Read as an early, uncertain “this series is behaving outside its own forecast”, never as a measured fact.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolAuthoredRels,
+			Description: "AUTHORED — the curated causal map: every directed phenomenon→phenomenon relation Vigil's ontology authors (Src→Dst + the verbatim why), plus the phenomenon vocabulary (id → human aliases). This is the ONLY legitimate causal basis: an observed co-occurrence is an authored CAUSE only if a relation for it appears here; otherwise it is coincidence (say so). Use it to tell authored causes from co-occurrence and to map ids in a chain/finding to meaning. ~13 relations — Vigil never invents a 14th.",
+			InputSchema: emptyObjectSchema,
+		},
 		{
 			Name:        toolValidateClaim,
-			Description: "Referee a claim BEFORE you surface it (v3 T-D). Submit your drafted prose; the referee checks it against the charter + the AUTHORED graph and returns {flagged, reasons, matchedAuthored} — it flags generated causation (a cause the graph does not author), a projection restated as a measurement, and future certainty. It is ADVISORY: it NEVER blocks. A causal claim with an authored relation behind it is not flagged but should be surfaced AS authored, verbatim.",
+			Description: "The HONEST-LABELER for your synthesis — it NEVER blocks; a flag is a labeling instruction, not a veto. Submit a drafted causal/forecast clause; it checks it against the charter + the AUTHORED graph and returns {flagged, reasons[{class}], matchedAuthored}. Use it to LABEL, not delete: matchedAuthored=true ⇒ an authored relation backs this, present it AS authored (quote it); flagged generated-causation ⇒ no authored relation backs it, keep it but label it YOUR hypothesis (not a Vigil fact); flagged future-certainty ⇒ you stated a projection as certain, soften to a band; flagged class-fusion ⇒ you called a PROJECTED subject MEASURED, separate the classes. Run every causal/forecast sentence through this before emit_advisory.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"claim":{"type":"string","description":"the drafted claim to referee"}},"required":["claim"],"additionalProperties":false}`),
 		},
 		{
 			Name:        toolEmitAdvisory,
-			Description: "Submit a generated operator-facing summary as the ADVISORY class. The text is charter-checked: a draft asserting a cause or a future certainty is REFUSED; a register-clean draft is WITHHELD until the advisory gate passes. ADVISORY is never MEASURED/PROJECTED/AUTHORED and is never written back into Vigil.",
+			Description: "Emit your SYNTHESIZED narrative (cause and/or suggested remediation) as the ADVISORY class — clearly YOUR synthesis, distinct from Vigil's MEASURED/PROJECTED/AUTHORED facts and grounded in citations to the read tools. The text is charter-checked: a draft asserting an UN-authored cause as fact, or a future certainty, is REFUSED (re-draft using validate_claim's labels); a clean draft is WITHHELD until the advisory gate passes. ADVISORY is never written back into Vigil.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string","description":"the advisory prose to validate"}},"required":["text"],"additionalProperties":false}`),
 		},
 	}
@@ -213,6 +292,20 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.Incidents), "incident memory not enabled (needs --incident-memory + --db)"), nil
 	case toolEvents:
 		return toolJSON(orNil(s.src.Events), "events lane not enabled (needs --events-enabled)"), nil
+	case toolRootCauseChain:
+		return toolJSON(orNil(s.src.RootCauseChain), "root-cause chain not available (flow discovery off)"), nil
+	case toolInsights:
+		return toolJSON(orNil(s.src.Insights), "insights surface not available (api off)"), nil
+	case toolCrossService:
+		return toolJSON(orNil(s.src.CrossService), "cross-service surface not available (flow discovery off)"), nil
+	case toolTopology:
+		return toolJSON(orNil(s.src.Topology), "topology surface not available (api off)"), nil
+	case toolUnexplained:
+		return toolJSON(orNil(s.src.Unexplained), "unexplained channel not available (api off)"), nil
+	case toolDepartures:
+		return toolJSON(orNil(s.src.Departures), "departures surface not available (api off)"), nil
+	case toolAuthoredRels:
+		return toolJSON(orNil(s.src.AuthoredRelations), "authored-relations map not available (graph not loaded)"), nil
 	case toolValidateClaim:
 		if s.src.Referee == nil {
 			return mustRaw(toolResult{Content: []toolContent{{Type: "text", Text: `{"available":false,"note":"the validate-claim referee is not enabled (needs --referee-enabled)"}`}}}), nil

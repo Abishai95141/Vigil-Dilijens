@@ -57,6 +57,32 @@ func testSources() Sources {
 				}},
 			}
 		},
+		// --- the v3.1 synthesis relay: each carries a distinctive classed marker so the
+		// round-trip tests prove the class + payload survive the MCP wire unchanged.
+		Insights: func() *api.InsightsView {
+			return &api.InsightsView{GraphVersion: "insights-gv-marker", GeneratedAt: now, Findings: []api.InsightCard{}, Cascades: []api.CascadeCard{}}
+		},
+		RootCauseChain: func() *api.RootCauseChainView {
+			return &api.RootCauseChainView{Class: "MEASURED ⋈ AUTHORED (joined, never fused)", Enabled: true, Active: true, GeneratedAt: now, Note: "a transitive dependency chain"}
+		},
+		CrossService: func() *api.CrossServiceView {
+			return &api.CrossServiceView{Class: "MEASURED ⋈ AUTHORED (joined, never fused)", Enabled: true, Active: true, GeneratedAt: now, Note: "a cross-service cascade"}
+		},
+		Topology: func() *api.TopologyView {
+			return &api.TopologyView{GraphVersion: "topo-gv-marker", GeneratedAt: now, Nodes: []api.TopoNode{}, Edges: []api.TopoEdge{}}
+		},
+		Unexplained: func() *api.UnexplainedView {
+			return &api.UnexplainedView{GraphVersion: "gv", GeneratedAt: now, BlindSpot: "blind-spot-marker"}
+		},
+		Departures: func() *api.DepartureView {
+			return &api.DepartureView{Class: "PROJECTED band ⋈ MEASURED sample (joined, never fused)", Enabled: true, GeneratedAt: now, Note: "band-departure"}
+		},
+		AuthoredRelations: func() *api.AuthoredRelationsView {
+			return api.BuildAuthoredRelations(
+				map[string][]string{"PHEN_MEMORY_LEAK": {"memory leak"}, "PHEN_OOM_KILL_CGROUP": {"oom kill"}},
+				[]api.AuthoredLink{{Src: "PHEN_MEMORY_LEAK", Dst: "PHEN_OOM_KILL_CGROUP", Why: "Eventual outcome"}},
+				now)
+		},
 		Referee: func(claim string) api.ClaimVerdict {
 			return api.ValidateClaim(claim, api.ClaimContext{
 				Phenomena:     map[string][]string{"PHEN_MEMORY_LEAK": {"memory leak"}, "PHEN_OOM_KILL_CGROUP": {"oom kill"}},
@@ -149,6 +175,90 @@ func TestToolsListAdvertisesClassedTools(t *testing.T) {
 	for name, seen := range want {
 		if !seen {
 			t.Errorf("tools/list missing %s", name)
+		}
+	}
+}
+
+// TestSynthesisRelayRoundTripsClassed proves each new relay tool returns its
+// already-classed payload verbatim across the MCP wire (the class/marker survives).
+func TestSynthesisRelayRoundTripsClassed(t *testing.T) {
+	s := New(testSources(), false, "vigil-test", "v3")
+	cases := []struct{ tool, want string }{
+		{toolRootCauseChain, "MEASURED ⋈ AUTHORED"},
+		{toolCrossService, "MEASURED ⋈ AUTHORED"},
+		{toolDepartures, "PROJECTED band"},
+		{toolInsights, "insights-gv-marker"},
+		{toolTopology, "topo-gv-marker"},
+		{toolUnexplained, "blind-spot-marker"},
+		{toolAuthoredRels, "AUTHORED"},
+		{toolAuthoredRels, "PHEN_MEMORY_LEAK"},
+	}
+	for _, c := range cases {
+		resp := call(t, s, "tools/call", `{"name":"`+c.tool+`"}`)
+		text, isErr := toolText(t, resp)
+		if isErr {
+			t.Errorf("%s returned isError on a live source", c.tool)
+		}
+		if !strings.Contains(text, c.want) {
+			t.Errorf("%s did not preserve %q across the wire; got %s", c.tool, c.want, text)
+		}
+	}
+}
+
+// TestToolsListAdvertisesSynthesisTools asserts the synthesis tools are advertised
+// with class-correct descriptions so the agent picks the right grounding.
+func TestToolsListAdvertisesSynthesisTools(t *testing.T) {
+	s := New(testSources(), false, "vigil-test", "v3")
+	resp := call(t, s, "tools/list", "")
+	var r struct {
+		Tools []toolDef `json:"tools"`
+	}
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]toolDef{}
+	for _, tl := range r.Tools {
+		byName[tl.Name] = tl
+	}
+	for _, name := range []string{toolInsights, toolRootCauseChain, toolCrossService, toolTopology, toolUnexplained, toolDepartures, toolAuthoredRels} {
+		tl, ok := byName[name]
+		if !ok {
+			t.Errorf("tools/list missing synthesis tool %s", name)
+			continue
+		}
+		if len(tl.InputSchema) == 0 {
+			t.Errorf("%s missing inputSchema", name)
+		}
+	}
+	// class labels must be correct: the chain/cross-service carry the join, topology
+	// is MEASURED, departures are PROJECTED.
+	if !strings.Contains(byName[toolRootCauseChain].Description, "AUTHORED") {
+		t.Error("root-cause-chain tool must name its AUTHORED orientation")
+	}
+	if !strings.Contains(byName[toolTopology].Description, "MEASURED") {
+		t.Error("topology tool must label itself MEASURED")
+	}
+	if !strings.Contains(byName[toolDepartures].Description, "PROJECTED") {
+		t.Error("departures tool must label itself PROJECTED")
+	}
+	// the referee must be framed as a never-blocking labeler, not a gate.
+	if !strings.Contains(byName[toolValidateClaim].Description, "NEVER") {
+		t.Error("validate_claim must state it NEVER blocks")
+	}
+}
+
+// TestSynthesisLaneOffIsHonest proves a nil synthesis source is surfaced as an honest
+// "not available" text result (isError=false), never an error or an implied-empty fact.
+func TestSynthesisLaneOffIsHonest(t *testing.T) {
+	s := New(Sources{}, false, "vigil-test", "v3") // every source nil
+	for _, name := range []string{toolRootCauseChain, toolInsights, toolCrossService, toolTopology, toolUnexplained, toolDepartures} {
+		resp := call(t, s, "tools/call", `{"name":"`+name+`"}`)
+		text, isErr := toolText(t, resp)
+		if isErr {
+			t.Errorf("%s off-lane must not be isError (an off lane is a true state)", name)
+		}
+		if !strings.Contains(text, "available") {
+			t.Errorf("%s off-lane must state availability honestly; got %s", name, text)
 		}
 	}
 }

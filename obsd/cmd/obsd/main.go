@@ -614,6 +614,13 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			},
 			// v3 T-D validate-claim referee (nil ⇒ /api/validate-claim reports off).
 			Referee: refereeFn,
+			// v3.1 the curated causal map — class AUTHORED. Computed on demand from the
+			// loaded graph (small + static); the SAME phenomenon_relation edges + aliases
+			// the referee checks against, so the catalog and the referee never disagree.
+			AuthoredRelations: func() *vapi.AuthoredRelationsView {
+				ph, lk := refereePhenomena(ontologyGraph)
+				return vapi.BuildAuthoredRelations(ph, lk, time.Now().UTC())
+			},
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
@@ -740,11 +747,21 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				v, _ := providers.Incidents()
 				return v
 			},
-			Events:  providers.Events,
-			Referee: providers.Referee,
+			Events: providers.Events,
+			// v3.1 synthesis relay: the full classed picture so an MCP-connected AI can
+			// synthesize a cause + remediation from grounded facts. Same snapshot funcs as
+			// the web /api — no new computation, no writer in scope (no-write-back holds).
+			Insights:          providers.Insights,
+			RootCauseChain:    providers.RootCauseChain,
+			CrossService:      providers.CrossService,
+			Topology:          providers.Topology,
+			Unexplained:       providers.Unexplained,
+			Departures:        providers.Departures,
+			AuthoredRelations: providers.AuthoredRelations,
+			Referee:           providers.Referee,
 		}, mcpAdvisoryGatePassed, "vigil-obsd", graphRelease).HTTPHandler()
-		logger.Info("MCP harness enabled (v3 T-A + T-C/T-D tools)", "route", "/mcp",
-			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events validate_claim emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
+		logger.Info("MCP harness enabled (v3 T-A + T-C/T-D + v3.1 synthesis relay)", "route", "/mcp",
+			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events get_root_cause_chain get_insights get_cross_service get_topology get_unexplained get_departures get_authored_relations validate_claim emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
 	}
 	if incidentMemory {
 		if findingsStore == nil {

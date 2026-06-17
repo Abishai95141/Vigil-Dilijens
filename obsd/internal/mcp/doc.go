@@ -7,6 +7,19 @@
 // verbatim. The marquee tool is the silence ledger: a provable NEGATIVE ("what are
 // we NOT watching, and why") is exactly what an LLM hallucinates and Vigil can state.
 //
+// v3.1 — the SYNTHESIS RELAY. The surface widened from "what is NOT watched" to the
+// full classed picture so an MCP-connected AI can SYNTHESIZE a cause + a suggested
+// remediation from grounded facts rather than guess: get_root_cause_chain + _insights
+// + _cross_service + _topology + _unexplained + _departures + _authored_relations.
+// The charter is unchanged but its enforcement point MOVES — from input-withholding to
+// OUTPUT-labeling. Vigil emits classed facts; the AI synthesizes; the synthesis is
+// disciplined at the boundary: every payload is provenance-classed (the AI cites it),
+// the root-cause chain IS Vigil's already-computed cause (relayed, never re-derived),
+// get_authored_relations is the ONLY legitimate causal basis, and validate_claim is the
+// honest-labeler (matchedAuthored => present AS authored; flagged => label it the AI's
+// hypothesis) that NEVER blocks. emit_advisory still REFUSES a fabricated cause — so a
+// hypothesis can never wear Vigil's MEASURED/PROJECTED/AUTHORED badge.
+//
 // CHARTER (do / don't):
 //   - READ-ONLY, no write-back. This package imports ONLY internal/api (view types +
 //     the CharterViolations linter) and the standard library. It holds no graph,
