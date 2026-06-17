@@ -38,19 +38,23 @@ type TopologySummary struct {
 	Warned       int `json:"warned"`   // nodes carrying a PROJECTED early warning (separate glyph family)
 }
 
-// TopoNode is one entity. Marks are MEASURED facts about the system's current
-// state; each is a labelled boolean so the surface renders distinct glyphs.
+// TopoNode is one WORKLOAD (a Deployment/DaemonSet/StatefulSet role, or a Node).
+// The graph is workload-centric: an operator reasons about services, not the many
+// pods behind them. Pods roll up to their role (identity.RoleCEI); marks are the
+// OR across the workload's pods. Marks are MEASURED facts about current state; each
+// is a labelled boolean so the surface renders distinct glyphs.
 type TopoNode struct {
 	CEIKey    string   `json:"ceiKey"`
 	Kind      string   `json:"kind"`
 	Namespace string   `json:"namespace"`
 	Name      string   `json:"name"`
-	Selected  bool     `json:"selected"`  // Tier-A (06)
-	Matched   bool     `json:"matched"`   // a current phenomenon match (07) — "is"
-	Degraded  bool     `json:"degraded"`  // the match(es) here are degraded
-	Loud      bool     `json:"loud"`      // an unexplained loud card (08)
-	Warned    bool     `json:"warned"`    // an early-warning target (09) — "might", a SEPARATE visual language (10 M5)
-	Phenomena []string `json:"phenomena"` // matched phenomenon ids on this node
+	Replicas  int      `json:"replicas,omitempty"` // pods rolled into this workload (0 for a Node)
+	Selected  bool     `json:"selected"`           // Tier-A (06)
+	Matched   bool     `json:"matched"`            // a current phenomenon match (07) — "is"
+	Degraded  bool     `json:"degraded"`           // the match(es) here are degraded
+	Loud      bool     `json:"loud"`               // an unexplained loud card (08)
+	Warned    bool     `json:"warned"`             // an early-warning target (09) — "might", a SEPARATE visual language (10 M5)
+	Phenomena []string `json:"phenomena"`          // matched phenomenon ids on this workload
 }
 
 // TopoEdge is one topology edge with its validity verdict at `now`. A suspect
@@ -82,70 +86,120 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 		Nodes: []TopoNode{}, Edges: []TopoEdge{},
 	}
 
-	// Current marks, indexed by entity CEI.
-	matched := map[string][]string{} // entity -> matched phenomenon ids
+	// ── 1. fold the inventory: pods roll up into their workload role; a Node (no
+	//        role layer) stands as its own node. podToNode maps every instance key
+	//        to the node key that represents it (workload role key, or Node self).
+	type wmeta struct {
+		ns, kind, name string
+		replicas       int
+	}
+	nodeMeta := map[string]*wmeta{}
+	podToNode := map[string]string{}
+	for i := range inventory {
+		rec := &inventory[i]
+		ik := rec.CEI.Key()
+		if rec.RoleCEI.RoleKey != "" {
+			nk := rec.RoleCEI.Key()
+			podToNode[ik] = nk
+			m := nodeMeta[nk]
+			if m == nil {
+				wk, wn := splitRoleKey(rec.RoleCEI.RoleKey)
+				m = &wmeta{ns: rec.RoleCEI.Namespace, kind: wk, name: wn}
+				nodeMeta[nk] = m
+			}
+			m.replicas++
+		} else {
+			podToNode[ik] = ik
+			if nodeMeta[ik] == nil {
+				nodeMeta[ik] = &wmeta{ns: rec.Namespace, kind: rec.Kind, name: rec.Name}
+			}
+		}
+	}
+	// roll an instance/role key up to its node key (passthrough when unmapped —
+	// a role key already names its node; an unknown key stays itself).
+	roll := func(key string) string {
+		if nk, ok := podToNode[key]; ok {
+			return nk
+		}
+		return key
+	}
+
+	// ── 2. roll current marks up to the workload (OR across its pods) ──
+	matched := map[string]map[string]bool{} // node -> set of matched phenomenon ids
 	degraded := map[string]bool{}
+	addPhen := func(nk, p string) {
+		if matched[nk] == nil {
+			matched[nk] = map[string]bool{}
+		}
+		matched[nk][p] = true
+	}
 	for i := range findings {
 		f := &findings[i]
-		matched[f.EntityCEI] = append(matched[f.EntityCEI], f.Phenomenon)
+		nk := roll(f.EntityCEI)
+		addPhen(nk, f.Phenomenon)
 		if f.Quality == detect.QualityDegraded {
-			degraded[f.EntityCEI] = true
+			degraded[nk] = true
 		}
 	}
 	loud := map[string]bool{}
 	for _, c := range unexp {
 		if c.Status == unexplained.StatusNew || c.Status == unexplained.StatusAging {
-			loud[c.Scope] = true
+			loud[roll(c.Scope)] = true
+		}
+	}
+	sel := map[string]bool{}
+	for k := range selected {
+		sel[roll(k)] = true
+	}
+	warn := map[string]bool{}
+	for k, w := range warned {
+		if w {
+			warn[roll(k)] = true
 		}
 	}
 
-	// Nodes from the active inventory, capped. Sort first so truncation is
-	// deterministic (matched/loud/selected entities are kept preferentially).
-	type ranked struct {
-		rec identity.InstanceRecord
-		key string
+	// ── 3. nodes (workloads + Nodes), capped. Sort so truncation is deterministic
+	//        and keeps matched/loud/selected workloads preferentially. ──
+	keys := make([]string, 0, len(nodeMeta))
+	for k := range nodeMeta {
+		keys = append(keys, k)
 	}
-	rs := make([]ranked, 0, len(inventory))
-	for _, rec := range inventory {
-		rs = append(rs, ranked{rec, rec.CEI.Key()})
-	}
-	priority := func(key string) int {
+	priority := func(k string) int {
 		switch {
-		case len(matched[key]) > 0:
+		case len(matched[k]) > 0:
 			return 0
-		case loud[key]:
+		case loud[k]:
 			return 1
-		case len(selected[key]) > 0:
+		case sel[k]:
 			return 2
 		default:
 			return 3
 		}
 	}
-	sort.Slice(rs, func(i, j int) bool {
-		pi, pj := priority(rs[i].key), priority(rs[j].key)
+	sort.Slice(keys, func(i, j int) bool {
+		pi, pj := priority(keys[i]), priority(keys[j])
 		if pi != pj {
 			return pi < pj
 		}
-		return rs[i].key < rs[j].key
+		return keys[i] < keys[j]
 	})
-
 	included := map[string]bool{}
-	for _, r := range rs {
+	for _, k := range keys {
 		if len(included) >= topoCap {
 			v.Truncated++
 			continue
 		}
-		key := r.key
-		included[key] = true
-		phens := matched[key]
+		included[k] = true
+		m := nodeMeta[k]
+		phens := make([]string, 0, len(matched[k]))
+		for p := range matched[k] {
+			phens = append(phens, p)
+		}
 		sort.Strings(phens)
 		node := TopoNode{
-			CEIKey: key, Kind: r.rec.Kind, Namespace: r.rec.Namespace, Name: r.rec.Name,
-			Selected: len(selected[key]) > 0, Matched: len(phens) > 0,
-			Degraded: degraded[key], Loud: loud[key], Warned: warned[key], Phenomena: phens,
-		}
-		if node.Phenomena == nil {
-			node.Phenomena = []string{}
+			CEIKey: k, Kind: m.kind, Namespace: m.ns, Name: m.name, Replicas: m.replicas,
+			Selected: sel[k], Matched: len(phens) > 0, Degraded: degraded[k],
+			Loud: loud[k], Warned: warn[k], Phenomena: phens,
 		}
 		v.Nodes = append(v.Nodes, node)
 		if node.Matched {
@@ -163,14 +217,26 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 	}
 	sort.Slice(v.Nodes, func(i, j int) bool { return v.Nodes[i].CEIKey < v.Nodes[j].CEIKey })
 
-	// Edges among included nodes only (an edge to a truncated entity would
-	// dangle). Classify validity at `now`.
+	// ── 4. edges: observed-flow DEPENDENCIES (workload→workload, the call graph)
+	//        + aggregated placement (workload→Node). node-lease is placement noise
+	//        for an operator and is dropped. A workload's many pods produce ONE
+	//        workload-level edge (deduped). ──
+	seen := map[string]bool{}
 	for _, e := range edgeSnap {
-		if !included[e.From] || !included[e.To] {
+		if e.Type == "node-lease" {
 			continue
 		}
+		from, to := roll(e.From), roll(e.To)
+		if from == to || !included[from] || !included[to] {
+			continue
+		}
+		id := from + "\x00" + to + "\x00" + e.Type
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
 		status := edgeStatus(e, budgets, now)
-		v.Edges = append(v.Edges, TopoEdge{Type: e.Type, From: e.From, To: e.To, Status: status})
+		v.Edges = append(v.Edges, TopoEdge{Type: e.Type, From: from, To: to, Status: status})
 		switch status {
 		case "valid":
 			v.Summary.ValidEdges++
@@ -192,6 +258,15 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 	v.Summary.Nodes = len(v.Nodes)
 	v.Summary.Edges = len(v.Edges)
 	return v
+}
+
+// splitRoleKey turns a role key ("Deployment/currencyservice") into its workload
+// kind and name. A bare/ownerless role with no slash is labelled a Workload.
+func splitRoleKey(rk string) (kind, name string) {
+	if i := strings.IndexByte(rk, '/'); i >= 0 {
+		return rk[:i], rk[i+1:]
+	}
+	return "Workload", rk
 }
 
 // edgeStatus classifies a snapshot edge at `now` — mirrors EdgeStore.statusLocked

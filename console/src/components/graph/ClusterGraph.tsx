@@ -74,7 +74,10 @@ type SelInfo = {
   kind: string;
   namespace: string;
   sev: Severity;
+  replicas: number;
   phenomena: string[];
+  callers: string[]; // upstream — services that call this one
+  callees: string[]; // downstream — services this one calls
 };
 
 const FCOSE = {
@@ -90,6 +93,17 @@ const FCOSE = {
   padding: 36,
 } as const;
 
+// Lay out by the DEPENDENCY structure only — placement (runs-on) edges never
+// distort the service mesh. All nodes are positioned; only flow edges pull.
+function runLayout(cy: Core) {
+  const eles = cy.elements().difference(cy.edges('[etype != "flow"]'));
+  const layout = eles.layout(FCOSE as any);
+  layout.one("layoutstop", () =>
+    cy.animate({ fit: { eles: cy.elements(":visible"), padding: 48 }, duration: 250 }),
+  );
+  layout.run();
+}
+
 export function ClusterGraph() {
   const { data: topo, isLoading, error } = useTopology();
   const elRef = useRef<HTMLDivElement>(null);
@@ -101,7 +115,8 @@ export function ClusterGraph() {
   const [q, setQ] = useState("");
   const [nsFilter, setNsFilter] = useState<Set<string>>(new Set());
   const [failuresOnly, setFailuresOnly] = useState(false);
-  const [hideStruct, setHideStruct] = useState(false);
+  // default to the service mesh: dependency edges only, placement (runs-on) hidden.
+  const [hideStruct, setHideStruct] = useState(true);
 
   const namespaces = useMemo(
     () => Array.from(new Set((topo?.nodes ?? []).map((n) => n.namespace || "cluster"))).sort(),
@@ -122,13 +137,17 @@ export function ClusterGraph() {
     cyRef.current = cy;
     cy.on("tap", "node.entity", (ev) => {
       const n = ev.target;
+      const lbl = (c: any) => c.map((x: any) => String(x.data("label"))).sort();
       setSel({
         id: n.id(),
         label: n.data("label"),
         kind: n.data("kind"),
         namespace: n.data("namespace"),
         sev: n.data("sev"),
+        replicas: n.data("replicas") ?? 0,
         phenomena: n.data("phenomena") ?? [],
+        callers: lbl(n.incomers('edge[etype = "flow"]').sources()),
+        callees: lbl(n.outgoers('edge[etype = "flow"]').targets()),
       });
       cy.elements().addClass("dim");
       const hood = n.closedNeighborhood();
@@ -168,11 +187,7 @@ export function ClusterGraph() {
     });
     if (sig !== sigRef.current) {
       sigRef.current = sig;
-      const layout = cy.layout(FCOSE as any);
-      layout.one("layoutstop", () =>
-        cy.animate({ fit: { eles: cy.elements(), padding: 50 }, duration: 250 }),
-      );
-      layout.run();
+      runLayout(cy);
     }
     setSel(null);
   }, [topo]);
@@ -224,7 +239,7 @@ export function ClusterGraph() {
     });
   }
   function relayout() {
-    cyRef.current?.layout(FCOSE as any).run();
+    if (cyRef.current) runLayout(cyRef.current);
   }
   function toggleNs(ns: string) {
     setNsFilter((prev) => {
@@ -374,6 +389,7 @@ function NodeDetail({ sel, onClose }: { sel: SelInfo; onClose: () => void }) {
           </div>
           <Mono className="text-[11px] text-ink-low">
             {sel.namespace || "cluster"} · {sel.kind}
+            {sel.replicas > 0 ? ` · ${sel.replicas} pod${sel.replicas > 1 ? "s" : ""}` : ""}
           </Mono>
         </div>
         <button
@@ -384,8 +400,9 @@ function NodeDetail({ sel, onClose }: { sel: SelInfo; onClose: () => void }) {
           <Icon.close size={15} />
         </button>
       </div>
-      {sel.phenomena.length > 0 ? (
-        <div>
+
+      {sel.phenomena.length > 0 && (
+        <div className="mb-3">
           <div className="v-eyebrow mb-1.5">Phenomena</div>
           <div className="flex flex-col gap-1">
             {sel.phenomena.map((p) => (
@@ -398,9 +415,39 @@ function NodeDetail({ sel, onClose }: { sel: SelInfo; onClose: () => void }) {
             ))}
           </div>
         </div>
-      ) : (
-        <div className="text-[12px] text-ink-low">No active phenomenon match on this entity.</div>
       )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <RelList title="Upstream" hint="calls this" items={sel.callers} />
+        <RelList title="Downstream" hint="this calls" items={sel.callees} />
+      </div>
+
+      {sel.phenomena.length === 0 && sel.callers.length === 0 && sel.callees.length === 0 && (
+        <div className="mt-2 text-[12px] text-ink-low">
+          Healthy, with no observed dependencies on this surface.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RelList({ title, hint, items }: { title: string; hint: string; items: string[] }) {
+  return (
+    <div>
+      <div className="v-eyebrow mb-1.5" title={hint}>
+        {title} · {items.length}
+      </div>
+      <div className="flex flex-col gap-1">
+        {items.length === 0 ? (
+          <span className="text-[11px] text-ink-mute">—</span>
+        ) : (
+          items.map((s) => (
+            <span key={s} className="truncate text-[11.5px] text-ink-mid" title={s}>
+              {s}
+            </span>
+          ))
+        )}
+      </div>
     </div>
   );
 }
