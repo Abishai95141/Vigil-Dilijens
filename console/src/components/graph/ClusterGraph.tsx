@@ -36,6 +36,9 @@ const EDGE_LAYER: Record<string, Layer | undefined> = {
   "runs-on": "node",
   mounts: "storage",
 };
+// the mutable state classes reconciled on an in-place poll update (the interaction
+// classes — hidden/dim/hl/focus — are deliberately left untouched).
+const STATE_CLASSES = ["sev-ok", "sev-info", "sev-degraded", "sev-firing", "secondary", "warned"];
 
 function severityOf(n: TopoNode): Severity {
   if (n.degraded) return "firing";
@@ -296,7 +299,10 @@ export function ClusterGraph() {
     };
   }, []);
 
-  // sync data (re-layout only when the node set changes)
+  // sync data. The 15s poll usually returns the SAME node set with only updated
+  // marks, so we update state IN PLACE — destroying + re-adding elements would
+  // drop their positions (collapsing every node onto one point) and reset the
+  // filters/selection. We only rebuild + re-layout on a real structural change.
   useEffect(() => {
     const c = cyRef.current;
     if (!c || !topo) return;
@@ -309,14 +315,40 @@ export function ClusterGraph() {
       .map((e) => e.data.id)
       .sort()
       .join("|");
+
+    if (sig === sigRef.current && c.elements().nonempty()) {
+      // same nodes → patch data + state classes; keep positions/filters/selection
+      const keep = new Set(els.map((e) => e.data.id as string));
+      c.batch(() => {
+        for (const e of els) {
+          const id = e.data.id as string;
+          const ex = c.getElementById(id);
+          if (ex.empty()) {
+            c.add(e); // a new edge between existing nodes (e.g. an edge turning suspect)
+            continue;
+          }
+          ex.data(e.data);
+          if (ex.isNode() && (e.classes as string)?.includes("entity")) {
+            ex.removeClass(STATE_CLASSES.join(" "));
+            const next = (e.classes as string).split(" ").filter((x) => STATE_CLASSES.includes(x));
+            if (next.length) ex.addClass(next.join(" "));
+          }
+        }
+        // drop edges that retracted since the last poll
+        for (const ed of c.edges()) {
+          if (!keep.has(ed.id())) ed.remove();
+        }
+      });
+      return;
+    }
+
+    // structural change → rebuild + re-layout
+    sigRef.current = sig;
     c.batch(() => {
       c.elements().remove();
       c.add(els);
     });
-    if (sig !== sigRef.current) {
-      sigRef.current = sig;
-      runLayout(c, layout);
-    }
+    runLayout(c, layout);
     setSel(null);
     setIsolated(null);
   }, [topo, layout]);
