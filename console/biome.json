@@ -10,7 +10,7 @@
       "recommended": true,
       "a11y": { "recommended": true, "noSvgWithoutTitle": "off" },
       "complexity": { "noForEach": "off" },
-      "suspicious": { "noExplicitAny": "off" },
+      "suspicious": { "noExplicitAny": "off", "noArrayIndexKey": "off" },
       "style": { "noNonNullAssertion": "off" }
     }
   },

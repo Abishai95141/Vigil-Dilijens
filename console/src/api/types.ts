@@ -1075,3 +1075,59 @@ export interface ChatBody { question: string; }
 //     },
 //   }
 
+
+// ╔══ GROUP 6 — unexplained (the stated blind spot, doc 08) ══╗
+
+// --- GET /api/unexplained --------------------------------------------------
+// Provenance: MEASURED (loud-but-unmatched signal). The STATED blind spot: this
+// channel covers KNOWN signals exhibiting UNKNOWN patterns — never a cause, never
+// a phenomenon. The system PROPOSES curation candidates; it never authors them.
+// Source: obsd/internal/api/unexplained.go (UnexplainedView)
+export interface UnexplainedView {
+  generatedAt: string;          // RFC3339 (UTC)
+  graphVersion: string;
+  openCards: UnexplainedCard[] | null;   // loud-but-unmatched, lifecycle-tracked
+  candidates: CurationCandidate[] | null; // recurring patterns proposed for human curation
+  blindSpot: string;            // the verbatim stated blind-spot notice (always present)
+}
+
+// MEASURED — one loud-but-unmatched entity, lifecycle-tracked. Source: unexplained.go
+export interface UnexplainedCard {
+  scope: string;                // the CEI it is loud on
+  namespace: string;
+  name: string;
+  kind: string;                 // "Container" | "Pod" | "Node" | ...
+  loudStates: LoudState[];      // which metrics are loud, and how
+  matchCheck: string;           // the honest "no phenomenon covered this" note (no causal vocab)
+  status: string;               // new | aging | superseded-by-match | resolved
+  mark: string;                 // "anomalous — investigate · not-yet-explained"
+  firstSeen: string;            // RFC3339
+  lastSeen: string;             // RFC3339
+  occurrences: number;
+  supersededBy: string;         // "" unless a later phenomenon match covered it
+  graphVersion: string;
+}
+
+// MEASURED — one loud metric state. Source: unexplained.go
+export interface LoudState {
+  metric: string;
+  kind: string;                 // "bar-crossing" | ...
+  state: string;                // "above" | "well-above"
+  barSource: string;            // "config" | "default"
+  flagged: boolean;             // a default-sourced bar (lower trust)
+  sampleAt: string;             // RFC3339
+}
+
+// MEASURED — a recurring unexplained pattern PROPOSED for human curation
+// (never written to the graph). Source: unexplained.go
+export interface CurationCandidate {
+  metrics: string[];
+  entityKind: string;
+  windows: number;              // how many windows it has recurred over
+  entities: string[];          // the CEIs exhibiting it
+  firstSeen: string;            // RFC3339
+  lastSeen: string;             // RFC3339
+  rationale: string;            // why it is a candidate (verbatim, never a cause)
+  graphVersion: string;
+}
+

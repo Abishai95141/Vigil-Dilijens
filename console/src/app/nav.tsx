@@ -41,7 +41,7 @@ export const NAV: NavGroup[] = [
       { to: "/silence", label: "Silence ledger", icon: "silence" },
       { to: "/referee", label: "Referee", icon: "shield" },
       { to: "/config", label: "Config", icon: "config" },
-      { to: "/mcp", label: "MCP", icon: "mcp" },
+      { to: "/integrations", label: "MCP", icon: "mcp" },
     ],
   },
 ];

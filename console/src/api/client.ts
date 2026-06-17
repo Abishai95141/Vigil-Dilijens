@@ -25,6 +25,7 @@ import type {
   SilenceLedgerView,
   TimelineView,
   TopologyView,
+  UnexplainedView,
   WarningsView,
 } from "./types";
 
@@ -76,6 +77,7 @@ export const useEvents = () => useView<EventsView>("events", "/api/events");
 export const useIncidents = () => useView<IncidentsView>("incidents", "/api/incidents");
 export const useTimeline = () => useView<TimelineView>("timeline", "/api/timeline");
 export const useConfig = () => useView<ConfigView>("config", "/api/config");
+export const useUnexplained = () => useView<UnexplainedView>("unexplained", "/api/unexplained");
 
 export const validateClaim = (claim: string) =>
   postJson<ClaimVerdict>("/api/validate-claim", { claim });
