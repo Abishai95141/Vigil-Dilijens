@@ -201,10 +201,43 @@ func bindPod(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emiss
 		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
 	}
 	cov.Instantiated++
+
+	pc, pcOK := cfg.Pod(pod.Namespace, pod.Name)
+
+	// Eligibility gate (doc 15 cap. A — the app-SLO regime predicate, the Pod analogue of
+	// bindContainers' CPU-limit gate): a Pod-scoped application rule applies only to a
+	// workload the operator placed INSIDE the regime by declaring at least one vigil.io/slo.*
+	// annotation. An infrastructure pod that carries no application SLO (kube-system,
+	// monitoring, CNI) is OUT-OF-SCOPE with a stated reason — the rule cannot apply — never
+	// unbounded, so it leaves the resolvability denominator instead of dragging it down. A
+	// workload IN the regime that has declared SOME but not all SLOs stays in scope and is
+	// listed UNBOUNDED for the bars it has not declared (the config-relative branch below) —
+	// that coverage gap is honest, never silently scoped away. A pod whose config row is
+	// unreadable is UNRESOLVED (we cannot read its declarations to judge eligibility), never
+	// guessed in or out.
+	if rule.Eligibility != "" {
+		if !pcOK {
+			b.State = StateUnresolved
+			b.Reason = "pod config not readable at compile time (inventory/config list skew)"
+			cov.Unresolved++
+			cov.Instantiated--
+			res.Bindings = append(res.Bindings, b)
+			return
+		}
+		if eligible, reason := podEligibilityMet(rule.Eligibility, pc); !eligible {
+			b.State = StateOutOfScope
+			b.Reason = reason
+			cov.OutOfScope++
+			cov.Instantiated--
+			res.Bindings = append(res.Bindings, b)
+			return
+		}
+	}
+
 	switch rule.Kind {
 	case graph.RuleConfigRelative:
 		value, declared := 0.0, false
-		if pc, ok := cfg.Pod(pod.Namespace, pod.Name); ok {
+		if pcOK {
 			value, declared = readSLOPath(rule.ConfigPath, pc)
 		}
 		if !declared {
@@ -296,6 +329,24 @@ func bindPVC(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emiss
 		cov.DefaultBound++
 	}
 	res.Bindings = append(res.Bindings, b)
+}
+
+// podEligibilityMet checks a Pod-scoped rule's eligibility gate against a workload's
+// DECLARED config (doc 15 cap. A; the Pod analogue of eligibilityMet). The only predicate
+// is the app-SLO regime marker (slo.*): met iff the workload declares at least one customer
+// SLO annotation. A workload that declares none is outside the regime and the application
+// rule does not apply — borrowed normativity, read from the customer's OWN declarations,
+// never learned. An unrecognized predicate is fail-open (no gate), matching eligibilityMet;
+// the overlay loader already rejects unknown predicates, so this is never reached in
+// practice.
+func podEligibilityMet(path string, pc PodConfig) (bool, string) {
+	switch path {
+	case graph.EligibilityAppSLODeclared:
+		if len(pc.SLOs) == 0 {
+			return false, "out-of-scope: workload declares no application SLO (vigil.io/slo.*); the app-SLO regime does not apply (eligibility: " + path + ")"
+		}
+	}
+	return true, ""
 }
 
 // eligibilityMet checks a rule's eligibility gate against a container's config.

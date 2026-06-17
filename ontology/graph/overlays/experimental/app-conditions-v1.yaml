@@ -28,6 +28,18 @@
 # its declared SLO IS the phenomenon). The age transform's eval clock is INJECTED, so the
 # derived age is replay-deterministic and MEASURED (arithmetic over the clock + a gauge).
 #
+# ELIGIBILITY (the Pod analogue of the container CPU-limit gate): each rule carries
+# `eligibility_config_path: slo.*` — it instantiates only on a workload the operator placed
+# INSIDE the app-SLO regime by declaring at least one vigil.io/slo.* annotation. A pod that
+# carries no application SLO at all (an infrastructure pod — kube-system, monitoring, CNI —
+# that can never bear an application SLO) is OUT-OF-SCOPE with a stated reason, NOT unbounded:
+# the rule does not apply to it, so it leaves the resolvability denominator rather than
+# dragging it down. A workload IN the regime that has declared SOME but not all of these
+# SLOs stays in scope and is listed UNBOUNDED for the bars it has not declared — that
+# coverage gap is honest, never hidden. (Borrowed normativity: presence is read from the
+# customer's OWN declared annotations, never learned or observed; honest partial coverage:
+# the out-of-scope reason is surfaced verbatim by the silence ledger.)
+#
 # Epistemic discipline (doc 01): every finding is MEASURED (a fact: the metric crossed the
 # customer's OWN declared bar). No learned baseline; undeclared SLO => unbounded/listed.
 # These phenomena report what IS — relating them into a chain is Capability B's authored
@@ -105,6 +117,7 @@ rules:
     metric: app_queue_depth
     kind: config-relative
     config_path: slo.queue.max_depth
+    eligibility_config_path: slo.*
     factor: 1.0
     direction: above
     entity_scope: Pod
@@ -115,11 +128,16 @@ rules:
       own config: the vigil.io/slo.queue.max_depth annotation on the workload (config-path
       slo.queue.max_depth), read verbatim at bind time. Where it is not declared, the pair is
       unbounded/listed — never a learned or default capacity (the charter ban on baselines).
+      Eligibility-gated on the app-SLO regime (eligibility_config_path slo.*): a workload that
+      declares NO application SLO is out-of-scope (the rule cannot apply — an infrastructure
+      pod has no application queue), distinct from an in-regime workload that has simply not
+      declared this particular bar (unbounded/listed).
   - id: THR_APP_DATA_AGE
     signal: SIG_app_data_freshness
     metric: app_last_update_seconds
     kind: config-relative
     config_path: slo.freshness.max_age
+    eligibility_config_path: slo.*
     factor: 1.0
     direction: above
     entity_scope: Pod
@@ -133,12 +151,16 @@ rules:
       data age and the derivation stays replay-deterministic. The bar is borrowed from the
       customer's own config: the vigil.io/slo.freshness.max_age annotation (config-path
       slo.freshness.max_age, in seconds), read verbatim at bind time. Undeclared => unbounded/
-      listed — never a learned or default freshness floor.
+      listed — never a learned or default freshness floor. Eligibility-gated on the app-SLO
+      regime (eligibility_config_path slo.*): a workload that declares NO application SLO is
+      out-of-scope (the rule cannot apply — an infrastructure pod serves no application data),
+      distinct from an in-regime workload that has not declared this particular bar.
   - id: THR_APP_REQUEST_RATE
     signal: SIG_app_request_rate
     metric: app_requests_total
     kind: config-relative
     config_path: slo.requests.max_rate
+    eligibility_config_path: slo.*
     factor: 1.0
     direction: above
     entity_scope: Pod
@@ -150,7 +172,10 @@ rules:
       ladders the per-second rate. The bar is borrowed from the customer's own config: the
       vigil.io/slo.requests.max_rate annotation (config-path slo.requests.max_rate, in req/s),
       read verbatim at bind time. Undeclared => unbounded/listed — never a learned or default
-      capacity (the charter ban on baselines).
+      capacity (the charter ban on baselines). Eligibility-gated on the app-SLO regime
+      (eligibility_config_path slo.*): a workload that declares NO application SLO is
+      out-of-scope (the rule cannot apply — an infrastructure pod receives no application
+      request load), distinct from an in-regime workload that has not declared this bar.
 
 checks:
   PHEN_APP_QUEUE_SATURATION:

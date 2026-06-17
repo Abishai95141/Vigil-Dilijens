@@ -66,6 +66,31 @@ func knownConfigPath(p string) bool {
 	return knownConfigPaths[p] || strings.HasPrefix(p, SLOConfigPathPrefix)
 }
 
+// EligibilityAppSLODeclared is the app-SLO-regime eligibility marker (doc 15 cap. A): a
+// Pod-scoped application rule instantiates only on a workload the operator placed INSIDE
+// the regime by declaring at least one vigil.io/slo.* annotation. A workload that declares
+// no application SLO at all (an infrastructure pod — kube-system, monitoring, CNI — that
+// can never carry an application SLO) is OUT-OF-SCOPE with a stated reason: the rule does
+// not apply to it, exactly as CFS throttling cannot apply to a container with no CPU limit.
+// It is the family-presence ("declares ANY slo.*"), DELIBERATELY distinct from a concrete
+// config_path bar: a workload IN the regime that has declared SOME but not all SLOs stays
+// in scope and is listed UNBOUNDED for the bars it has not declared — that coverage gap is
+// honest, never hidden. The value is read from the customer's OWN declared annotations
+// (borrowed normativity), never learned or observed.
+const EligibilityAppSLODeclared = "slo.*"
+
+// knownEligibilityPredicates is the EXACT set of eligibility_config_path values the binding
+// engine has a resolver for: the two container-limit gates (binding.eligibilityMet) and the
+// app-SLO regime marker (binding.podEligibilityMet). Eligibility vocabulary is CLOSED to
+// what is implemented — an unresolvable gate would be a silent no-op (fail-open), so an
+// unrecognized predicate is rejected at load, never accepted and ignored. Distinct from
+// knownConfigPath, which accepts the open slo.* value family for config_path bars.
+var knownEligibilityPredicates = map[string]bool{
+	PathContainerLimitsCPU:    true,
+	PathContainerLimitsMemory: true,
+	EligibilityAppSLODeclared: true,
+}
+
 // Transform vocabulary (doc 15 cap. A — L6 freshness): an optional, AUTHORED
 // re-expression of a gauge's RAW value into the quantity its bar is actually about.
 // The only transform is age-from-timestamp: a gauge that reports a Unix-epoch
@@ -690,8 +715,24 @@ func (g *Graph) validateRule(r *ThresholdRule) error {
 	if _, err := r.WindowDuration(); err != nil {
 		return fmt.Errorf("bad window: %w", err)
 	}
-	if r.Eligibility != "" && !knownConfigPath(r.Eligibility) {
-		return fmt.Errorf("unknown eligibility_config_path %q", r.Eligibility)
+	if r.Eligibility != "" {
+		if !knownEligibilityPredicates[r.Eligibility] {
+			return fmt.Errorf("unknown eligibility_config_path %q (vocabulary: %s, %s, %s)",
+				r.Eligibility, PathContainerLimitsCPU, PathContainerLimitsMemory, EligibilityAppSLODeclared)
+		}
+		// Scope coherence: the predicate is evaluated against the rule's entity scope, so a
+		// Pod-workload gate on a Container rule (or vice-versa) is an unresolvable authoring
+		// bug, rejected here rather than silently ignored at bind time.
+		switch r.Eligibility {
+		case EligibilityAppSLODeclared:
+			if r.EntityScope != "Pod" {
+				return fmt.Errorf("eligibility %q is a Pod-workload predicate, but entity_scope is %q", r.Eligibility, r.EntityScope)
+			}
+		case PathContainerLimitsCPU, PathContainerLimitsMemory:
+			if r.EntityScope != "Container" {
+				return fmt.Errorf("eligibility %q is a Container predicate, but entity_scope is %q", r.Eligibility, r.EntityScope)
+			}
+		}
 	}
 	if !knownTransforms[r.Transform] {
 		return fmt.Errorf("unknown transform %q (vocabulary: <empty>|age-from-timestamp)", r.Transform)
