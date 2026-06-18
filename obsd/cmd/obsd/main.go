@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -46,6 +47,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/logtmpl"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/mcp"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
@@ -111,6 +113,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		histQuantiles   = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
 		assocEnabled    = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
 		dgxAgentEnabled = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
+		logsEnabled     = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -192,7 +195,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -267,7 +270,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -455,7 +458,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var depView atomic.Pointer[vapi.DependencyView]
 	if assocEnabled {
 		depView.Store(vapi.NewDependencyView(time.Now().UTC(), time.Time{}, time.Time{}, nil, 0, 0))
-		go assocLoop(ctx, logger, ingestor, &depView, time.Minute, assocMaxStreams)
+		go assocLoop(ctx, logger, ingestor, &depView, envDuration("DGX_ASSOC_INTERVAL", time.Minute), assocMaxStreams)
 	}
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
@@ -484,9 +487,18 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				provider = dgx.NewGroqProvider(apiKey, os.Getenv("DGX_MODEL"))
 			}
 			agent := dgx.New(provider, dgx.DefaultParams)
-			go dgxAgentLoop(ctx, logger, agent, candStore, store, graphVersion, &depView, &silenceView, dgxAgentInterval)
+			go dgxAgentLoop(ctx, logger, agent, candStore, store, graphVersion, &depView, &silenceView, envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval))
 			logger.Info("dgx agent enabled (doc 20 P3)", "provider", provider.Name())
 		}
+	}
+
+	// doc 20 P4: the log lane — mine MEASURED templates from pod logs (Go-native Drain,
+	// deterministic) and publish /api/log-templates. Off-digest; regex stays the authored
+	// first layer, this is the measured second layer for the unmapped tail.
+	var logsView atomic.Pointer[vapi.LogTemplatesView]
+	if logsEnabled {
+		go logsLoop(ctx, logger, client, &logsView, envDuration("DGX_LOGS_INTERVAL", time.Minute), logsTailLines, logsMaxPods)
+		logger.Info("log lane enabled (doc 20 P4)")
 	}
 	// The operator surfaces (doc 10 M2–M4), published each tick like coverage —
 	// off the deterministic path, race-free via atomics.
@@ -741,6 +753,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		}
 		if assocEnabled {
 			providers.Dependency = func() *vapi.DependencyView { return depView.Load() }
+		}
+		if logsEnabled {
+			providers.LogTemplates = func() *vapi.LogTemplatesView { return logsView.Load() }
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
@@ -1510,7 +1525,7 @@ func snapshotSeries(in *observe.Ingestor, maxStreams int) (map[string][]assoc.Po
 const dgxAgentInterval = 5 * time.Minute
 
 // dgxAgentObsCap bounds how many of each observation kind enter the prompt.
-const dgxAgentObsCap = 40
+const dgxAgentObsCap = 20
 
 // dgxAgentLoop runs the LLM proposer over read-only context each interval and stages
 // the gated survivors (doc 20 P3). Off the deterministic path; the agent authors
@@ -1571,6 +1586,91 @@ func buildAgentContext(graphVersion string, dep *vapi.DependencyView, silence *v
 		}
 	}
 	return c
+}
+
+// envDuration reads a duration from env (e.g. tuning a lane cadence), falling back to
+// def when unset or unparseable. Operability + lets a live test run a tight cycle.
+func envDuration(key string, def time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}
+
+// log-lane bounds (doc 20 P4): sample at most this many running pods, tailing this many
+// lines each — keeps the off-digest mining cheap and the surface honest about its sample.
+const logsTailLines = 120
+const logsMaxPods = 24
+
+// logsLoop mines MEASURED log templates from a bounded sample of pod logs each interval
+// and publishes /api/log-templates (doc 20 P4). Off the deterministic path.
+func logsLoop(ctx context.Context, logger *slog.Logger, client kubernetes.Interface, logsView *atomic.Pointer[vapi.LogTemplatesView], every time.Duration, tail, maxPods int) {
+	if every <= 0 {
+		every = time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			pods := runningPods(ctx, client, maxPods)
+			lines, sampled := fetchPodLogLines(ctx, client, pods, int64(tail))
+			tmpls := logtmpl.Mine(lines, logtmpl.DefaultParams)
+			rows := make([]vapi.LogTemplateRow, 0, len(tmpls))
+			for _, tp := range tmpls {
+				rows = append(rows, vapi.LogTemplateRow{Pattern: tp.Pattern, Count: tp.Count})
+			}
+			logsView.Store(vapi.NewLogTemplatesView(now, sampled, len(lines), rows))
+			if len(rows) > 0 {
+				logger.Info("dgx: mined log templates (doc 20 P4)", "templates", len(rows), "pods", sampled, "lines", len(lines))
+			}
+		}
+	}
+}
+
+func runningPods(ctx context.Context, client kubernetes.Interface, maxPods int) []corev1.Pod {
+	list, err := client.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil
+	}
+	out := make([]corev1.Pod, 0, maxPods)
+	for i := range list.Items {
+		if list.Items[i].Status.Phase != corev1.PodRunning {
+			continue
+		}
+		out = append(out, list.Items[i])
+		if len(out) >= maxPods {
+			break
+		}
+	}
+	return out
+}
+
+// fetchPodLogLines tails recent log lines from each pod (best-effort; a pod whose logs
+// are unreadable is skipped, never fatal). Returns the lines + how many pods were read.
+func fetchPodLogLines(ctx context.Context, client kubernetes.Interface, pods []corev1.Pod, tail int64) ([]string, int) {
+	var lines []string
+	sampled := 0
+	for i := range pods {
+		req := client.CoreV1().Pods(pods[i].Namespace).GetLogs(pods[i].Name, &corev1.PodLogOptions{TailLines: &tail})
+		rc, err := req.Stream(ctx)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(rc)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for sc.Scan() {
+			lines = append(lines, sc.Text())
+		}
+		rc.Close()
+		sampled++
+	}
+	return lines, sampled
 }
 
 // buildEntityRefs snapshots the active identity inventory as candidate.EntityRefs for

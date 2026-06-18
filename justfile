@@ -305,6 +305,13 @@ assoc-gate:
 dgx-gate:
     go test -race ./obsd/internal/dgx/...
 
+# logtmpl gate (doc 20 P4) — the log-template miner is deterministic: the mined template
+# set is byte-identical across runs AND invariant to the order log lines arrive in (Mine
+# sorts its input). Plus the off-digest firewall (no deterministic package imports it).
+# Hermetic. Exit 0 = PASSED.
+logtmpl-gate:
+    go test -race ./obsd/internal/logtmpl/...
+
 # transitive-chain gate (doc 15 cap. B / doc 11 §3.5) over the frozen corpus in
 # corpus/transitive-chain/ — certifies the transitive root-cause chain: MEASURED-degraded
 # workloads stitched into an ORDERED chain by walking the observed-flow topology, oriented

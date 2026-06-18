@@ -81,6 +81,9 @@ type Providers struct {
 	// series that move together, as undirected associations (never causal). nil ⇒ the
 	// lane is not enabled (--assoc-enabled); the route serves the honest OFF state.
 	Dependency func() *DependencyView
+	// LogTemplates returns the MEASURED mined log templates (doc 20 P4). nil ⇒ the log
+	// lane is not enabled (--logs-enabled); the route serves the honest OFF state.
+	LogTemplates func() *LogTemplatesView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -167,6 +170,21 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		if v == nil {
 			v = UnavailableDependency(timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/log-templates", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *LogTemplatesView
+		if p.LogTemplates != nil {
+			v = p.LogTemplates()
+		}
+		if v == nil {
+			v = UnavailableLogTemplates(timeNowUTC())
 		}
 		writeJSON(w, v)
 	})
