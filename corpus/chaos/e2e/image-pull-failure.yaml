@@ -1,0 +1,41 @@
+# E2E positive — MEASURED PHEN_IMAGE_PULL_FAILURE (the discrete-event lane).
+# Requires obsd --events-enabled (the experimental event-conditions overlay).
+#
+# A container that references an image which cannot be pulled (a nonexistent
+# repository) enters ImagePullBackOff and emits the Kubelet "Failed" event with
+# reason Failed/ErrImagePull. obsd's events lane ingests that discrete k8s Event,
+# joins it to the container by CEI, and surfaces a MEASURED IMAGE_PULL_FAILURE on
+# /api/events — closing a critical, common operator blind spot (a Deployment that
+# silently never becomes Available).
+#
+# Deterministic: the pull always fails, so the event always fires. Off the
+# deterministic digest (events ride off-digest); asserted via /api/events.
+#
+# Single-node-safe: NO nodeSelector.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-image
+  namespace: vigil-e2e
+  labels: { app: bad-image, vigil.io/e2e: image-pull-failure }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: bad-image }
+  template:
+    metadata:
+      labels: { app: bad-image }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: app
+          # A registry/repo that does not resolve -> ErrImagePull -> ImagePullBackOff.
+          image: registry.invalid/vigil-e2e/does-not-exist:404
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits:   { cpu: "50m", memory: "32Mi" }
