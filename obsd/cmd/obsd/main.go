@@ -11,6 +11,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -36,6 +37,7 @@ import (
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/assoc"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/audit"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/departure"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
@@ -55,6 +57,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
 	fstore "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/store"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/trace"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/unexplained"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/version"
 )
@@ -114,6 +117,10 @@ func run(args []string, stdout, stderr *os.File) error {
 		assocEnabled    = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
 		dgxAgentEnabled = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
 		logsEnabled     = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
+		auditEnabled    = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
+		auditLogPath    = fs.String("audit-log-path", "", "doc 20 P4 AUDIT lane: path to the apiserver audit log in JSONL (audit.k8s.io/v1 Event per line). The apiserver audit policy is OFF by default on kind; this is config-dependent (mount the audit log to obsd). Empty ⇒ the audit lane stays off even with --audit-enabled.")
+		tracesEnabled   = fs.Bool("traces-enabled", false, "doc 20 P4 TRACE lane: read OTel spans (JSONL at --traces-path), build the MEASURED observed service call graph at /api/trace-graph, and stage each discovered call as a STRUCTURAL topology candidate (never causal) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the trace import-firewall). Needs --traces-path; the topology candidates also need --dgx-enabled (the store).")
+		tracesPath      = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -195,7 +202,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -270,7 +277,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -431,7 +438,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	if dgxEnabled {
 		candPath := ""
 		if dbPath != "" {
-			candPath = filepath.Join(filepath.Dir(dbPath), "candidates.db")
+			// Isolate the candidate store PER db FILE, not per directory: each cluster runs
+			// obsd with its own --db, and two clusters whose dbs share a directory must NOT
+			// share one candidate store (cross-cluster candidate contamination).
+			base := strings.TrimSuffix(filepath.Base(dbPath), filepath.Ext(dbPath))
+			candPath = filepath.Join(filepath.Dir(dbPath), base+".candidates.db")
 		}
 		cs, err := candidate.Open(candPath)
 		if err != nil {
@@ -499,6 +510,39 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	if logsEnabled {
 		go logsLoop(ctx, logger, client, &logsView, envDuration("DGX_LOGS_INTERVAL", time.Minute), logsTailLines, logsMaxPods)
 		logger.Info("log lane enabled (doc 20 P4)")
+	}
+
+	// doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL) and publish the MEASURED
+	// change feed; for each active incident, stage a direction-free arrow-of-time
+	// co-occurrence hypothesis into the candidate store. Off-digest; the lane authors
+	// nothing. Needs --audit-log-path; the hypotheses additionally need the candidate
+	// store (--dgx-enabled) + incident memory (--incident-memory).
+	var auditView atomic.Pointer[vapi.AuditView]
+	if auditEnabled {
+		if auditLogPath == "" {
+			logger.Warn("audit lane disabled: --audit-enabled set but --audit-log-path is empty (mount the apiserver audit log to obsd)")
+		} else {
+			auditView.Store(vapi.WarmingAudit(time.Now().UTC())) // honest "enabled, awaiting first cycle" until the first tick
+			go auditLoop(ctx, logger, store, candStore, findingsStore, &auditView,
+				auditLogPath, clusterID, graphVersion, envDuration("DGX_AUDIT_INTERVAL", time.Minute), auditLookback, auditMaxLines)
+			logger.Info("audit lane enabled (doc 20 P4 AUDIT)", "path", auditLogPath)
+		}
+	}
+
+	// doc 20 P4 TRACE lane: read OTel spans (JSONL) and publish the MEASURED observed
+	// service call graph; stage each discovered call as a STRUCTURAL topology candidate
+	// (never causal). Off-digest; the lane authors nothing. Needs --traces-path; the
+	// topology candidates additionally need the candidate store (--dgx-enabled).
+	var traceView atomic.Pointer[vapi.TraceGraphView]
+	if tracesEnabled {
+		if tracesPath == "" {
+			logger.Warn("trace lane disabled: --traces-enabled set but --traces-path is empty (wire a spans JSONL from an OTel file exporter)")
+		} else {
+			traceView.Store(vapi.WarmingTraceGraph(time.Now().UTC())) // honest "enabled, awaiting first cycle" until the first tick
+			go tracesLoop(ctx, logger, store, candStore, &traceView,
+				tracesPath, clusterID, graphVersion, envDuration("DGX_TRACES_INTERVAL", time.Minute), traceMaxLines)
+			logger.Info("trace lane enabled (doc 20 P4 TRACE)", "path", tracesPath)
+		}
 	}
 	// The operator surfaces (doc 10 M2–M4), published each tick like coverage —
 	// off the deterministic path, race-free via atomics.
@@ -756,6 +800,12 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		}
 		if logsEnabled {
 			providers.LogTemplates = func() *vapi.LogTemplatesView { return logsView.Load() }
+		}
+		if auditEnabled && auditLogPath != "" {
+			providers.AuditChanges = func() *vapi.AuditView { return auditView.Load() }
+		}
+		if tracesEnabled && tracesPath != "" {
+			providers.TraceGraph = func() *vapi.TraceGraphView { return traceView.Load() }
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
@@ -1603,6 +1653,260 @@ func envDuration(key string, def time.Duration) time.Duration {
 // lines each — keeps the off-digest mining cheap and the surface honest about its sample.
 const logsTailLines = 120
 const logsMaxPods = 24
+
+// audit-lane bounds (doc 20 P4 AUDIT): how far back a change may be an antecedent (the
+// arrow-of-time lookback) and how many tail lines of the audit log to read per cycle.
+const auditLookback = 30 * time.Minute
+const auditMaxLines = 4000
+
+// auditLoop reads the apiserver audit log (JSONL) each interval, publishes the MEASURED
+// change feed, and — for each active incident — stages a direction-free arrow-of-time
+// co-occurrence hypothesis into the candidate store (doc 20 P4 AUDIT). Off the
+// deterministic path; non-gating. candStore/findingsStore may be nil (then only the
+// change feed is published, with no hypotheses).
+func auditLoop(ctx context.Context, logger *slog.Logger, store *identity.Store, candStore *candidate.Store,
+	findingsStore *fstore.Store, auditView *atomic.Pointer[vapi.AuditView],
+	path, clusterID, graphVersion string, every, lookback time.Duration, maxLines int) {
+	if every <= 0 {
+		every = time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			lines, truncated := readTail(path, maxLines, tailReadMaxBytes)
+			changes := audit.Resolve(audit.ParseEvents(lines), buildAuditResolver(store, clusterID))
+			staged := 0
+			if candStore != nil && findingsStore != nil {
+				incs := activeAuditIncidents(findingsStore, graphVersion)
+				n, err := audit.HypothesizeAndStage(candStore, now, changes, incs, lookback)
+				if err != nil {
+					logger.Error("dgx: stage audit hypotheses failed (non-gating)", "err", err)
+				}
+				staged = n
+			}
+			auditView.Store(vapi.NewAuditView(now, staged, len(lines), truncated, mapAuditRows(changes)))
+			if truncated {
+				logger.Warn("dgx: audit log exceeded the read cap; older lines dropped this cycle (partial coverage, surfaced at /api/audit-changes)", "linesRead", len(lines), "maxLines", maxLines)
+			}
+			if len(changes) > 0 {
+				logger.Info("dgx: audit change feed (doc 20 P4 AUDIT)", "changes", len(changes), "hypothesesStaged", staged)
+			}
+		}
+	}
+}
+
+// tailReadMaxBytes bounds the bytes read per cycle by the audit/trace JSONL tail reader,
+// so a huge log cannot blow memory regardless of the line cap. Older content beyond this
+// is dropped — and the truncation is SURFACED + logged, never hidden (honest partial
+// coverage). A production deployment would stream a rotated log; this is the kind/demo path.
+const tailReadMaxBytes int64 = 8 << 20 // 8 MiB
+
+// readTail reads the last lines of a JSONL file, bounded by BOTH a byte cap (memory is
+// bounded by the cap, NOT the file size) and a line cap, returning the lines and whether
+// it truncated (dropped older content). Best-effort: an unreadable path yields no lines,
+// never fatal. When the file exceeds the byte cap, the first (partial) line of the window
+// is dropped — harmless, since the parsers skip malformed lines.
+func readTail(path string, maxLines int, maxBytes int64) (lines []string, truncated bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, false
+	}
+	var data []byte
+	if st.Size() > maxBytes {
+		truncated = true
+		buf := make([]byte, maxBytes)
+		n, err := f.ReadAt(buf, st.Size()-maxBytes)
+		if err != nil && err != io.EOF {
+			return nil, false
+		}
+		data = buf[:n]
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			data = data[i+1:] // drop the partial first line of the window
+		}
+	} else {
+		if data, err = io.ReadAll(f); err != nil {
+			return nil, false
+		}
+	}
+	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(all) > maxLines {
+		all = all[len(all)-maxLines:]
+		truncated = true
+	}
+	return all, truncated
+}
+
+// buildAuditResolver snapshots the active role CEIs and returns a resolver that maps a
+// change object (namespace, resource, name) to a durable role CEI by constructing the
+// role key from the authored resource→Kind map and checking membership. main does this
+// so the audit core imports neither identity nor client-go. A miss ⇒ ("", false) ⇒ the
+// change is honestly RoleUnresolved (never a guessed role).
+func buildAuditResolver(store *identity.Store, clusterID string) audit.Resolver {
+	active := map[string]bool{}
+	if store != nil {
+		for _, r := range store.ActiveInstances() {
+			if r.RoleCEI.RoleKey != "" {
+				active[r.RoleCEI.Key()] = true
+			}
+		}
+	}
+	return func(ns, resource, name string) (string, bool) {
+		kind, ok := audit.KindForResource(resource)
+		if !ok {
+			return "", false
+		}
+		key := identity.CEI{Layer: identity.LayerRole, Cluster: clusterID, Namespace: ns, Kind: kind, RoleKey: kind + "/" + name}.Key()
+		if active[key] {
+			return key, true
+		}
+		return "", false
+	}
+}
+
+// activeAuditIncidents maps the durable incident memory into audit.Incidents (the join
+// targets). The incident's onset is its FirstSeen; its namespace is parsed from the role
+// CEI key. main does the mapping so the audit core imports neither store nor identity.
+func activeAuditIncidents(fs *fstore.Store, graphVersion string) []audit.Incident {
+	rows, err := fs.ActiveIncidents(200)
+	if err != nil {
+		return nil
+	}
+	out := make([]audit.Incident, 0, len(rows))
+	for _, r := range rows {
+		gv := r.GraphVersion
+		if gv == "" {
+			gv = graphVersion
+		}
+		out = append(out, audit.Incident{
+			ID: r.Key, RoleCEI: r.RoleCEI, Namespace: namespaceFromCEIKey(r.RoleCEI),
+			Onset: r.FirstSeen, GraphVersion: gv,
+		})
+	}
+	return out
+}
+
+// namespaceFromCEIKey extracts the namespace from a role/instance CEI key
+// ("r|cluster|namespace|…" or "i|cluster|namespace|…"). Returns "" if the shape is
+// unexpected (never a guessed namespace).
+func namespaceFromCEIKey(key string) string {
+	parts := strings.Split(key, "|")
+	if len(parts) >= 3 && (parts[0] == "r" || parts[0] == "i") {
+		return parts[2]
+	}
+	return ""
+}
+
+// mapAuditRows projects audit.ChangeEvents into the surfacing row type (doc 20 P4 AUDIT).
+// main does the mapping so the api package never imports internal/audit (read-firewall).
+func mapAuditRows(changes []audit.ChangeEvent) []vapi.AuditChangeRow {
+	out := make([]vapi.AuditChangeRow, 0, len(changes))
+	for _, c := range changes {
+		out = append(out, vapi.AuditChangeRow{
+			AuditID: c.AuditID, Verb: c.Verb, Resource: c.Resource, Namespace: c.Namespace,
+			Name: c.Name, User: c.User, RoleCEI: c.RoleCEI, RoleUnresolved: c.RoleUnresolved,
+			Timestamp: c.Timestamp,
+		})
+	}
+	return out
+}
+
+// trace-lane bound (doc 20 P4 TRACE): read at most this many tail lines of the spans
+// JSONL per cycle, keeping the off-digest call-graph build cheap + the census honest.
+const traceMaxLines = 20000
+
+// tracesLoop reads OTel spans (JSONL) each interval, publishes the MEASURED observed call
+// graph, and stages each discovered service-to-service call as a STRUCTURAL topology
+// candidate (doc 20 P4 TRACE). Off the deterministic path; non-gating. candStore may be
+// nil (then only the call graph is published, with no candidates).
+func tracesLoop(ctx context.Context, logger *slog.Logger, store *identity.Store, candStore *candidate.Store,
+	traceView *atomic.Pointer[vapi.TraceGraphView], path, clusterID, graphVersion string, every time.Duration, maxLines int) {
+	if every <= 0 {
+		every = time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			lines, truncated := readTail(path, maxLines, tailReadMaxBytes) // same bounded JSONL tail reader
+			g := trace.BuildCallGraph(trace.ParseSpans(lines))
+			staged := 0
+			if candStore != nil {
+				n, err := trace.ProposeAndStage(candStore, now, g, buildServiceResolver(store, clusterID), clusterID, graphVersion)
+				if err != nil {
+					logger.Error("dgx: stage trace topology candidates failed (non-gating)", "err", err)
+				}
+				staged = n
+			}
+			rows := make([]vapi.TraceEdgeRow, 0, len(g.Edges))
+			for _, e := range g.Edges {
+				rows = append(rows, vapi.TraceEdgeRow{
+					Caller: e.Caller, Callee: e.Callee, Calls: e.Calls, Errors: e.Errors,
+					P50Millis: e.P50Millis, P95Millis: e.P95Millis, MaxMillis: e.MaxMillis,
+				})
+			}
+			traceView.Store(vapi.NewTraceGraphView(now, g.SpansObserved, g.Traces, g.OrphanSpans, staged, truncated, rows))
+			if truncated {
+				logger.Warn("dgx: spans file exceeded the read cap; older spans dropped this cycle (extra census incompleteness, surfaced at /api/trace-graph)", "linesRead", len(lines), "maxLines", maxLines)
+			}
+			if len(g.Edges) > 0 {
+				logger.Info("dgx: observed call graph (doc 20 P4 TRACE)", "edges", len(g.Edges), "spans", g.SpansObserved, "orphans", g.OrphanSpans, "candidatesStaged", staged)
+			}
+		}
+	}
+}
+
+// buildServiceResolver maps a span's service.name to a workload role CEI by matching it
+// against the active inventory's role names (the role key's last segment). main does this
+// so the trace core imports neither identity nor client-go. A miss ⇒ ("", false) ⇒ the
+// candidate references the raw service name (flagged), never a guessed CEI.
+func buildServiceResolver(store *identity.Store, clusterID string) trace.ServiceResolver {
+	byName := map[string]string{}
+	ambiguous := map[string]bool{}
+	if store != nil {
+		for _, r := range store.ActiveInstances() {
+			if r.RoleCEI.RoleKey == "" {
+				continue
+			}
+			// role key form "Kind/name" → index by the bare name (the OTel service.name).
+			i := strings.LastIndex(r.RoleCEI.RoleKey, "/")
+			if i < 0 {
+				continue
+			}
+			name := r.RoleCEI.RoleKey[i+1:]
+			key := r.RoleCEI.Key()
+			// A bare name shared by two DIFFERENT workloads (different Kind/namespace) is
+			// ambiguous: don't guess which one the span means. Mark it unresolved — the SAME
+			// honest-when-ambiguous discipline the stray-ER ≥2-coordinate floor uses. This is
+			// also order-independent (ActiveInstances iterates a Go map in unspecified order).
+			if existing, ok := byName[name]; ok && existing != key {
+				ambiguous[name] = true
+				continue
+			}
+			byName[name] = key
+		}
+	}
+	return func(service string) (string, bool) {
+		if ambiguous[service] {
+			return "", false // ambiguous service name → unresolved, never a guessed CEI
+		}
+		cei, ok := byName[service]
+		return cei, ok
+	}
+}
 
 // logsLoop mines MEASURED log templates from a bounded sample of pod logs each interval
 // and publishes /api/log-templates (doc 20 P4). Off the deterministic path.

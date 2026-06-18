@@ -1,0 +1,8 @@
+{"traceId":"t1","spanId":"s-root","parentSpanId":"","service":"frontend","name":"GET /checkout","startTime":"2026-06-18T12:00:00.000000000Z","endTime":"2026-06-18T12:00:00.100000000Z","error":false}
+{"traceId":"t1","spanId":"s-checkout","parentSpanId":"s-root","service":"checkout","name":"Checkout.Place","startTime":"2026-06-18T12:00:00.005000000Z","endTime":"2026-06-18T12:00:00.090000000Z","error":false}
+{"traceId":"t1","spanId":"s-currency-1","parentSpanId":"s-checkout","service":"currencyservice","name":"Currency.Convert","startTime":"2026-06-18T12:00:00.010000000Z","endTime":"2026-06-18T12:00:00.025000000Z","error":false}
+{"traceId":"t1","spanId":"s-currency-2","parentSpanId":"s-checkout","service":"currencyservice","name":"Currency.Convert","startTime":"2026-06-18T12:00:00.030000000Z","endTime":"2026-06-18T12:00:00.050000000Z","error":false}
+{"traceId":"t1","spanId":"s-payment","parentSpanId":"s-checkout","service":"paymentservice","name":"Payment.Charge","startTime":"2026-06-18T12:00:00.030000000Z","endTime":"2026-06-18T12:00:00.080000000Z","error":true}
+{"traceId":"t1","spanId":"s-checkout-internal","parentSpanId":"s-checkout","service":"checkout","name":"Checkout.validate","startTime":"2026-06-18T12:00:00.040000000Z","endTime":"2026-06-18T12:00:00.045000000Z","error":false}
+{"traceId":"t1","spanId":"s-orphan","parentSpanId":"s-missing-parent","service":"emailservice","name":"Email.Send","startTime":"2026-06-18T12:00:00.005000000Z","endTime":"2026-06-18T12:00:00.015000000Z","error":false}
+{ not valid json — must be skipped, never fatal }

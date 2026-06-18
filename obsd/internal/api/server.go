@@ -84,6 +84,16 @@ type Providers struct {
 	// LogTemplates returns the MEASURED mined log templates (doc 20 P4). nil ⇒ the log
 	// lane is not enabled (--logs-enabled); the route serves the honest OFF state.
 	LogTemplates func() *LogTemplatesView
+	// AuditChanges returns the MEASURED Kubernetes audit-log change feed (doc 20 P4 AUDIT
+	// lane): completed mutating API calls + the count of direction-free co-occurrence
+	// hypotheses staged. nil ⇒ the lane is not enabled (--audit-enabled); the route serves
+	// the honest OFF state. The change→incident hypotheses themselves live at /api/candidates.
+	AuditChanges func() *AuditView
+	// TraceGraph returns the MEASURED observed service call graph (doc 20 P4 TRACE lane):
+	// service-to-service call edges from spans + the census accounting. nil ⇒ the lane is not
+	// enabled (--traces-enabled); the route serves the honest OFF state. The discovered edges
+	// are also staged as STRUCTURAL topology candidates at /api/candidates.
+	TraceGraph func() *TraceGraphView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -185,6 +195,36 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		if v == nil {
 			v = UnavailableLogTemplates(timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/audit-changes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *AuditView
+		if p.AuditChanges != nil {
+			v = p.AuditChanges()
+		}
+		if v == nil {
+			v = UnavailableAudit(timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/trace-graph", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *TraceGraphView
+		if p.TraceGraph != nil {
+			v = p.TraceGraph()
+		}
+		if v == nil {
+			v = UnavailableTraceGraph(timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

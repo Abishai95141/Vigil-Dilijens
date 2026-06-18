@@ -312,6 +312,25 @@ dgx-gate:
 logtmpl-gate:
     go test -race ./obsd/internal/logtmpl/...
 
+# audit gate (doc 20 P4 AUDIT) — the audit-change core is deterministic (parsed change
+# events + staged hypotheses are byte-identical across runs AND invariant to the order
+# audit lines arrive in) AND charter-clean: the arrow-of-time prune drops any change at/
+# after onset, and the lane NEVER emits a causal/structural edge — only direction-free
+# co-occurrence hypotheses (KindCausalHypothesis) for human verification. Plus the
+# off-digest firewall. Fixture-backed + hermetic (no live audit source). Exit 0 = PASSED.
+audit-gate:
+    go test -race ./obsd/internal/audit/...
+
+# trace gate (doc 20 P4 TRACE) — the observed-call-graph core is deterministic (the call
+# graph + staged topology candidates are byte-identical across runs AND invariant to the
+# order spans arrive in; percentiles over sorted durations) AND charter-clean: an edge is
+# OBSERVED STRUCTURE, staged ONLY as a structural topology candidate (relation "topology",
+# never causal); latency is MEASURED, never a distribution-derived cutoff; the sampled/
+# census-incomplete partiality is counted (orphanSpans). Plus the off-digest firewall.
+# Fixture-backed + hermetic (no live span source). Exit 0 = PASSED.
+trace-gate:
+    go test -race ./obsd/internal/trace/...
+
 # transitive-chain gate (doc 15 cap. B / doc 11 §3.5) over the frozen corpus in
 # corpus/transitive-chain/ — certifies the transitive root-cause chain: MEASURED-degraded
 # workloads stitched into an ORDERED chain by walking the observed-flow topology, oriented
