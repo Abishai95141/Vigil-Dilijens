@@ -1,17 +1,21 @@
 name: integration
 
-# Opt-in: the kind-in-CI integration job (techstack §12). Manually triggered until
-# tagged integration tests exist (Phase 0a+), so the default CI stays fast and green.
+# The cluster-backed lanes (techstack §12). Kept off the per-PR critical path (the
+# hermetic `ci.yml` gates PRs); these run nightly + on demand so the default loop stays
+# fast while the live pipeline is exercised regularly.
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * *' # nightly ~02:17 UTC
 
 permissions:
   contents: read
 
 jobs:
   kind:
-    name: kind cluster + integration tests
+    name: kind cluster + identity/clock integration
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -22,5 +26,54 @@ jobs:
         with:
           config: deploy/kind/cluster.yaml
           cluster_name: vigil
-      - name: integration tests (build tag: integration)
-        run: go test -race -tags=integration ./...
+      - name: "identity + clock integration tests (build tag: integration)"
+        run: go test -race -tags=integration ./obsd/internal/identity/ ./obsd/internal/clock/
+
+  e2e:
+    name: live e2e (detection + restraint + replay determinism)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - uses: helm/kind-action@v1
+        with:
+          config: deploy/kind/cluster.yaml
+          cluster_name: vigil
+      # helm/kind-action writes the kubeconfig into the default location; the suite
+      # resolves it via KUBECONFIG / ~/.kube/config and builds obsd + replay itself.
+      - name: "live e2e suite (build tag: integration)"
+        run: go test -tags=integration -count=1 -timeout=30m ./obsd/internal/e2e/ -run TestLive -v
+
+  forecast:
+    name: forecast pipeline plumbing smoke (stub clock)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      # Exercises the REAL forecast pipeline plumbing end-to-end (replay -forecast ->
+      # clockd -> export-parquet -> harness.forecast_gate) with the zero-knowledge STUB
+      # clock — cheap, no model download. The gate correctly returns INSUFFICIENT on the
+      # short smoke bundle (a stub has no skill), so we assert only that a VERDICT was
+      # produced (the plumbing is intact). The real-model SKILL gate of record is
+      # `just forecast-gate <real-bundle>` (CLOCK=timesfm), run on-demand — too heavy
+      # (multi-GB torch + checkpoint) for routine CI; evidence: corpus/labels/forecast-gate-09M3.md.
+      - name: forecast-gate wiring smoke
+        run: |
+          out="$(just forecast-gate obsd/internal/replay/testdata/bundle-v1 stub 2>&1 || true)"
+          echo "$out"
+          echo "$out" | grep -q "GATE:" || { echo "FAIL: forecast pipeline produced no verdict — plumbing broken"; exit 1; }
+          echo "forecast plumbing OK (verdict produced)"
