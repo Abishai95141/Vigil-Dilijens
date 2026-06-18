@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import UTC
 
+import harness.forecast_gate as fg
 from harness.forecast_gate import (
     MIN_SCORED_FORECASTS,
     gate,
@@ -191,3 +192,48 @@ def test_hover_crossing_is_not_a_class_event():
     assert rep.events_hover_excluded >= 1
     v = gate(rep)
     assert v.insufficient  # no class-eligible events — never judged on hover noise
+
+
+# The C+D+E real-model gate PASSED with SLACK (coverage 0.755 in [0.65,0.98]; in-band
+# 0.9375 vs 0.8; event_recall 1.0; corpus/labels/forecast-gate-09M3.md). So a regression
+# that LOOSENS a threshold keeps the verdict PASSED — the re-grade would stay green. This
+# pin is the ONLY defense against a silently-loosened constant: every gate threshold is
+# frozen to its committed, evidence-backed literal. Changing one requires editing this pin
+# AND re-deriving the evidence in forecast-gate-09M3.md — never a casual tweak.
+PINNED_THRESHOLDS = {
+    "BAND_COVERAGE_MIN": 0.65,
+    "BAND_COVERAGE_MAX": 0.98,
+    "RECALL_MIN": 0.70,
+    "FALSE_WARNING_MAX": 0.30,
+    "IN_BAND_MIN": 0.8,
+    "MIN_SCORED_FORECASTS": 5,
+    "MIN_CROSSINGS": 3,
+    "MIN_LEAD_STEPS": 8,
+    "EVENT_RECALL_MIN": 1.0,
+    "MIN_CROSSING_EVENTS": 3,
+    "AT_THRESHOLD_BAND": 0.05,
+    "ELIGIBILITY_LOOKBACK_STEPS": 32,
+}
+
+
+def test_gate_thresholds_are_pinned():
+    for name, want in PINNED_THRESHOLDS.items():
+        got = getattr(fg, name)
+        assert got == want, (
+            f"forecast_gate.{name} = {got!r} but the pinned, evidence-backed value is {want!r}. "
+            f"A loosened threshold makes the gate pass laxer corpora — if this change is "
+            f"intentional, re-derive the evidence in corpus/labels/forecast-gate-09M3.md and "
+            f"update this pin deliberately."
+        )
+    # keep the pin honest: every module-level UPPER_CASE float/int threshold must be pinned,
+    # so a NEW threshold constant cannot be added to the scorer without acknowledgement here.
+    def _is_threshold(n: str) -> bool:
+        v = getattr(fg, n)
+        return n.isupper() and isinstance(v, (int, float)) and not isinstance(v, bool)
+
+    declared = {n for n in vars(fg) if _is_threshold(n)}
+    unpinned = declared - set(PINNED_THRESHOLDS)
+    assert not unpinned, (
+        f"forecast_gate has UPPER_CASE numeric constant(s) {sorted(unpinned)} not in "
+        f"PINNED_THRESHOLDS — a new gate threshold shipped unguarded. Pin it (and document it)."
+    )

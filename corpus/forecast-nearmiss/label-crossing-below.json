@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-crossing-below",
+  "scenario": "crossing-below",
+  "kind": "crossing",
+  "expectWarning": true,
+  "expectSilence": "",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "CONTROL (below): point 130 −5/step crosses the 100 bar from above → a 'below' PROJECTED warning must EMIT."
+}

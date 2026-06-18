@@ -77,3 +77,37 @@ jobs:
           echo "$out"
           echo "$out" | grep -q "GATE:" || { echo "FAIL: forecast pipeline produced no verdict — plumbing broken"; exit 1; }
           echo "forecast plumbing OK (verdict produced)"
+
+  forecast-realmodel:
+    name: forecast real-model loadability (TimesFM) — manual dispatch only
+    # workflow_dispatch ONLY — never on the nightly schedule. The real checkpoint is a
+    # multi-GB download; this verifies weekly-on-demand that the PINNED TimesFM 2.5
+    # checkpoint (doc 14 A15) STILL LOADS and the real pipeline runs end-to-end against
+    # it — the one regression class the stub smoke cannot catch (a packaging/API/pin
+    # break). It runs against bundle-v1 (a smoke), so the verdict is correctly
+    # INSUFFICIENT; we assert only that a VERDICT was produced under the REAL model. To
+    # promote this to the SKILL gate of record, commit a real slow-creep capture bundle
+    # and point FORECAST_BUNDLE at it (it would then assert GATE: PASSED).
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FORECAST_BUNDLE: obsd/internal/replay/testdata/bundle-v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - name: forecast real-model loadability (TimesFM checkpoint still loads + runs)
+        run: |
+          out="$(just forecast-gate "$FORECAST_BUNDLE" timesfm 2>&1 || true)"
+          echo "$out"
+          echo "$out" | grep -q "GATE:" || { echo "FAIL: real TimesFM pipeline produced no verdict — checkpoint/packaging broke"; exit 1; }
+          echo "real-model plumbing OK (the pinned TimesFM checkpoint loads + runs)"

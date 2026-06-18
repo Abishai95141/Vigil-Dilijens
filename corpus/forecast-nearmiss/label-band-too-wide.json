@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-band-too-wide",
+  "scenario": "band-too-wide",
+  "kind": "too-wide",
+  "expectWarning": false,
+  "expectSilence": "band-too-wide",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "point GENUINELY crosses (~step 40) but the actionable near cone earliest→point spans \u003e0.5×horizon ('could cross anytime') → SilenceBandTooWide. The point crosses so the width guard is actually reached."
+}

@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-open-tail-crossing",
+  "scenario": "open-tail-crossing",
+  "kind": "crossing",
+  "expectWarning": true,
+  "expectSilence": "",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "CONTROL: imminent crossing with an OPEN far tail (lower edge never crosses) → EMIT with LatestBeyondHorizon stated; the open tail must not silence a tight imminent crossing (the imminence-bias regression)."
+}

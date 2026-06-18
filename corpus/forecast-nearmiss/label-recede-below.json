@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-recede-below",
+  "scenario": "recede-below",
+  "kind": "recede",
+  "expectWarning": false,
+  "expectSilence": "no-crossing-within-horizon",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "BELOW-bar mirror: point drops from 130 toward the 100 bar (trough ~106) then rises back — never crosses below → SilenceNoCrossing."
+}
