@@ -171,6 +171,9 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 			silence(t, SilenceClockDegraded)
 			continue
 		}
+		// Band calibration (doc 20 P5): scale the clock band by the DECLARED, offline-
+		// derived constant before judging — no-op at the default 1.0 (byte-identical).
+		fc = CalibrateBand(fc, in.P.BandCalibration)
 		basis := samples[len(samples)-1].At
 		cand, reason := Project(t, fc, basis, in.Now, in.Cadence, len(series), in.GraphVersion, in.P)
 		if cand != nil {

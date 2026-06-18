@@ -160,6 +160,15 @@ type ForecastParams struct {
 	FlatEpsilon  float64   `yaml:"flat_epsilon"`   // stddev/|level| below which the series is flat ⇒ silence (§3.6)
 	MaxBandRatio float64   `yaml:"max_band_ratio"` // max near-cone width (earliest→point) as a FRACTION of the horizon ⇒ silence (§3.6; ABSOLUTE, never vs time-to-cross — so an imminent crossing is not suppressed)
 
+	// BandCalibration (doc 20 P5) is a DECLARED, OFFLINE-derived, customer-INVARIANT
+	// scale applied to the clock's band half-width around the point estimate, so the
+	// nominal band matches the empirically-observed coverage from the backtest gate
+	// (a p10/p90 band that actually contains ~80% of actuals). It is NOT online
+	// learning — it is a versioned constant, the same class as MaxBandRatio. 1.0 is the
+	// identity (the raw clock band, byte-identical to no calibration); it must be > 0
+	// (a 0 would collapse the band to a line, which the charter forbids).
+	BandCalibration float64 `yaml:"band_calibration"`
+
 	// Decomposition (doc 09 §3.4 / M5, Phase 3): splice the forecast context at the
 	// most recent KNOWN event boundary — an operator context window (10) or an
 	// auto-detected gauge RESET (a container restart) — so the clock forecasts only
@@ -314,6 +323,11 @@ func (p Params) Validate() error {
 	}
 	if f.MaxBandRatio < 0 {
 		errs = append(errs, fmt.Errorf("forecast.max_band_ratio must be >= 0, got %v", f.MaxBandRatio))
+	}
+	// BandCalibration (doc 20 P5): a configured forecast must declare a POSITIVE scale
+	// (1.0 = identity). A 0 would collapse the band to a line — the charter forbids it.
+	if f.Enabled && f.BandCalibration <= 0 {
+		errs = append(errs, fmt.Errorf("forecast.band_calibration must be > 0 when enabled (1.0 = identity), got %v", f.BandCalibration))
 	}
 	if f.Decompose && (f.ResetDropFraction <= 0 || f.ResetDropFraction >= 1) {
 		errs = append(errs, fmt.Errorf("forecast.reset_drop_fraction must be in (0,1) when decompose is enabled, got %v", f.ResetDropFraction))

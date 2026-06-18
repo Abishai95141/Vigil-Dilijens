@@ -77,6 +77,11 @@ type Providers struct {
 	// P0), surfaced read-only. nil ⇒ the lane is not enabled (--dgx-enabled); the route
 	// then serves the honest OFF state. The deterministic path never reads candidates.
 	Candidates func() *CandidatesView
+	// ProvisionalCoverage reconciles the candidate store into a coverage picture (doc 20
+	// P5): how much of the previously-unmapped/dark surface the DGX lane has PROVISIONALLY
+	// classified (strays → nodes/groups, agent/modality proposals). nil ⇒ --dgx-enabled is
+	// off; the route serves the honest OFF state. status=candidate, never MEASURED coverage.
+	ProvisionalCoverage func() *ProvisionalCoverageView
 	// Dependency returns the MEASURED metric-dependency graph (doc 20 P2): observed
 	// series that move together, as undirected associations (never causal). nil ⇒ the
 	// lane is not enabled (--assoc-enabled); the route serves the honest OFF state.
@@ -165,6 +170,21 @@ func Register(mux *http.ServeMux, p Providers) {
 			// The DGX lane is not enabled — say so honestly rather than implying an
 			// empty-but-active staging store.
 			v = unavailableCandidates(timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/provisional-coverage", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *ProvisionalCoverageView
+		if p.ProvisionalCoverage != nil {
+			v = p.ProvisionalCoverage()
+		}
+		if v == nil {
+			v = UnavailableProvisionalCoverage(timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

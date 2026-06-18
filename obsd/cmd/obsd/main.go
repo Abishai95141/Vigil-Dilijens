@@ -794,6 +794,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				}
 				return vapi.NewCandidatesView(time.Now().UTC(), mapCandidateRows(rows))
 			}
+			// doc 20 P5: reconcile the candidate store into a PROVISIONAL coverage picture
+			// (strays classified/mapped/unresolved + agent/modality proposals). Reuses the
+			// same rows + mapping; status=candidate, never MEASURED coverage.
+			providers.ProvisionalCoverage = func() *vapi.ProvisionalCoverageView {
+				rows, err := candStore.List(candidate.Filter{})
+				if err != nil {
+					logger.Error("dgx provisional-coverage surface: list failed (non-gating)", "err", err)
+					return nil
+				}
+				return vapi.BuildProvisionalCoverage(time.Now().UTC(), mapCandidateRows(rows))
+			}
 		}
 		if assocEnabled {
 			providers.Dependency = func() *vapi.DependencyView { return depView.Load() }
