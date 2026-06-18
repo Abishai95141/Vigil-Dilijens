@@ -79,6 +79,12 @@ type Ingestor struct {
 
 	mu   sync.RWMutex
 	meta map[string]StreamMeta // streamID -> descriptor
+
+	// histQ, when non-empty, turns HISTOGRAM families into derived p-quantile GAUGE
+	// streams at ingest (doc 20 P0.5) instead of skipping them. Empty = the v1 skip
+	// (byte-identical). Set via SetHistogramQuantiles BEFORE scraping; not lock-guarded
+	// (like tap).
+	histQ []histQuantile
 }
 
 // NewIngestor wires the scrape pipeline: normalizer (identity join) + hot store.
@@ -275,6 +281,13 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node, 
 		mf := families[name]
 		typ, ok := scalarType(mf)
 		if !ok {
+			// HISTOGRAM families become derived p-quantile gauge streams when enabled
+			// (doc 20 P0.5); otherwise — and for SUMMARY/unknown — they stay
+			// skipped+counted (the byte-identical v1 default).
+			if len(in.histQ) > 0 && mf.GetType() == dto.MetricType_HISTOGRAM {
+				in.emitHistogramQuantiles(mf, family, node, podNS, podName, receivedAt)
+				continue
+			}
 			sum.SkippedFamilies++
 			continue
 		}

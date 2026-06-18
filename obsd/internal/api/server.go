@@ -69,6 +69,14 @@ type Providers struct {
 	// phenomenon_relation edges + phenomenon vocabulary, class AUTHORED. nil ⇒ the
 	// graph is not loaded; the route then serves an honest empty map.
 	AuthoredRelations func() *AuthoredRelationsView
+	// Blindspots returns the registry of what Vigil CANNOT see (doc 19) — static
+	// architecture/ontology blind spots + this cluster's unobtainable signals. nil ⇒
+	// the route serves the static floors with available=false.
+	Blindspots func() *BlindspotRegistryView
+	// Candidates returns the Dynamic Graph eXtension candidate staging store (doc 20
+	// P0), surfaced read-only. nil ⇒ the lane is not enabled (--dgx-enabled); the route
+	// then serves the honest OFF state. The deterministic path never reads candidates.
+	Candidates func() *CandidatesView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -106,6 +114,40 @@ func Register(mux *http.ServeMux, p Providers) {
 			// Binding has not compiled — say so honestly rather than implying a
 			// fully-watched cluster.
 			v = BuildSilenceLedger("", "", timeNowUTC(), nil)
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/blindspots", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *BlindspotRegistryView
+		if p.Blindspots != nil {
+			v = p.Blindspots()
+		}
+		if v == nil {
+			// The static floors stand even before binding compiles; the dynamic half
+			// is honestly unavailable.
+			v = BuildBlindspotRegistry(nil)
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/candidates", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *CandidatesView
+		if p.Candidates != nil {
+			v = p.Candidates()
+		}
+		if v == nil {
+			// The DGX lane is not enabled — say so honestly rather than implying an
+			// empty-but-active staging store.
+			v = unavailableCandidates(timeNowUTC())
 		}
 		writeJSON(w, v)
 	})
