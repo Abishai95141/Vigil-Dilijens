@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 )
 
@@ -39,15 +41,25 @@ var bannedByRegister = map[string][]string{
 	},
 }
 
-// TestRegenMCPAdvisoryCorpus materializes corpus/mcp/advisory-drafts.jsonl. Run with
-// REGEN_MCP_CORPUS=1; otherwise skipped.
-func TestRegenMCPAdvisoryCorpus(t *testing.T) {
-	if os.Getenv("REGEN_MCP_CORPUS") == "" {
-		t.Skip("set REGEN_MCP_CORPUS=1 to regenerate corpus/mcp/advisory-drafts.jsonl")
+func advisoryCorpusPath() string {
+	return filepath.Join("..", "..", "..", "corpus", "mcp", "advisory-drafts.jsonl")
+}
+
+// produceAdvisoryRows folds every honeypot + clean draft through the REAL guard
+// (ValidateAdvisory, gate UNPASSED — the shipping posture), DETERMINISTICALLY: the
+// registers are sorted so the row order is stable. (The prior map-iteration order made
+// regeneration non-deterministic — audit finding D — so the committed corpus could drift
+// on a re-run and the drift guard below would have flaked. Sorting fixes the root cause.)
+func produceAdvisoryRows() []advisoryDraft {
+	registers := make([]string, 0, len(bannedByRegister))
+	for r := range bannedByRegister {
+		registers = append(registers, r)
 	}
+	sort.Strings(registers)
+
 	var rows []advisoryDraft
-	for register, drafts := range bannedByRegister {
-		for _, d := range drafts {
+	for _, register := range registers {
+		for _, d := range bannedByRegister[register] {
 			res := ValidateAdvisory(d, false)
 			rows = append(rows, advisoryDraft{Text: d, Label: "banned", Register: register, Refused: res.Refused, Withheld: res.Withheld, TextEmitted: res.Text})
 		}
@@ -56,21 +68,49 @@ func TestRegenMCPAdvisoryCorpus(t *testing.T) {
 		res := ValidateAdvisory(d, false)
 		rows = append(rows, advisoryDraft{Text: d, Label: "clean", Refused: res.Refused, Withheld: res.Withheld, TextEmitted: res.Text})
 	}
+	return rows
+}
 
-	path := filepath.Join("..", "..", "..", "corpus", "mcp", "advisory-drafts.jsonl")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
+func marshalAdvisoryRows(t *testing.T, rows []advisoryDraft) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	for _, r := range rows {
 		if err := enc.Encode(r); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return buf.Bytes()
+}
+
+// TestRegenMCPAdvisoryCorpus materializes corpus/mcp/advisory-drafts.jsonl. Run with
+// REGEN_MCP_CORPUS=1; otherwise skipped.
+func TestRegenMCPAdvisoryCorpus(t *testing.T) {
+	if os.Getenv("REGEN_MCP_CORPUS") == "" {
+		t.Skip("set REGEN_MCP_CORPUS=1 to regenerate corpus/mcp/advisory-drafts.jsonl")
+	}
+	path := advisoryCorpusPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rows := produceAdvisoryRows()
+	if err := os.WriteFile(path, marshalAdvisoryRows(t, rows), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("wrote %s (%d drafts)", path, len(rows))
+}
+
+// TestMCPAdvisoryCorpusFrozenConsistent is the always-on drift guard (audit roadmap #4):
+// the committed advisory corpus must equal a fresh, DETERMINISTIC producer run — catching
+// both a guard change AND the non-determinism that previously let regen silently reorder
+// rows (audit finding D). FAILS (never skips) if the committed corpus is missing.
+func TestMCPAdvisoryCorpusFrozenConsistent(t *testing.T) {
+	committed, err := os.ReadFile(advisoryCorpusPath())
+	if err != nil {
+		t.Fatalf("committed advisory corpus missing — regenerate with REGEN_MCP_CORPUS=1: %v", err)
+	}
+	fresh := marshalAdvisoryRows(t, produceAdvisoryRows())
+	if !bytes.Equal(committed, fresh) {
+		t.Errorf("DRIFT: corpus/mcp/advisory-drafts.jsonl differs from a fresh producer run (run REGEN_MCP_CORPUS=1 to update)")
+	}
 }

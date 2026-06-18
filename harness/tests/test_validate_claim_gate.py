@@ -107,7 +107,7 @@ def test_live_frozen_corpus_passes():
     if not p.exists():
         import pytest
 
-        pytest.skip("frozen verdicts not present (run REGEN_VALIDATE_CLAIM_CORPUS=1 go test ...)")
+        pytest.fail("frozen verdicts missing; REGEN_VALIDATE_CLAIM_CORPUS=1 (fail not skip, #5)")
     v = gate(score(load_records(p)))
     assert v.passed and not v.insufficient, v.reasons
 
