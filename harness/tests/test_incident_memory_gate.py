@@ -129,7 +129,7 @@ def test_live_frozen_corpus_passes():
     if not all((d / f"events-{n}.jsonl").exists() for n in names):
         import pytest
 
-        pytest.skip("frozen incident corpus not present (run REGEN_INCIDENT_CORPUS=1 go test ...)")
+        pytest.fail("frozen incident corpus missing; REGEN_INCIDENT_CORPUS=1 (fail not skip, #5)")
     bundles = {}
     for n in names:
         label = load_label(d / f"label-{n}.json")

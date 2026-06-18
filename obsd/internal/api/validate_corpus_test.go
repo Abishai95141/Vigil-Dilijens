@@ -117,7 +117,9 @@ func TestValidateClaimCorpusFrozenConsistent(t *testing.T) {
 	cf := loadCorpus(t)
 	raw, err := os.ReadFile(verdictsPath)
 	if err != nil {
-		t.Skipf("frozen verdicts not present (run REGEN_VALIDATE_CLAIM_CORPUS=1): %v", err)
+		// FAIL, never skip (audit roadmap #5): a deleted golden must turn CI red, not
+		// silently green. A missing frozen corpus is a broken gate, not a passed one.
+		t.Fatalf("frozen verdicts not present (run REGEN_VALIDATE_CLAIM_CORPUS=1): %v", err)
 	}
 	frozen := map[string]verdictRec{}
 	for _, line := range splitLines(raw) {

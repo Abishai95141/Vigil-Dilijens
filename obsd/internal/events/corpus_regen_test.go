@@ -1,6 +1,7 @@
 package events
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -117,12 +118,22 @@ func TestRegenEventsCorpus(t *testing.T) {
 	if os.Getenv("REGEN_EVENTS_CORPUS") != "1" {
 		t.Skip("set REGEN_EVENTS_CORPUS=1 to regenerate corpus/events")
 	}
+	generateEventsCorpus(t, corpusDir)
+	t.Logf("regenerated events-gate corpus into %s", corpusDir)
+}
+
+// generateEventsCorpus folds every scenario through the REAL producer (ResolveEventRole
+// + Corroborate) and writes the rows + the construction-truth oracle into dir. Shared by
+// the REGEN writer (-> corpusDir) and the always-on drift guard (-> a temp dir compared
+// to the committed corpus).
+func generateEventsCorpus(t *testing.T, dir string) {
+	t.Helper()
 	store := regenStore(t)
 	conds, err := LoadEventConditions(condsV1Path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(corpusDir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,18 +254,53 @@ func TestRegenEventsCorpus(t *testing.T) {
 			}
 		}
 
-		writeCorpusRows(t, sc.name, corroborated)
-		writeCorpusLabel(t, scenarioLabel{
+		writeCorpusRows(t, dir, sc.name, corroborated)
+		writeCorpusLabel(t, dir, scenarioLabel{
 			Bundle: "events-" + sc.name, Scenario: sc.name, Events: oracle,
 			DigestBefore: before, DigestAfter: after,
 			ExpectCorroborated: expCorr, ExpectStandalone: expStand, ExpectUnresolved: expUnres,
 			Note: sc.note,
 		})
 	}
-	t.Logf("regenerated %d events-gate scenarios into %s", len(scenarios), corpusDir)
 }
 
-func writeCorpusRows(t *testing.T, name string, rows []CorroboratedEvent) {
+// TestEventsCorpusFrozenConsistent is the always-on drift guard (audit roadmap #4): it
+// re-runs the REAL producer into a temp dir and asserts the committed corpus is
+// byte-identical — so a producer change that silently alters the corpus fails in CI,
+// with no cluster. FAILS (never skips) if the committed corpus is missing.
+func TestEventsCorpusFrozenConsistent(t *testing.T) {
+	tmp := t.TempDir()
+	generateEventsCorpus(t, tmp)
+	assertCorpusByteIdentical(t, corpusDir, tmp)
+}
+
+// assertCorpusByteIdentical fails if any file the producer just wrote into fresh differs
+// from (or is missing in) the committed dir — the drift signal.
+func assertCorpusByteIdentical(t *testing.T, committed, fresh string) {
+	t.Helper()
+	entries, err := os.ReadDir(fresh)
+	if err != nil {
+		t.Fatalf("read fresh corpus: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		want, err := os.ReadFile(filepath.Join(committed, e.Name()))
+		if err != nil {
+			t.Fatalf("committed corpus file %q missing — regenerate with REGEN_EVENTS_CORPUS=1: %v", e.Name(), err)
+		}
+		got, err := os.ReadFile(filepath.Join(fresh, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(want, got) {
+			t.Errorf("DRIFT: committed corpus/events/%s differs from a fresh producer run — the producer changed without regenerating the corpus (REGEN_EVENTS_CORPUS=1)", e.Name())
+		}
+	}
+}
+
+func writeCorpusRows(t *testing.T, dir, name string, rows []CorroboratedEvent) {
 	t.Helper()
 	var buf []byte
 	for i := range rows {
@@ -265,18 +311,18 @@ func writeCorpusRows(t *testing.T, name string, rows []CorroboratedEvent) {
 		buf = append(buf, b...)
 		buf = append(buf, '\n')
 	}
-	if err := os.WriteFile(filepath.Join(corpusDir, "events-"+name+".jsonl"), buf, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "events-"+name+".jsonl"), buf, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func writeCorpusLabel(t *testing.T, lbl scenarioLabel) {
+func writeCorpusLabel(t *testing.T, dir string, lbl scenarioLabel) {
 	t.Helper()
 	b, err := json.MarshalIndent(lbl, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(corpusDir, "label-"+lbl.Scenario+".json"), append(b, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "label-"+lbl.Scenario+".json"), append(b, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

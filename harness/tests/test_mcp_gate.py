@@ -158,7 +158,7 @@ def test_live_frozen_corpus_passes():
     if not ledger_path.exists() or not advisory_path.exists():
         import pytest
 
-        pytest.skip("frozen MCP corpus not present (run REGEN_MCP_CORPUS=1 go test ...)")
+        pytest.fail("frozen MCP corpus missing; REGEN_MCP_CORPUS=1 (fail not skip, #5)")
     doc = json.loads(ledger_path.read_text())
     rows = [json.loads(line) for line in advisory_path.read_text().splitlines() if line.strip()]
     v = gate(score(doc, rows))

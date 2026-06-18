@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -142,11 +143,23 @@ func writeLabel(t *testing.T, path string, label map[string]any) {
 
 // TestRegenIncidentCorpus materializes corpus/incident-memory/. Run with
 // REGEN_INCIDENT_CORPUS=1; otherwise skipped.
+func incidentCorpusDir() string {
+	return filepath.Join("..", "..", "..", "corpus", "incident-memory")
+}
+
 func TestRegenIncidentCorpus(t *testing.T) {
 	if os.Getenv("REGEN_INCIDENT_CORPUS") == "" {
 		t.Skip("set REGEN_INCIDENT_CORPUS=1 to regenerate corpus/incident-memory/")
 	}
-	dir := filepath.Join("..", "..", "..", "corpus", "incident-memory")
+	generateIncidentCorpus(t, incidentCorpusDir())
+	t.Log("wrote corpus/incident-memory/ (recurring, restart, continuous, multirole)")
+}
+
+// generateIncidentCorpus folds each scenario through the REAL incident.Accumulator and
+// writes the streams + oracles into dir. Shared by the REGEN writer (-> the committed
+// corpus) and the always-on drift guard (-> a temp dir compared to the committed corpus).
+func generateIncidentCorpus(t *testing.T, dir string) {
+	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +205,34 @@ func TestRegenIncidentCorpus(t *testing.T) {
 		foldScenario(incident.NewAccumulator(incEngResolve, incEngWeek), multiSeq))
 	writeLabel(t, filepath.Join(dir, "label-multirole.json"),
 		map[string]any{"bundle": "multirole", "scenario": "separation", "expectDistinct": 3, "expectRecurrence": 1})
+}
 
-	t.Log("wrote corpus/incident-memory/ (recurring, restart, continuous, multirole)")
+// TestIncidentCorpusFrozenConsistent is the always-on drift guard (audit roadmap #4):
+// re-fold every scenario through the REAL incident.Accumulator into a temp dir and assert
+// the committed corpus is byte-identical — so a fold change that silently alters the
+// corpus fails in CI. FAILS (never skips) if the committed corpus is missing.
+func TestIncidentCorpusFrozenConsistent(t *testing.T) {
+	tmp := t.TempDir()
+	generateIncidentCorpus(t, tmp)
+	committedDir := incidentCorpusDir()
+	entries, err := os.ReadDir(tmp)
+	if err != nil {
+		t.Fatalf("read fresh corpus: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		want, err := os.ReadFile(filepath.Join(committedDir, e.Name()))
+		if err != nil {
+			t.Fatalf("committed corpus file %q missing — regenerate with REGEN_INCIDENT_CORPUS=1: %v", e.Name(), err)
+		}
+		got, err := os.ReadFile(filepath.Join(tmp, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(want, got) {
+			t.Errorf("DRIFT: committed corpus/incident-memory/%s differs from a fresh fold — the producer changed without regenerating (REGEN_INCIDENT_CORPUS=1)", e.Name())
+		}
+	}
 }
