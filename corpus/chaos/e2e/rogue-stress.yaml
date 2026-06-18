@@ -1,0 +1,35 @@
+# E2E restraint (the signature test) — a loud-but-UNMODELED workload that MUST route
+# to /api/unexplained as "anomalous — investigate · not-yet-explained", carrying NO
+# causal vocabulary and fabricating NO phenomenon finding (doc 08 / G2 charter).
+#
+# stress-ng drives CPU and RSS hard. The pod has CPU+memory limits, so its usage
+# resolves a borrowed bar and the states go LOUD — but no AUTHORED phenomenon's
+# required members cover "an arbitrary pod is simply busy", so detection stays
+# SILENT and the loudness routes to the unexplained channel instead. This is the
+# epistemic honesty demo: the system says "I see something, I do not know what",
+# never inventing a cause to look clever.
+#
+# Single-node-safe: NO nodeSelector.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-e2e
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: stress-rogue
+  namespace: vigil-e2e
+  labels: { app: stress-rogue, vigil.io/e2e: restraint }
+spec:
+  terminationGracePeriodSeconds: 1
+  restartPolicy: Never
+  containers:
+    - name: stress
+      image: polinux/stress-ng
+      command: ["stress-ng", "--cpu", "2", "--vm", "1", "--vm-bytes", "192M", "--timeout", "900s"]
+      resources:
+        # Declared limits => borrowed bars => the CPU/mem states can go LOUD. The
+        # point is that loudness here has no authored phenomenon to match.
+        requests: { cpu: "100m", memory: "64Mi" }
+        limits:   { cpu: "500m", memory: "256Mi" }

@@ -1,0 +1,64 @@
+# E2E positive — MEASURED PHEN_VOLUME_MOUNT_FAILURE (the KSM object-state lane).
+# Requires obsd --ksm-enabled AND kube-state-metrics deployed in the cluster.
+#
+# A PersistentVolumeClaim that names a storage class with no provisioner stays
+# Pending forever (no PV can ever bind it), and any pod that mounts it is stuck
+# Pending too — the classic "my pod won't start and kubectl describe is cryptic"
+# blind spot. KSM emits kube_persistentvolumeclaim_status_phase{phase="Pending"},
+# which obsd derives into kube_persistentvolumeclaim_pending on the REAL PVC
+# instance CEI; detect-conditions-v7 anchors PHEN_VOLUME_MOUNT_FAILURE on the
+# claim and fires a DEGRADED MEASURED finding (the other required members —
+# FailedMount events, PV-side phase — are honestly NAMED unobservable).
+#
+# This answers the theme's "how are PVC operations linked to pods not starting?"
+# Deterministic and state-based (no ramp timing): once KSM scrapes the Pending
+# claim, the finding is produced.
+#
+# Single-node-safe: NO nodeSelector.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-e2e
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: stuck-claim
+  namespace: vigil-e2e
+  labels: { vigil.io/e2e: volume-mount-failure }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  # No provisioner backs this class, so the claim can never bind -> Pending.
+  storageClassName: vigil-e2e-nonexistent-class
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blocked-by-pvc
+  namespace: vigil-e2e
+  labels: { app: blocked-by-pvc, vigil.io/e2e: volume-mount-failure }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: blocked-by-pvc }
+  template:
+    metadata:
+      labels: { app: blocked-by-pvc }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: app
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep 100000"]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          resources:
+            requests: { cpu: "10m", memory: "16Mi" }
+            limits:   { cpu: "50m", memory: "32Mi" }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: stuck-claim

@@ -1,0 +1,61 @@
+# E2E positive — MEASURED PHEN_MEMORY_LEAK (the fingerprint lane, no extra deps).
+#
+# A FAST single-node variant of corpus/chaos/leak-plateau.yaml. The forecast corpus
+# deliberately holds flat ~17 min so the clock context fills; the e2e only needs the
+# *detection* condition to fire, so it crosses the bar within ~1 min and HOLDS just
+# below the limit (no OOM, no reset) to keep a wide firing window.
+#
+# Detection (detect-conditions-v1: PHEN_MEMORY_LEAK):
+#   container_memory_working_set_bytes  facet=slope expect=rising  min_state=at-threshold
+# i.e. working-set RISING *and* near/over the declared limit (borrowed normativity).
+# A memory-backed emptyDir (tmpfs) charges the container cgroup's working_set, so the
+# dd writes move working_set directly. Limit 512Mi: prefill ~474MiB (just below the
+# 0.95×limit band), then ramp +6MiB/15s to ~504MiB (≈0.984×limit) and HOLD — the
+# series crosses 486.5MiB (0.95×512Mi) within ~45s of the ramp and stays at-threshold
+# AND rising for the whole ramp, then plateaus above the bar with ~8MiB headroom.
+#
+# Tuned from the PROVEN leak-plateau.yaml shape (reached 501/512MiB with no OOM).
+# Single-node-safe: NO nodeSelector (runs on any node, incl. k3s/kind/GKE).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vigil-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaker-fast
+  namespace: vigil-e2e
+  labels: { app: leaker-fast, vigil.io/e2e: memory-leak }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: leaker-fast }
+  template:
+    metadata:
+      labels: { app: leaker-fast }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: leak
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "prefill ~474MiB tmpfs, ramp +6MiB/15s to ~504MiB, then hold (no OOM)";
+              i=0;
+              while [ $i -lt 79 ]; do dd if=/dev/zero of=/leak/p$i bs=6M count=1 2>/dev/null; i=$((i+1)); done;
+              while [ $i -lt 84 ]; do dd if=/dev/zero of=/leak/p$i bs=6M count=1 2>/dev/null; i=$((i+1)); sleep 15; done;
+              echo "plateau ABOVE the bar"; sleep 100000
+          volumeMounts:
+            - { name: leak, mountPath: /leak }
+          resources:
+            # The declared limit IS the bar (borrowed normativity): working_set near
+            # 512Mi crosses the 0.95×limit at-threshold band, making the rise material.
+            # A generous CPU limit keeps the dd ramp from incidentally CPU-throttling, so
+            # this stays a clean memory-only signal (MEMORY_LEAK, not THROTTLING_CASCADE).
+            requests: { memory: "64Mi", cpu: "10m" }
+            limits:   { memory: "512Mi", cpu: "1" }
+      volumes:
+        - name: leak
+          emptyDir: { medium: Memory, sizeLimit: 560Mi }
