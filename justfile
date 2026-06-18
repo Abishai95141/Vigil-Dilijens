@@ -296,6 +296,15 @@ ksm-gate:
 assoc-gate:
     go test -race ./obsd/internal/assoc/...
 
+# dgx-agent gate (doc 20 P3) — the agent harness functions + its charter gates hold:
+# the LLM PROPOSES, the harness gates (GROUNDING: every cited ref must exist in the
+# context; EVIDENCE FLOOR; STRUCTURAL: a causal edge is rejected — causation only via the
+# direction-free causal_hypothesis) and stages survivors; the provider seam (Groq /
+# OpenAI-compatible / static) round-trips; and no deterministic package imports the agent.
+# Hermetic (a StaticProvider + an httptest endpoint; no network, no key). Exit 0 = PASSED.
+dgx-gate:
+    go test -race ./obsd/internal/dgx/...
+
 # transitive-chain gate (doc 15 cap. B / doc 11 §3.5) over the frozen corpus in
 # corpus/transitive-chain/ — certifies the transitive root-cause chain: MEASURED-degraded
 # workloads stitched into an ORDERED chain by walking the observed-flow topology, oriented

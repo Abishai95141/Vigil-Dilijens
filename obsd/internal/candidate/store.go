@@ -289,6 +289,13 @@ func scan(r scanner) (*Candidate, error) {
 	return &c, nil
 }
 
+// Validate reports whether a candidate is structurally well-formed — the SAME check
+// Put applies: known kind, non-empty subject, a structural edge relation (a causal
+// edge is rejected; causation must use KindCausalHypothesis), and a direction-free
+// causal hypothesis. Exposed so a producer (e.g. the dgx agent) can reject a malformed
+// or causal proposal BEFORE staging.
+func Validate(c Candidate) error { return validate(c) }
+
 func validate(c Candidate) error {
 	if !knownKind(c.Kind) {
 		return fmt.Errorf("candidate: unknown kind %q", c.Kind)
