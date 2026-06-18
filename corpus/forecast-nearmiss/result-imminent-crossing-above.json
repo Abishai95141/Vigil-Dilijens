@@ -1,0 +1,37 @@
+{
+  "emitted": true,
+  "silence": "",
+  "candidate": {
+    "class": "PROJECTED",
+    "isProjection": true,
+    "entityCei": "i|cl|shop|Pod|web-a|uid-a",
+    "entity": "Pod",
+    "metric": "container_memory_working_set_bytes",
+    "seriesKind": "gauge",
+    "barValue": 486,
+    "barUnit": "bytes",
+    "barSource": "config",
+    "barFlagged": false,
+    "direction": "above",
+    "precursorPhenomena": [
+      "PHEN_OOM"
+    ],
+    "graphVersion": "sha256:test",
+    "generatedAt": "2026-06-13T12:00:00Z",
+    "basisAt": "2026-06-13T12:00:00Z",
+    "crossAt": "2026-06-13T12:00:30Z",
+    "earliestAt": "2026-06-13T12:00:15Z",
+    "latestAt": "2026-06-13T12:01:30Z",
+    "latestBeyondHorizon": false,
+    "timeToCross": 30000000000,
+    "confidence": "tight",
+    "contextPoints": 240,
+    "horizonSteps": 64,
+    "cadence": 15000000000,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  }
+}

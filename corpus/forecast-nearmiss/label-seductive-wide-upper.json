@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-seductive-wide-upper",
+  "scenario": "seductive-wide-upper",
+  "kind": "seductive",
+  "expectWarning": false,
+  "expectSilence": "no-crossing-within-horizon",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "THE SEDUCTIVE FP: point flat at 480 (below 486) but the q90 UPPER edge pokes to 510 (above the bar). Project gates on the POINT trajectory (project.go:95), so it MUST silence — a wide band merely touching the bar is never a warning."
+}

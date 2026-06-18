@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-plateau-below",
+  "scenario": "plateau-below",
+  "kind": "plateau",
+  "expectWarning": false,
+  "expectSilence": "no-crossing-within-horizon",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "point PLATEAUS at 480 (band [477,483]) for the whole horizon, below the 486 bar → SilenceNoCrossing. A maxed-but-not-crossing series is not a forecast warning."
+}

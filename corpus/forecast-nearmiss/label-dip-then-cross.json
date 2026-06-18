@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-dip-then-cross",
+  "scenario": "dip-then-cross",
+  "kind": "nonmonotone",
+  "expectWarning": true,
+  "expectSilence": "",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "NON-MONOTONE: point dips (480→472) then rises through the 486 bar to 500. crossIndex returns the FIRST crossing, so it EMITS — a dip before a real crossing does not suppress the warning."
+}

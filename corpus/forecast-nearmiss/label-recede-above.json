@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-recede-above",
+  "scenario": "recede-above",
+  "kind": "recede",
+  "expectWarning": false,
+  "expectSilence": "no-crossing-within-horizon",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "point climbs from 470 toward the 486 bar (peak ~485) then RECEDES back to 470 — never crosses. The decision layer MUST stay silent (the false-warning the live corpus can never produce)."
+}

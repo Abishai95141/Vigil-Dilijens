@@ -357,6 +357,21 @@ departure-gate:
       d=""; l=""; for s in $scns; do d="$d ../corpus/departure/departures-$s.jsonl"; l="$l ../corpus/departure/label-$s.json"; done; \
       uv run python -m harness.departure_gate --departures $d --labels $l
 
+# Forecast DECISION-LAYER false-positive gate (the near-miss/recede decoy corpus) — closes
+# the precision blind spot the live backtest left open (every recorded bundle ENDS in a real
+# crossing, so its "0 false warnings" was vacuous). Folds the REAL forecast.Project over
+# scripted recede/plateau/seductive trajectories and asserts ZERO early-warning candidates
+# (CARDINAL FP-on-near-miss == 0) with the EXACT silence reason, while a genuine crossing
+# still EMITS. SCOPE (stated in the gate banner): certifies OUR deterministic decision code —
+# IF the clock forecasts a non-crossing the decision layer stays silent — and NOT TimesFM's
+# raw skill (that is the on-demand `just forecast-gate`). Hermetic, no cluster, no model.
+# Exit 0 = PASSED; 1 = FAILED/INSUFFICIENT.
+forecast-fp-gate:
+    go test -race -count=1 ./obsd/internal/forecast/ -run 'Nearmiss'
+    cd harness && scns="recede-above plateau-below seductive-wide-upper band-too-wide imminent-crossing-above open-tail-crossing recede-below crossing-below nan-point dip-then-cross"; \
+      r=""; l=""; for s in $scns; do r="$r ../corpus/forecast-nearmiss/result-$s.json"; l="$l ../corpus/forecast-nearmiss/label-$s.json"; done; \
+      uv run python -m harness.forecast_fp_gate --results $r --labels $l
+
 # REAL-MODEL forecast calibration gate (doc 09 M3 / audit roadmap #1). The reproducible
 # form of the 09 M3 campaign (evidence: corpus/labels/forecast-gate-09M3.md): start
 # clockd, re-run the REAL forecast pipeline over a recorded bundle ("as of" every tick),

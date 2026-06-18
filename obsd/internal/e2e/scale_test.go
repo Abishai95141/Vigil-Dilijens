@@ -91,9 +91,12 @@ func TestLiveScale(t *testing.T) {
 	t.Logf("at scale: %d entities (+%d) · RSS %d MiB (+%d MiB, ~%d KiB/entity)",
 		peak, peak-base, rss/1024, (rss-baseRSS)/1024, perPod)
 
-	// Integrity at scale: zero mis-joins (more pods must never cause a wrong join).
+	// Integrity at scale: zero mis-joins (more pods must never cause a wrong join). A MISSING
+	// metric must FAIL, not silently skip — the integrity assertion is the load-bearing claim
+	// of this test, and a metric that vanished (renamed/dropped) would otherwise pass vacuously.
 	if mj, ok := obsd.metricValue("_misjoins"); !ok {
-		t.Log("misjoins metric not found on /metrics (skipping integrity assertion)")
+		t.Errorf("INTEGRITY: misjoins metric absent from /metrics — cannot verify 0 mis-joins at scale "+
+			"(the load-bearing assertion); a renamed/dropped metric must not pass silently. peak=%d", peak)
 	} else if mj != 0 {
 		t.Errorf("INTEGRITY: %v mis-join(s) at %d entities — identity must never mis-join at scale", mj, peak)
 	} else {
@@ -124,9 +127,12 @@ func TestLiveScale(t *testing.T) {
 			}
 			return nil
 		})
-		if mj, ok := obsd.metricValue("_misjoins"); ok && mj != 0 {
+		if mj, ok := obsd.metricValue("_misjoins"); !ok {
+			t.Errorf("INTEGRITY: misjoins metric absent after churn — cannot verify 0 mis-joins (must not pass silently)")
+		} else if mj != 0 {
 			t.Errorf("INTEGRITY: %v mis-join(s) after churn", mj)
+		} else {
+			t.Logf("churn OK: entities returned to ~baseline · 0 mis-joins")
 		}
-		t.Logf("churn OK: entities returned to ~baseline · 0 mis-joins")
 	})
 }

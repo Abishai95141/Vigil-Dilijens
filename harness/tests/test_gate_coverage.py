@@ -36,6 +36,7 @@ GUARD_STATUS = {
     "projected-transitive": "guarded",
     "validate-claim": "guarded",
     "events": "guarded",  # added: events.TestEventsCorpusFrozenConsistent
+    "forecast-nearmiss": "guarded",  # added: forecast.TestNearmissCorpusFrozenConsistent
     "incident-memory": "guarded",  # added: replay.TestIncidentCorpusFrozenConsistent
     "mcp": "guarded",  # added: mcp.TestMCPAdvisoryCorpusFrozenConsistent (advisory-drafts);
     # silence-ledger.json within corpus/mcp is a CURATED fixture (dark-bar case), not
@@ -67,8 +68,8 @@ def test_every_corpus_dir_has_a_declared_guard_status():
 
 def test_guarded_gate_count():
     guarded = sorted(k for k, v in GUARD_STATUS.items() if v == "guarded")
-    # 6 original strong gates + events/mcp/incident hardened this track = 9.
-    assert len(guarded) == 9, guarded
+    # 6 original strong gates + events/mcp/incident + forecast-nearmiss = 10.
+    assert len(guarded) == 10, guarded
 
 
 # Each "guarded" corpus claims an always-on Go *FrozenConsistent producer guard. This map
@@ -82,6 +83,7 @@ GUARDED_FROZEN_TEST = {
     "projected-transitive": "TestProjTransCorpusFrozenConsistent",
     "validate-claim": "TestValidateClaimCorpusFrozenConsistent",
     "events": "TestEventsCorpusFrozenConsistent",
+    "forecast-nearmiss": "TestNearmissCorpusFrozenConsistent",
     "incident-memory": "TestIncidentCorpusFrozenConsistent",
     "mcp": "TestMCPAdvisoryCorpusFrozenConsistent",
 }
@@ -122,6 +124,7 @@ EXPECTED_SCENARIOS = {
     "departure": 8,
     "event-detection": 7,
     "events": 5,
+    "forecast-nearmiss": 10,
     "incident-memory": 4,
     "projected-transitive": 9,
     "transitive-chain": 6,
@@ -135,6 +138,7 @@ SCENARIO_MODULES = {
     "test_app_slo_gate.py": "app-slo",
     "test_departure_gate.py": "departure",
     "test_event_detection_gate.py": "event-detection",
+    "test_forecast_fp_gate.py": "forecast-nearmiss",
     "test_transitive_chain_gate.py": "transitive-chain",
     "test_projected_transitive_gate.py": "projected-transitive",
 }

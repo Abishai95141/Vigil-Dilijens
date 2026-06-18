@@ -1,0 +1,17 @@
+{
+  "bundle": "forecast-nearmiss-nan-point",
+  "scenario": "nan-point",
+  "kind": "robustness",
+  "expectWarning": false,
+  "expectSilence": "no-crossing-within-horizon",
+  "params": {
+    "maxBandRatio": 0.5,
+    "horizonSteps": 64,
+    "quantiles": [
+      0.1,
+      0.5,
+      0.9
+    ]
+  },
+  "note": "ROBUSTNESS: a forecast of all-NaN points (NaN ≥ bar is false) must produce a DEFINED silence (SilenceNoCrossing), never a panic — the model-adjacent ill-formed-value guard."
+}

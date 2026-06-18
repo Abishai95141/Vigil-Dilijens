@@ -98,6 +98,46 @@ CGO-free build OK · go vet clean. Every guard runs in the EXISTING CI jobs (Go 
 under `go test -race ./...`; Python guards under the `harness` pytest job) — no new CI
 wiring needed.
 
+## Third pass — robust workarounds for the three "can't certify cheaply" gaps
+
+A design + adversarial-refute workflow (6 agents) classified all three as
+**testing-infrastructure** (not core/architectural) and designed hermetic workarounds, each
+pressure-tested for shallow-proxy-ness. All three earned `implement-with-hardening`.
+
+**Gap 1 — forecast precision (the false-positive boundary).** The live backtest only scores
+crossing-terminating bundles, so "0 false warnings" was vacuous. Built the near-miss/recede
+**decoy corpus** (`corpus/forecast-nearmiss/`) that folds the REAL `forecast.Project` over
+recede/plateau/seductive-wide-band trajectories and asserts ZERO candidates with the EXACT
+silence reason, while genuine crossings still emit (`just forecast-fp-gate`,
+`harness.forecast_fp_gate`, `forecast.TestNearmissCorpusFrozenConsistent`). Hardened per the
+refuter: enforced REQUIRED_SCENARIOS, exact-silence-reason oracle, params pinned in each
+label, ill-formed (NaN) inputs, multiple emit controls, and an HONEST banner — it certifies
+OUR decision code, NOT TimesFM's skill. Evidence: `corpus/labels/forecast-fp-gate.md`.
+
+**Gap 2 — real-model gate in CI.** The gate of record needs multi-GB weights. Built the
+hermetic **threshold-pin guard** (`test_gate_thresholds_are_pinned`) — all 12 `forecast_gate`
+constants frozen to their evidence-backed literals + a completeness check (a new threshold
+can't ship unpinned). This is the refuter's key hardening (the C+D+E run passes with slack,
+so a loosened constant would otherwise stay green). Plus a **dispatch-gated real-model
+loadability job** in `integration.yml` (manual trigger only — never a recurring multi-GB
+download) that verifies the pinned TimesFM checkpoint still loads + runs. The full
+recorded-real-trace re-grade is documented as the on-demand follow-up (needs a committed
+real-capture bundle, which doesn't exist in-repo).
+
+**Gap 3 — perf in CI.** The refuter judged the first design a SHALLOW PROXY: the benchmark's
+`topo==nil` skips the blast-radius/spanned path where O(n²) lives. Built
+`obsd/internal/detect/perf_guard_test.go` over the REAL-topology production path
+(`TestMatchPerfGuard`): a machine-independent **alloc ceiling + scaling-flatness** guard
+(teeth proven — an induced O(n²) shape fires both at 2.98×). Plus a store guard over
+production-shaped findings, and FIXED the scale-test silent-pass hole (a missing misjoins
+metric now FAILS). Honest limit documented: a constant-factor CPU regression with flat
+allocs is not caught (the irreducible alloc-guard limit). Evidence:
+`corpus/labels/perf-guard.md`.
+
+All hermetic guards run in the EXISTING CI jobs (Go under `go test -race ./...`, Python under
+the `harness` pytest job). Verified: `go test -race ./...` exit 0 · harness 144 passed ·
+`just lint` OK · CGO-free build OK.
+
 ## Net effect on the v5 question
 
 A v5 dev now CANNOT, without a test failing: add an `/api` endpoint (charter disposition
