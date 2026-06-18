@@ -15,18 +15,36 @@ const systemPrompt = `You are the Vigil Dynamic Graph eXtension PROPOSER. You PR
 {"proposals":[{"kind":"node|edge|member|bar_source|causal_hypothesis","subject":"short id","relation":"associated-with|topology|topo-adjacent|co-occurrence|","evidence":["ref","ref"],"rationale":"short, non-causal note"}]}
 If nothing is well-grounded, return {"proposals":[]}.`
 
-// userPrompt renders the read-only context the model may reason over.
+const maxPromptEntities = 25
+
+// userPrompt renders the read-only context the model may reason over, BOUNDED by a
+// char budget (p.MaxContextChars) so the prompt stays under the model's token/rate
+// limit even when a real cluster has hundreds of observations (a 413 TPM rejection was
+// surfaced live against the boutique). Truncation is stated, never silent.
 func userPrompt(c Context, p Params) string {
+	budget := p.MaxContextChars
+	if budget <= 0 {
+		budget = DefaultParams.MaxContextChars
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Graph version: %s\n", c.GraphVersion)
 	fmt.Fprintf(&b, "Minimum evidence refs per proposal: %d\n\n", p.MinEvidence)
 
 	b.WriteString("OBSERVATIONS (cite ONLY by these refs):\n")
+	shown := 0
 	for _, o := range c.Observations {
-		fmt.Fprintf(&b, "- [%s] (%s) %s\n", o.Ref, o.Kind, o.Detail)
+		line := fmt.Sprintf("- [%s] (%s) %s\n", o.Ref, o.Kind, truncate(o.Detail, 160))
+		if b.Len()+len(line) > budget && shown > 0 {
+			break
+		}
+		b.WriteString(line)
+		shown++
 	}
-	if len(c.Observations) == 0 {
+	if shown == 0 {
 		b.WriteString("(none)\n")
+	}
+	if omitted := len(c.Observations) - shown; omitted > 0 {
+		fmt.Fprintf(&b, "(+%d more observations omitted to fit the context budget)\n", omitted)
 	}
 
 	if len(c.ValidEntities) > 0 {
@@ -36,8 +54,15 @@ func userPrompt(c Context, p Params) string {
 		}
 		sort.Strings(keys)
 		b.WriteString("\nVALID ENTITY KEYS (an edge may reference these):\n")
-		for _, k := range keys {
+		n := len(keys)
+		if n > maxPromptEntities {
+			n = maxPromptEntities
+		}
+		for _, k := range keys[:n] {
 			fmt.Fprintf(&b, "- %s\n", k)
+		}
+		if len(keys) > n {
+			fmt.Fprintf(&b, "(+%d more entity keys omitted)\n", len(keys)-n)
 		}
 	}
 

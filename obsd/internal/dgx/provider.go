@@ -75,6 +75,7 @@ type chatRequest struct {
 	Model          string        `json:"model"`
 	Messages       []chatMessage `json:"messages"`
 	Temperature    float64       `json:"temperature"`
+	MaxTokens      int           `json:"max_tokens,omitempty"`
 	ResponseFormat *respFormat   `json:"response_format,omitempty"`
 }
 
@@ -91,6 +92,7 @@ func (p *ChatProvider) Complete(ctx context.Context, system, user string) (strin
 	reqBody := chatRequest{
 		Model:          p.model,
 		Temperature:    p.temperature,
+		MaxTokens:      1024, // bound the completion side of the model's rate/token limit
 		ResponseFormat: &respFormat{Type: "json_object"},
 		Messages: []chatMessage{
 			{Role: "system", Content: system},

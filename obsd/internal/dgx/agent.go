@@ -37,12 +37,15 @@ func (c Context) refIndex() map[string]Observation {
 // Params are the DECLARED gate cutoffs (doc 20 P3), never data-fit. In production they
 // live in the parameters file; DefaultParams is the versioned default.
 type Params struct {
-	MinEvidence  int // evidence-sufficiency floor: a proposal must cite ≥ this many grounded refs
-	MaxProposals int // cap accepted per run (bounds a runaway model)
+	MinEvidence     int // evidence-sufficiency floor: a proposal must cite ≥ this many grounded refs
+	MaxProposals    int // cap accepted per run (bounds a runaway model)
+	MaxContextChars int // bound the rendered prompt so it stays under the model's token/rate limit
 }
 
-// DefaultParams: cite ≥1 grounded fact; at most 20 accepted per run.
-var DefaultParams = Params{MinEvidence: 1, MaxProposals: 20}
+// DefaultParams: cite ≥1 grounded fact; at most 20 accepted per run; ~6k-char context
+// budget (a real cluster can have hundreds of observations — the budget keeps the
+// prompt under typical model TPM limits, surfaced live against the boutique).
+var DefaultParams = Params{MinEvidence: 1, MaxProposals: 20, MaxContextChars: 6000}
 
 // Rejection records why a proposal was discarded (auditable, never silent).
 type Rejection struct {
@@ -64,10 +67,14 @@ type Agent struct {
 	params   Params
 }
 
-// New builds an agent. A zero Params uses DefaultParams.
+// New builds an agent. A zero Params uses DefaultParams; a zero MaxContextChars is
+// filled with the default budget.
 func New(provider Provider, params Params) *Agent {
 	if params.MinEvidence == 0 && params.MaxProposals == 0 {
 		params = DefaultParams
+	}
+	if params.MaxContextChars <= 0 {
+		params.MaxContextChars = DefaultParams.MaxContextChars
 	}
 	return &Agent{provider: provider, params: params}
 }
