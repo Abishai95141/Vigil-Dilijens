@@ -85,6 +85,13 @@ type Ingestor struct {
 	// (byte-identical). Set via SetHistogramQuantiles BEFORE scraping; not lock-guarded
 	// (like tap).
 	histQ []histQuantile
+
+	// quarantineCapture + quarantined are the OFF-digest DGX stray-metric tap (doc 20
+	// P1): when capture is on, each QUARANTINED series is buffered for the candidate ER
+	// to drain. Quarantined series never enter the hot store or the digest, so this
+	// changes no fingerprint whether on or off. Bounded; mu-guarded.
+	quarantineCapture bool
+	quarantined       []QuarantinedSeries
 }
 
 // NewIngestor wires the scrape pipeline: normalizer (identity join) + hot store.
@@ -362,6 +369,9 @@ func (in *Ingestor) ingestExposition(body []byte, family identity.Family, node, 
 				sum.SeriesDropped[string(res.Reason)]++
 			case identity.OutcomeQuarantined:
 				sum.SeriesQuarantine[string(res.Reason)]++
+				// doc 20 P1: tap the stray for the candidate ER (off-digest; no-op when
+				// capture is off, so the digest is unchanged either way).
+				in.captureQuarantine(name, family, labels, node, string(res.Reason), receivedAt)
 			}
 		}
 	}

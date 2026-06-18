@@ -435,6 +435,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			logger.Info("dgx candidate staging store enabled (doc 20 P0)", "persistent", candPath != "")
 		}
 	}
+
+	// doc 20 P1: the off-digest stray-metric resolver. Capture quarantined series and,
+	// each scrape interval, propose PROVISIONAL candidate nodes + associated-with edges
+	// (discrete coordinate intersection, no score) into the candidate store. Reads the
+	// identity inventory, writes candidates; never touches the digest or detection.
+	if dgxEnabled && candStore != nil {
+		ingestor.EnableQuarantineCapture()
+		go dgxResolveLoop(ctx, logger, ingestor, store, candStore, graphVersion, p.Scrape.Interval.Duration())
+	}
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
 	// The deterministic absence ledger (v3 T-A): built from the SAME binding.Result
@@ -1401,6 +1410,60 @@ func discoverKSMTargets(ctx context.Context, cs kubernetes.Interface, logger *sl
 // informers sync so identity joins are warm. Fetching happens outside the store
 // gate (network); ingest holds the write side so evaluation ticks never observe
 // a half-ingested cycle (the replay guarantee, doc 05 §3.5).
+// buildEntityRefs snapshots the active identity inventory as candidate.EntityRefs for
+// the stray-metric ER (doc 20 P1). main does the mapping so the candidate package never
+// imports identity.
+func buildEntityRefs(store *identity.Store) []candidate.EntityRef {
+	inst := store.ActiveInstances()
+	refs := make([]candidate.EntityRef, 0, len(inst))
+	for _, r := range inst {
+		refs = append(refs, candidate.EntityRef{
+			Key: r.CEI.Key(), Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, UID: r.UID,
+		})
+	}
+	return refs
+}
+
+// dgxResolveLoop drains quarantined strays each interval and stages candidate proposals
+// (off the deterministic path; non-gating). It is the first candidate PRODUCER (doc 20
+// P1) — it proposes PROVISIONAL nodes + associated-with edges, never authors.
+func dgxResolveLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, store *identity.Store, cs *candidate.Store, graphVersion string, every time.Duration) {
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			strays := in.DrainQuarantined()
+			if len(strays) == 0 {
+				continue
+			}
+			inv := buildEntityRefs(store)
+			now := time.Now().UTC()
+			staged := 0
+			for _, q := range strays {
+				cands := candidate.Resolve(candidate.StrayObservation{
+					Family: string(q.Family), Metric: q.Metric, Labels: q.Labels, Node: q.Node,
+					Reason: q.Reason, StreamRef: q.Metric + "@" + q.Node, GraphVersion: graphVersion,
+				}, inv)
+				n, err := cs.Stage(now, cands)
+				if err != nil {
+					logger.Error("dgx: stage stray candidates failed (non-gating)", "err", err)
+					continue
+				}
+				staged += n
+			}
+			if staged > 0 {
+				logger.Info("dgx: staged stray-metric candidates (doc 20 P1)", "strays", len(strays), "candidates", staged)
+			}
+		}
+	}
+}
+
 // mapCandidateRows projects the DGX candidate store's rows into the surfacing row
 // type (doc 20 P0.b). main does the mapping so the api package never imports
 // internal/candidate — keeping the read-firewall intact.
