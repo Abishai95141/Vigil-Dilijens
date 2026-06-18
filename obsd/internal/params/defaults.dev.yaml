@@ -75,6 +75,10 @@ forecast:                           # doc 09 + doc 14 A13/A15 — the warm path 
   decompose: true                   # 09 M5: splice context at restart/deploy boundaries (no-op on clean series)
   reset_drop_fraction: 0.4          # a >40% step drop = a gauge reset (container restart) = a splice boundary
   max_explained_fraction: 0.9       # if splicing cuts >90% of the window ⇒ abort (forecast on residue is untrustworthy)
+  regime_shift_flag: true           # 09 M5 companion: FLAG an undeclared upward baseline shift left in the forecast input (a config/deploy that raised the level toward the bar). NEVER auto-cleans — a ramp IS the leak; only a declared context window cleans.
+  regime_shift_fraction: 0.35       # the up-jump must be ≥35% of the window's range to count (magnitude floor; below = noise)
+  regime_shift_min_segment: 8       # ≥8 points each side of the shift (a sustained regime, not a transient spike)
+  regime_shift_plateau: 0.35        # both old & new regimes must be roughly flat (net drift ≤ 35% of the jump): a STEP that PLATEAUS, never an ongoing or stabilising ramp (the leak-protection guard)
 
 incident:                           # v3 T-B (doc 03 + 14 §1.4) — durable cross-run phenomenon memory; surfacing-only, off the deterministic path
   resolve_gap: 45s                  # a gap longer than this between fires of one (phenomenon, role) = a NEW recurrence (must exceed evaluation_tick)

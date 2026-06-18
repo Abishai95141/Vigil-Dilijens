@@ -81,7 +81,31 @@ type WarningCard struct {
 	HorizonSteps   int     `json:"horizonSteps"`
 	CadenceSeconds float64 `json:"cadenceSeconds"`
 	GraphVersion   string  `json:"graphVersion"`
+
+	// Contamination (09 M5 companion) — a MEASURED caveat that the forecast input
+	// still held an UNDECLARED upward baseline shift; the band may be inflated by the
+	// mixed regime. Shown adjacent to the projection (the join, never the fusion); the
+	// remedy is to declare a context window at the shift. nil when the input was
+	// single-regime.
+	Contamination *ContaminationRow `json:"contamination,omitempty"`
 }
+
+// ContaminationRow renders a detected regime-shift caveat (09 M5 companion). The
+// numbers are MEASURED facts about the input window; Note is a FIXED authored
+// instruction (never a generated reason or cause).
+type ContaminationRow struct {
+	Kind         string  `json:"kind"`         // "undeclared-baseline-shift"
+	JumpFraction float64 `json:"jumpFraction"` // how big the shift was, as a fraction of the window range
+	ShiftAgoSecs float64 `json:"shiftAgoSecs"` // how long before the basis the new regime began
+	NewRegimePts int     `json:"newRegimePts"` // points observed in the new regime
+	Note         string  `json:"note"`         // fixed operator guidance (authored constant)
+}
+
+// contaminationNote is the fixed authored guidance shown on a contamination caveat —
+// a static instruction, never a generated causal sentence (charter §4).
+const contaminationNote = "The forecast input contains an undeclared upward baseline " +
+	"shift; the band may be inflated by the mixed regime. Declare a context window at " +
+	"the shift to forecast only the current regime."
 
 // SilenceRow is one quiet target with its guardrail reason — the audit trail
 // that makes "no warning" a statement instead of an absence.
@@ -145,6 +169,16 @@ func BuildWarnings(graphVersion, graphRelease string, now time.Time, enabled boo
 		}
 		if e, ok := byKey[c.EntityCEI]; ok {
 			card.Namespace, card.Name, card.Kind = e.Namespace, e.Name, e.Kind
+		}
+		if rs := c.RegimeShift; rs != nil {
+			// The new regime began (PostPoints−1) steps before the basis sample.
+			card.Contamination = &ContaminationRow{
+				Kind:         "undeclared-baseline-shift",
+				JumpFraction: rs.JumpFraction,
+				ShiftAgoSecs: float64(rs.PostPoints-1) * c.Cadence.Seconds(),
+				NewRegimePts: rs.PostPoints,
+				Note:         contaminationNote,
+			}
 		}
 		if atRisk != nil {
 			seen := map[string]bool{}

@@ -55,6 +55,12 @@ type Candidate struct {
 	Cadence       time.Duration        `json:"cadence"`
 	Quantiles     []float64            `json:"quantiles"`
 	Decomp        *DecompositionRecord `json:"decomposition,omitempty"`
+
+	// RegimeShift (09 M5 companion) flags an UNDECLARED upward baseline shift left
+	// in the forecast input — a MEASURED caveat that the band may be inflated by a
+	// mixed regime; declaring a context window at the shift cleans it. nil when the
+	// input was single-regime. Surfaced adjacent to the projection, never fused.
+	RegimeShift *RegimeShift `json:"regimeShift,omitempty"`
 }
 
 // Silence is one target that produced NO candidate this cycle, with the
@@ -78,7 +84,8 @@ const (
 	SilenceNoCrossing      = "no-crossing-within-horizon"
 	SilenceBandTooWide     = "band-too-wide"
 	SilenceClockDegraded   = "clock-degraded"
-	SilenceDecomposeAbort  = "decomposition-aborted" // too much of the window was an event footprint (09 M5 §3.4)
+	SilenceDecomposeAbort  = "decomposition-aborted"       // too much of the window was an event footprint (09 M5 §3.4)
+	SilenceRegimeShift     = "regime-shift-unforecastable" // an UNDECLARED upward baseline shift left the new regime with too little history to forecast; the projection would reflect the stale baseline (09 M5 companion — declare a context window)
 )
 
 // Project judges one clock answer against the target's bar (doc 09 §3.3 step

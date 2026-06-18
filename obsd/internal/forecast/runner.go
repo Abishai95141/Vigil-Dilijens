@@ -66,6 +66,10 @@ type InvocationTrace struct {
 	// runner ran decomposition, so the backtest can see whether a verdict came from
 	// a spliced or full window.
 	Decomposition *DecompositionRecord `json:"decomposition,omitempty"`
+	// RegimeShift records an undeclared upward baseline shift detected in the (post-
+	// decompose) input (09 M5 companion) — present so the backtest can audit both the
+	// flag and the severe-silence path. nil when the input was single-regime.
+	RegimeShift *RegimeShift `json:"regimeShift,omitempty"`
 }
 
 // CycleResult is one cycle's honest accounting: candidates, every silence
@@ -141,6 +145,23 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 			continue
 		}
 
+		// Regime-shift contamination flag (09 M5 companion): an UNDECLARED upward
+		// baseline shift left IN the (post-decompose) model input — a config/deploy
+		// that raised the level toward the bar with no operator window. We never trim
+		// it (an upward ramp IS the leak; the detector fires only on a STEP that
+		// PLATEAUS). When the new regime is too short to forecast (post < MinContext)
+		// the projection would reflect the STALE baseline (falsely reassuring), so we
+		// silence; otherwise the projection is emitted but FLAGGED on the candidate.
+		var shift *RegimeShift
+		if rs, ok := DetectRegimeShift(series, in.P); ok {
+			s := rs
+			shift = &s
+			if rs.Severe {
+				silence(t, SilenceRegimeShift)
+				continue
+			}
+		}
+
 		res.Invocations++
 		fc, err := forecastOnce(ctx, cc, series, in.P)
 		if err != nil {
@@ -152,9 +173,14 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 		}
 		basis := samples[len(samples)-1].At
 		cand, reason := Project(t, fc, basis, in.Now, in.Cadence, len(series), in.GraphVersion, in.P)
-		if cand != nil && decomp.Spliced() {
-			d := decomp
-			cand.Decomp = &d
+		if cand != nil {
+			if decomp.Spliced() {
+				d := decomp
+				cand.Decomp = &d
+			}
+			if shift != nil {
+				cand.RegimeShift = shift
+			}
 		}
 		if in.Trace {
 			tr := InvocationTrace{
@@ -162,7 +188,7 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 				ContextPoints: len(series), BarValue: t.BarValue, Direction: t.Direction,
 				Quantiles: append([]float64{}, in.P.Quantiles...),
 				Point:     fc.Point, Bands: fc.Quantiles,
-				Silence: reason, Candidate: cand, Decomposition: &decomp,
+				Silence: reason, Candidate: cand, Decomposition: &decomp, RegimeShift: shift,
 			}
 			res.Traces = append(res.Traces, tr)
 		}

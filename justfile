@@ -324,6 +324,18 @@ departure-gate:
       d=""; l=""; for s in $scns; do d="$d ../corpus/departure/departures-$s.jsonl"; l="$l ../corpus/departure/label-$s.json"; done; \
       uv run python -m harness.departure_gate --departures $d --labels $l
 
+# regime-shift contamination-flag gate (doc 09 M5 companion) — certifies the honest
+# answer to the undeclared-event-bias gap: an UNDECLARED upward baseline shift left in
+# the forecast input is FLAGGED (MEASURED), and when its new regime is too short to
+# forecast it is SILENCED rather than projected off the stale baseline. The CARDINAL
+# floor: a genuine leak/ramp is NEVER mistaken for contamination (a false positive would
+# discredit a real early warning) — exercised over a battery of realistic leak shapes
+# (linear/steep/accelerating/post-reset/creep-then-plateau/two-stage) plus the runner
+# wiring. Pure deterministic function; the Go -race suite IS the gate. Exit 0 = PASSED.
+regime-shift-gate:
+    go test -race -count=1 ./obsd/internal/forecast/ -run 'RegimeShift'
+    go test -race -count=1 ./obsd/internal/params/ -run 'Forecast|Validate'
+
 # --- Operator console (console/ — the doc-10 surfacing layer) ---------------
 # The dummy testing UI is archived at web-legacy/. The real console is console/.
 

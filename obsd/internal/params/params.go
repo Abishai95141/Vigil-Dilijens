@@ -167,6 +167,18 @@ type ForecastParams struct {
 	Decompose            bool    `yaml:"decompose"`              // enable splice-point decomposition
 	ResetDropFraction    float64 `yaml:"reset_drop_fraction"`    // a step drop below (1−this)×prior ⇒ a reset boundary
 	MaxExplainedFraction float64 `yaml:"max_explained_fraction"` // if splicing removes more than this fraction of the window ⇒ abort (untrustworthy)
+
+	// Regime-shift contamination flag (doc 09 M5 companion): a MEASURED honesty
+	// signal that the forecast input still holds an UNDECLARED upward baseline shift
+	// (a config/deploy that raised the level toward the bar with no operator context
+	// window). It NEVER trims the input — an upward RAMP is the leak we forecast, so
+	// auto-removing an upward move would blind the warning; it fires only on a STEP
+	// that PLATEAUS, and only FLAGS (or, when the new regime is too short to forecast,
+	// silences with SilenceRegimeShift). Constants are AUTHORED, never learned.
+	RegimeShiftFlag       bool    `yaml:"regime_shift_flag"`        // enable the contamination flag
+	RegimeShiftFraction   float64 `yaml:"regime_shift_fraction"`    // up-jump ≥ this × window-range to count (magnitude floor)
+	RegimeShiftMinSegment int     `yaml:"regime_shift_min_segment"` // min points each side of the shift (a sustained regime, not a transient)
+	RegimeShiftPlateau    float64 `yaml:"regime_shift_plateau"`     // pre/post net drift ≤ this × jump ⇒ a STEP that plateaus (not a ramp — the leak guard)
 }
 
 // Default returns the embedded dev-profile parameters, validated.
@@ -311,6 +323,17 @@ func (p Params) Validate() error {
 	// footgun where the most-conservative-looking value turns the check off.
 	if f.Decompose && (f.MaxExplainedFraction <= 0 || f.MaxExplainedFraction > 1) {
 		errs = append(errs, fmt.Errorf("forecast.max_explained_fraction must be in (0,1] when decompose is enabled, got %v", f.MaxExplainedFraction))
+	}
+	if f.RegimeShiftFlag {
+		if f.RegimeShiftFraction <= 0 || f.RegimeShiftFraction > 1 {
+			errs = append(errs, fmt.Errorf("forecast.regime_shift_fraction must be in (0,1] when regime_shift_flag is enabled, got %v", f.RegimeShiftFraction))
+		}
+		if f.RegimeShiftMinSegment < 2 {
+			errs = append(errs, fmt.Errorf("forecast.regime_shift_min_segment must be >= 2 when regime_shift_flag is enabled, got %d", f.RegimeShiftMinSegment))
+		}
+		if f.RegimeShiftPlateau <= 0 || f.RegimeShiftPlateau >= 1 {
+			errs = append(errs, fmt.Errorf("forecast.regime_shift_plateau must be in (0,1) when regime_shift_flag is enabled, got %v", f.RegimeShiftPlateau))
+		}
 	}
 	for i, q := range f.Quantiles {
 		if q <= 0 || q >= 1 {

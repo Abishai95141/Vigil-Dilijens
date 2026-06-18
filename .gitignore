@@ -6,6 +6,9 @@
 coverage.txt
 coverage.html
 
+# /graphify knowledge-graph build output (generated artifact, not source)
+/graphify-out/
+
 # Runtime data (qss segments, sqlite findings, graph snapshots, replay bundles)
 /data/
 *.sqlite

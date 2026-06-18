@@ -41,6 +41,11 @@ type Sources struct {
 	// AuthoredRelations is the curated causal map (AUTHORED) — the only legitimate
 	// causal basis, so the agent can tell an authored cause from a co-occurrence.
 	AuthoredRelations func() *api.AuthoredRelationsView
+	// Blindspots is the registry of what Vigil CANNOT see (doc 19) — modality-absent
+	// phenomena, the charter's epistemic floors, and this cluster's unobtainable
+	// signals — so the agent tells an authored cause from an unobservable modality
+	// before committing, instead of over-claiming a cause Vigil never had a sensor for.
+	Blindspots func() *api.BlindspotRegistryView
 	// Referee validates an external claim against the charter + authored graph
 	// (v3 T-D). Advisory — NEVER blocks. nil ⇒ the validate_claim tool reports off.
 	Referee func(claim string) api.ClaimVerdict
@@ -159,6 +164,7 @@ const (
 	toolUnexplained    = "get_unexplained"
 	toolDepartures     = "get_departures"
 	toolAuthoredRels   = "get_authored_relations"
+	toolBlindspots     = "get_blindspots"
 
 	toolValidateClaim = "validate_claim"
 	toolEmitAdvisory  = "emit_advisory"
@@ -180,8 +186,11 @@ const synthesisInstructions = "Vigil is a read-only, deterministic observability
 	"Incident playbook: get_root_cause_chain (the spine) -> get_insights (evidence + the authored why) -> " +
 	"get_cross_service + get_topology (blast radius) -> get_warnings (what crosses a bar soon + the lead time) -> " +
 	"get_incidents (has it recurred / how often) -> get_events (discrete failures) -> get_unexplained + " +
-	"get_silence_ledger (the honest blind spots) -> draft -> validate_claim -> emit_advisory. The remediation is YOURS " +
-	"to reason from ops knowledge + application context you gather; Vigil supplies only the grounded, classed facts."
+	"get_silence_ledger + get_blindspots (the honest blind spots — what is NOT watched and what Vigil structurally " +
+	"CANNOT see; if a degraded workload has no finding explaining it, the cause is likely a blind spot here — say so " +
+	"and recommend an out-of-band check, never blame a visible-but-unflagged object) -> draft -> validate_claim -> " +
+	"emit_advisory. The remediation is YOURS to reason from ops knowledge + application context you gather; Vigil " +
+	"supplies only the grounded, classed facts."
 
 var emptyObjectSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 
@@ -249,6 +258,11 @@ func toolDefs() []toolDef {
 			InputSchema: emptyObjectSchema,
 		},
 		{
+			Name:        toolBlindspots,
+			Description: "MEASURED (about own coverage). The blindspot registry — what Vigil CANNOT see. STATIC entries: modality-absent phenomena (no DNS/cert/etcd series), un-wired phenomena, missing modalities (no application-log lane, no app/DB-internal metrics, no L7 semantics), and the charter's EPISTEMIC FLOORS (e.g. Vigil sees a container is throttled, NOT which process inside it consumes the resource; a co-occurrence is never proof of cause). DYNAMIC entries: this cluster's signals that are unobtainable/un-ingested, with verbatim reasons. CONSULT THIS BEFORE attributing a cause: if a workload is degraded but no Vigil finding explains it, the cause is likely something here — say so and recommend an out-of-band check, never substitute a visible-but-unflagged object as the culprit. It only states absence; it never claims a phenomenon is occurring.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
 			Name:        toolValidateClaim,
 			Description: "The HONEST-LABELER for your synthesis — it NEVER blocks; a flag is a labeling instruction, not a veto. Submit a drafted causal/forecast clause; it checks it against the charter + the AUTHORED graph and returns {flagged, reasons[{class}], matchedAuthored}. Use it to LABEL, not delete: matchedAuthored=true ⇒ an authored relation backs this, present it AS authored (quote it); flagged generated-causation ⇒ no authored relation backs it, keep it but label it YOUR hypothesis (not a Vigil fact); flagged future-certainty ⇒ you stated a projection as certain, soften to a band; flagged class-fusion ⇒ you called a PROJECTED subject MEASURED, separate the classes. Run every causal/forecast sentence through this before emit_advisory.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"claim":{"type":"string","description":"the drafted claim to referee"}},"required":["claim"],"additionalProperties":false}`),
@@ -306,6 +320,8 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.Departures), "departures surface not available (api off)"), nil
 	case toolAuthoredRels:
 		return toolJSON(orNil(s.src.AuthoredRelations), "authored-relations map not available (graph not loaded)"), nil
+	case toolBlindspots:
+		return toolJSON(orNil(s.src.Blindspots), "blindspot registry not available (api off)"), nil
 	case toolValidateClaim:
 		if s.src.Referee == nil {
 			return mustRaw(toolResult{Content: []toolContent{{Type: "text", Text: `{"available":false,"note":"the validate-claim referee is not enabled (needs --referee-enabled)"}`}}}), nil
