@@ -1,4 +1,13 @@
-"""Forecast gate scoring + verdict regressions (doc 11 M5 / 09 M3)."""
+"""Forecast gate SCORER regressions (doc 11 M5 / 09 M3).
+
+SCOPE — read this before trusting it as forecast validation. These tests validate the
+*scorer's arithmetic* — band coverage, per-event recall, time-to-cross error, and the
+verdict thresholds — over hand-constructed traces. They DO NOT invoke any forecaster
+and so prove nothing about TimesFM's (or any clock's) skill: they prove the gate grades
+correctly. The real-model calibration gate — running the REAL forecast pipeline over
+recorded series and grading its output — is `just forecast-gate` (CLOCK=timesfm), whose
+passing evidence is committed in corpus/labels/forecast-gate-09M3.md. The PROJECTED
+class is operator-visible only after that real-model gate passes (doc 11 §3.5)."""
 
 from __future__ import annotations
 

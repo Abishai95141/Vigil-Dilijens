@@ -46,6 +46,39 @@ test:
 test-integration:
     go test -race -tags=integration ./...
 
+# Automated LIVE end-to-end suite (doc 11 §3.5 / audit roadmap #2): boots the shipped
+# obsd against a REAL single-node cluster, injects corpus/chaos/e2e/ faults, and asserts
+# the right phenomenon fires via /api (MEMORY_LEAK, VOLUME_MOUNT_FAILURE via KSM,
+# IMAGE_PULL_FAILURE via events) + RESTRAINT holds on a non-modeled fault (the rogue
+# stress pod routes to /api/unexplained, never a fabricated cause) + LIVE replay
+# determinism (capture-here, replay-anywhere, byte-identical). Needs a reachable cluster
+# + kubectl. Point VIGIL_TEST_KUBECONFIG at the kubeconfig — on k3s use
+# /etc/rancher/k3s/k3s.yaml (obsd rejects a stale ~/.kube/config CA). It builds obsd +
+# replay itself and deploys kube-state-metrics. Exit 0 = the live pipeline + restraint
+# + determinism all hold.
+e2e *ARGS:
+    go test -tags=integration -count=1 -timeout=25m ./obsd/internal/e2e/ -run TestLive -v {{ARGS}}
+
+# Hermetic scale benchmarks (audit roadmap #6): the per-tick DETECTION cost curve
+# (BenchmarkMatch, to 5000 synthetic entities on the real graph) + the SQLite
+# single-writer findings WRITE cost (BenchmarkUpsertFindings, to 1000 findings/tick).
+# No cluster needed; read ns/op as per-tick latency and B/op as GC pressure.
+bench *ARGS:
+    go test -bench='BenchmarkMatch|BenchmarkUpsertFindings' -benchmem -run='^$' ./obsd/internal/detect/ ./obsd/internal/store/ {{ARGS}}
+
+# Live scale test (audit roadmap #6 / the theme's "hundreds of pods on a single node"):
+# pack N synthetic pods (VIGIL_SCALE_N, default 50 — safe under k3s --max-pods=110),
+# assert obsd discovers them all, RSS stays bounded, ZERO mis-joins, and churn-to-0 GCs
+# cleanly. Needs a cluster + kubectl (point VIGIL_TEST_KUBECONFIG, as for `just e2e`).
+scale *ARGS:
+    go test -tags=integration -count=1 -timeout=20m ./obsd/internal/e2e/ -run TestLiveScale -v {{ARGS}}
+
+# Live soak (leak/stability over time): obsd runs for VIGIL_SOAK_DURATION (e.g. 2h),
+# sampling RSS and asserting it stays bounded with ZERO mis-joins throughout. Opt-in —
+# unset VIGIL_SOAK_DURATION => the test skips (so it never slows the default loop).
+soak *ARGS:
+    go test -tags=integration -count=1 -timeout=4h ./obsd/internal/e2e/ -run TestLiveSoak -v {{ARGS}}
+
 # Format all Go and proto sources in place.
 fmt:
     gofmt -w .
@@ -379,6 +412,42 @@ departure-gate:
 regime-shift-gate:
     go test -race -count=1 ./obsd/internal/forecast/ -run 'RegimeShift'
     go test -race -count=1 ./obsd/internal/params/ -run 'Forecast|Validate'
+
+# REAL-MODEL forecast calibration gate (doc 09 M3 / audit roadmap #1). The reproducible
+# form of the 09 M3 campaign (evidence: corpus/labels/forecast-gate-09M3.md): start
+# clockd, re-run the REAL forecast pipeline over a recorded bundle ("as of" every tick),
+# and grade it — band coverage, per-event recall (a warning with lead before each
+# crossing), time-to-cross error, false warnings. This is DISTINCT from the SCORER unit
+# test (harness/tests/test_forecast_gate.py), which only checks the grading arithmetic.
+#
+#   clock=timesfm : the REAL model — the gate of record (needs the clockd `model` extra:
+#                   a heavy torch + checkpoint download on first run).
+#   clock=stub    : wiring smoke ONLY — the zero-knowledge clock goes flat, so no skill,
+#                   so INSUFFICIENT is the correct, honest outcome (proves the plumbing).
+# bundle: a recorded replay bundle with a forecast-eligible series (a gauge crossing a
+#   LEVEL bar over the context window). The committed bundle-v1 is short (plumbing smoke);
+#   capture a real slow-creep bundle live for the gate of record (see docs/testing).
+#
+# Usage (params are POSITIONAL — `just` does not take name=value for recipe args):
+#   just forecast-gate                                                 # real model, bundle-v1
+#   just forecast-gate corpus/bundles/creep                            # real model, a real capture
+#   just forecast-gate obsd/internal/replay/testdata/bundle-v1 stub    # wiring smoke (no model)
+forecast-gate bundle="obsd/internal/replay/testdata/bundle-v1" clock="timesfm":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work="$(mktemp -d)"; events="$work/events.jsonl"; readings="$work/readings.parquet"
+    extra=serve; [ "{{clock}}" = "timesfm" ] && extra=model
+    echo ">> starting clockd (--clock {{clock}}) on :50051 (extra: $extra)"
+    ( cd clockd && uv run --extra "$extra" python -m clockd.server --clock {{clock}} --port 50051 ) &
+    trap 'pkill -f "clockd.server --clock {{clock}} --port 50051" 2>/dev/null || true' EXIT
+    for i in $(seq 1 120); do (exec 3<>/dev/tcp/127.0.0.1/50051) 2>/dev/null && { exec 3>&-; break; }; sleep 1; done
+    sleep 2
+    echo ">> replay -forecast over {{bundle}} (real pipeline, as-of every tick)"
+    go run ./obsd/cmd/replay -bundle "{{bundle}}" -forecast -forecast-out "$events" -forecast-clockd 127.0.0.1:50051
+    echo ">> exporting realized readings to Parquet"
+    go run ./obsd/cmd/replay -bundle "{{bundle}}" -export-parquet "$readings"
+    echo ">> grading (harness.forecast_gate)"
+    cd harness && uv run --extra analytics python -m harness.forecast_gate --events "$events" --readings "$readings"
 
 # --- Operator console (console/ — the doc-10 surfacing layer) ---------------
 # The dummy testing UI is archived at web-legacy/. The real console is console/.
