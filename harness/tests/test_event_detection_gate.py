@@ -15,6 +15,7 @@ SCENARIOS = [
     "oom-detection",
     "leak-to-oom-cascade",
     "throttle-to-probe-cascade",
+    "image-pull-failure",
     "role-unresolved-no-upgrade",
     "unrelated-reason",
     "healthy-negative",
