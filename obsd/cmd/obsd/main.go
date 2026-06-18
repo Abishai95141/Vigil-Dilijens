@@ -90,6 +90,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		storeDir     = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
 		dbPath       = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
 		apiEnabled   = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
+		apiToken     = fs.String("api-token", "", "bearer token required on /api + /mcp (deny-by-default once set); empty = UNAUTHENTICATED, dev-only. Falls back to $VIGIL_API_TOKEN. /healthz, /readyz, /metrics stay open.")
 		dumpBindings = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
 		flowEnabled  = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
 		flowInterval = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
@@ -182,9 +183,16 @@ func run(args []string, stdout, stderr *os.File) error {
 		}
 	}
 
+	// API auth token: flag wins, else $VIGIL_API_TOKEN. Empty => unauthenticated (dev),
+	// warned loudly at serve time (doc 10 / audit roadmap #3).
+	apiTok := *apiToken
+	if apiTok == "" {
+		apiTok = os.Getenv("VIGIL_API_TOKEN")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, apiTok, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -259,7 +267,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, apiToken string, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -792,7 +800,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			logger.Info("incident memory enabled (v3 T-B)", "resolve_gap", p.Incident.ResolveGap.String(), "window_bucket", p.Incident.WindowBucket.String())
 		}
 	}
-	go serveHealth(ctx, logger, ln, registry, watcher, providers, mcpHandler)
+	go serveHealth(ctx, logger, ln, registry, watcher, providers, mcpHandler, apiToken)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
 		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
@@ -810,13 +818,18 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 // serveHealth exposes /metrics (Prometheus), /healthz (liveness), and /readyz
 // (informer sync) — the health-metrics endpoints of doc 03 §6 — on an already-bound
 // listener (so bind failures are surfaced by the caller, not swallowed here).
-func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, registry *prometheus.Registry, watcher *identity.Watcher, providers *vapi.Providers, mcpHandler http.Handler) {
+func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, registry *prometheus.Registry, watcher *identity.Watcher, providers *vapi.Providers, mcpHandler http.Handler, apiToken string) {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	if providers != nil {
 		// The operator surfacing API (doc 10) shares the health listener so the web
 		// app's /api proxy target is the one bound port.
 		vapi.Register(mux, *providers)
+		if apiToken == "" {
+			logger.Warn("operator API + MCP served WITHOUT authentication — anyone who can reach this port reads full incident/topology/silence state; bind to localhost or set --api-token (or $VIGIL_API_TOKEN) before exposing", "addr", ln.Addr().String())
+		} else {
+			logger.Info("operator API + MCP require a bearer token (deny-by-default on /api + /mcp; /healthz /readyz /metrics stay open)")
+		}
 	}
 	if mcpHandler != nil {
 		// v3 T-A: the read-only MCP harness (JSON-RPC over HTTP), behind --mcp-enabled.
@@ -836,7 +849,9 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 		_, _ = io.WriteString(w, "syncing")
 	})
 
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// Deny-by-default bearer auth on /api + /mcp once a token is set (audit roadmap #3);
+	// a no-op pass-through when apiToken == "" (the warned dev default).
+	srv := &http.Server{Handler: vapi.AuthMiddleware(apiToken, mux), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
