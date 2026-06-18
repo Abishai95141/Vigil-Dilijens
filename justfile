@@ -287,6 +287,15 @@ app-slo-gate:
 ksm-gate:
     go test -race ./obsd/internal/observe/ ./obsd/internal/detect/ ./obsd/internal/identity/ -run 'KSM|ProbeFailureRestart|ThrottleToProbe|ThrottleProbeRestart|Eviction|DiskPressure|PVC|VolumeMount'
 
+# assoc gate (doc 20 P2) — the metric-dependency determinism guarantee: the MEASURED
+# association edge set is byte-identical across runs AND invariant to input-sample order
+# (the pure Associate fn pins every order float arithmetic depends on). Also asserts the
+# seam-firewall: no deterministic package imports internal/assoc (a MEASURED association
+# must never reach the replay path / forecast selection / footprint subtraction).
+# Exit 0 = PASSED; 1 = FAILED.
+assoc-gate:
+    go test -race ./obsd/internal/assoc/...
+
 # transitive-chain gate (doc 15 cap. B / doc 11 §3.5) over the frozen corpus in
 # corpus/transitive-chain/ — certifies the transitive root-cause chain: MEASURED-degraded
 # workloads stitched into an ORDERED chain by walking the observed-flow topology, oriented

@@ -197,3 +197,18 @@ func (s *Store) Stage(now time.Time, cands []Candidate) (int, error) {
 	}
 	return n, nil
 }
+
+// ResolveAndStage resolves each stray against the inventory and stages the resulting
+// candidates, returning the total staged. This is the testable per-cycle core of the
+// P1 resolve loop (doc 20 §2.4); the runtime loop is a thin mapper around it.
+func ResolveAndStage(s *Store, now time.Time, strays []StrayObservation, inventory []EntityRef) (int, error) {
+	total := 0
+	for _, stray := range strays {
+		n, err := s.Stage(now, Resolve(stray, inventory))
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
+}

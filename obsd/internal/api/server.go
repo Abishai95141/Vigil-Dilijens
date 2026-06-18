@@ -77,6 +77,10 @@ type Providers struct {
 	// P0), surfaced read-only. nil ⇒ the lane is not enabled (--dgx-enabled); the route
 	// then serves the honest OFF state. The deterministic path never reads candidates.
 	Candidates func() *CandidatesView
+	// Dependency returns the MEASURED metric-dependency graph (doc 20 P2): observed
+	// series that move together, as undirected associations (never causal). nil ⇒ the
+	// lane is not enabled (--assoc-enabled); the route serves the honest OFF state.
+	Dependency func() *DependencyView
 }
 
 // UnexplainedView is the unexplained-channel surface (doc 08 §3.7, doc 10): the
@@ -148,6 +152,21 @@ func Register(mux *http.ServeMux, p Providers) {
 			// The DGX lane is not enabled — say so honestly rather than implying an
 			// empty-but-active staging store.
 			v = unavailableCandidates(timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/dependency", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *DependencyView
+		if p.Dependency != nil {
+			v = p.Dependency()
+		}
+		if v == nil {
+			v = UnavailableDependency(timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

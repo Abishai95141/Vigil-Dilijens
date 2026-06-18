@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/assoc"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/departure"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
@@ -107,6 +108,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		ksmEnabled    = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
 		dgxEnabled    = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
 		histQuantiles = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
+		assocEnabled  = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -188,7 +190,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -263,7 +265,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -443,6 +445,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	if dgxEnabled && candStore != nil {
 		ingestor.EnableQuarantineCapture()
 		go dgxResolveLoop(ctx, logger, ingestor, store, candStore, graphVersion, p.Scrape.Interval.Duration())
+	}
+
+	// doc 20 P2: the off-digest metric-dependency lane — periodically associate the hot
+	// series (MEASURED, associated-with, never causal) and publish /api/dependency. OFF
+	// by default; never feeds detection/forecasting (the assoc firewall test enforces it).
+	var depView atomic.Pointer[vapi.DependencyView]
+	if assocEnabled {
+		depView.Store(vapi.NewDependencyView(time.Now().UTC(), time.Time{}, time.Time{}, nil, 0, 0))
+		go assocLoop(ctx, logger, ingestor, &depView, time.Minute, assocMaxStreams)
 	}
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
@@ -701,6 +712,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				}
 				return vapi.NewCandidatesView(time.Now().UTC(), mapCandidateRows(rows))
 			}
+		}
+		if assocEnabled {
+			providers.Dependency = func() *vapi.DependencyView { return depView.Load() }
 		}
 		if findingsStore != nil {
 			providers.Findings = findingsStore.ActiveFindings
@@ -1410,6 +1424,61 @@ func discoverKSMTargets(ctx context.Context, cs kubernetes.Interface, logger *sl
 // informers sync so identity joins are warm. Fetching happens outside the store
 // gate (network); ingest holds the write side so evaluation ticks never observe
 // a half-ingested cycle (the replay guarantee, doc 05 §3.5).
+// assocMaxStreams bounds the O(n^2) association (doc 20 P2); the surface states the
+// bound via StreamsConsidered/StreamsTotal so the partial coverage is honest.
+const assocMaxStreams = 256
+
+// assocLoop periodically computes the MEASURED metric-dependency graph over the hot
+// series and publishes /api/dependency (doc 20 P2). Off the deterministic path; it
+// reads the hot store and writes only the surfacing view — never detection/forecast.
+func assocLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, depView *atomic.Pointer[vapi.DependencyView], every time.Duration, maxStreams int) {
+	if every <= 0 {
+		every = time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			series, total := snapshotSeries(in, maxStreams)
+			edges := assoc.Associate(now, series, assoc.DefaultParams)
+			deps := make([]vapi.DependencyEdge, 0, len(edges))
+			for _, e := range edges {
+				deps = append(deps, vapi.DependencyEdge{A: e.A, B: e.B, Relation: e.Relation, Coefficient: e.Coefficient, Overlap: e.Overlap})
+			}
+			depView.Store(vapi.NewDependencyView(now, now.Add(-assoc.DefaultParams.Window), now, deps, len(series), total))
+			if len(deps) > 0 {
+				logger.Info("dgx: published metric-dependency associations (doc 20 P2)", "edges", len(deps), "streams", len(series), "total", total)
+			}
+		}
+	}
+}
+
+// snapshotSeries reads up to maxStreams hot series (deterministic order) as assoc
+// Points, returning the snapshot and the total stream count (for honest coverage).
+func snapshotSeries(in *observe.Ingestor, maxStreams int) (map[string][]assoc.Point, int) {
+	hot := in.Hot()
+	keys := hot.Keys()
+	sort.Strings(keys)
+	total := len(keys)
+	if maxStreams > 0 && len(keys) > maxStreams {
+		keys = keys[:maxStreams]
+	}
+	out := make(map[string][]assoc.Point, len(keys))
+	for _, id := range keys {
+		samples := hot.LastN(id, qss.HotCapacity())
+		pts := make([]assoc.Point, 0, len(samples))
+		for _, smp := range samples {
+			pts = append(pts, assoc.Point{At: smp.At, Value: smp.Value})
+		}
+		out[id] = pts
+	}
+	return out, total
+}
+
 // buildEntityRefs snapshots the active identity inventory as candidate.EntityRefs for
 // the stray-metric ER (doc 20 P1). main does the mapping so the candidate package never
 // imports identity.
@@ -1442,20 +1511,17 @@ func dgxResolveLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingest
 			if len(strays) == 0 {
 				continue
 			}
-			inv := buildEntityRefs(store)
-			now := time.Now().UTC()
-			staged := 0
+			obs := make([]candidate.StrayObservation, 0, len(strays))
 			for _, q := range strays {
-				cands := candidate.Resolve(candidate.StrayObservation{
+				obs = append(obs, candidate.StrayObservation{
 					Family: string(q.Family), Metric: q.Metric, Labels: q.Labels, Node: q.Node,
 					Reason: q.Reason, StreamRef: q.Metric + "@" + q.Node, GraphVersion: graphVersion,
-				}, inv)
-				n, err := cs.Stage(now, cands)
-				if err != nil {
-					logger.Error("dgx: stage stray candidates failed (non-gating)", "err", err)
-					continue
-				}
-				staged += n
+				})
+			}
+			staged, err := candidate.ResolveAndStage(cs, time.Now().UTC(), obs, buildEntityRefs(store))
+			if err != nil {
+				logger.Error("dgx: stage stray candidates failed (non-gating)", "err", err)
+				continue
 			}
 			if staged > 0 {
 				logger.Info("dgx: staged stray-metric candidates (doc 20 P1)", "strays", len(strays), "candidates", staged)
