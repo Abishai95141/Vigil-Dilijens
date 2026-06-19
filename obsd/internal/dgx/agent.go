@@ -27,9 +27,18 @@ type Context struct {
 }
 
 func (c Context) refIndex() map[string]Observation {
-	m := make(map[string]Observation, len(c.Observations))
+	m := make(map[string]Observation, len(c.Observations)+len(c.ValidEntities))
 	for _, o := range c.Observations {
 		m[o.Ref] = o
+	}
+	// Entity keys are citable too, as "entity:<key>". An edge that maps an observation to
+	// a real entity is then grounded on BOTH ends — the entity binding is a cited MEASURED
+	// fact, not free text — which makes the prompt's "an edge may reference these"
+	// enforceable (closing a latent gap a review flagged) and lets the stray-mapping path
+	// cite the workload it proposes a stray belongs to.
+	for k := range c.ValidEntities {
+		ref := "entity:" + k
+		m[ref] = Observation{Ref: ref, Kind: "entity", Detail: k}
 	}
 	return m
 }

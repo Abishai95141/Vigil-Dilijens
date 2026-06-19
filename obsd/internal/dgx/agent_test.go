@@ -33,6 +33,52 @@ const gatedResponse = `{"proposals":[
  {"kind":"edge","subject":"","relation":"associated-with","evidence":["assoc:node|cpu~node|mem"],"rationale":"x"}
 ]}`
 
+// The stray-mapping path (doc 20): the agent maps an unmapped stray metric to a real
+// entity, grounded on BOTH the stray ref AND the entity ref; a mapping that cites an
+// entity NOT in the context is rejected as ungrounded (never a guessed join).
+func TestAgentStrayMapping(t *testing.T) {
+	ctx := dgx.Context{
+		GraphVersion: "v0.8.0",
+		Observations: []dgx.Observation{
+			{Ref: "stray:kube_replicaset_owner/abc", Kind: "stray-metric",
+				Detail: "unmapped metric kube_replicaset_owner labels{namespace=boutique,owner_name=currencyservice}"},
+		},
+		ValidEntities: map[string]bool{"i|c1|boutique|Deployment|currencyservice|d-u1": true},
+	}
+	resp := `{"proposals":[
+	 {"kind":"edge","subject":"stray:kube_replicaset_owner/abc ~> i|c1|boutique|Deployment|currencyservice|d-u1","relation":"associated-with","evidence":["stray:kube_replicaset_owner/abc","entity:i|c1|boutique|Deployment|currencyservice|d-u1"],"rationale":"replicaset owner names the currencyservice deployment"},
+	 {"kind":"edge","subject":"stray ~> phantom","relation":"associated-with","evidence":["stray:kube_replicaset_owner/abc","entity:i|c1|boutique|Deployment|phantom|x"],"rationale":"guess"}
+	]}`
+	ag := dgx.New(dgx.NewStaticProvider("fake", resp), dgx.DefaultParams)
+	cands, rep, err := ag.Propose(context.Background(), ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cands) != 1 {
+		t.Fatalf("accepted %d, want 1 (only the grounded stray->entity mapping): rejected=%+v", len(cands), rep.Rejected)
+	}
+	c := cands[0]
+	if c.Kind != candidate.KindEdge || c.Relation != "associated-with" {
+		t.Errorf("want edge/associated-with, got %s/%s", c.Kind, c.Relation)
+	}
+	kinds := map[string]bool{}
+	for _, e := range c.Evidence {
+		kinds[e.Kind] = true
+	}
+	if !kinds["context:stray-metric"] || !kinds["context:entity"] {
+		t.Errorf("the mapping must be grounded on BOTH the stray and the entity, got evidence %+v", c.Evidence)
+	}
+	ungrounded := false
+	for _, r := range rep.Rejected {
+		if strings.Contains(r.Reason, "ungrounded") {
+			ungrounded = true
+		}
+	}
+	if !ungrounded {
+		t.Errorf("the phantom-entity mapping must be rejected as ungrounded: %+v", rep.Rejected)
+	}
+}
+
 func TestAgentProposeGates(t *testing.T) {
 	ag := dgx.New(dgx.NewStaticProvider("fake", gatedResponse), dgx.DefaultParams)
 	cands, rep, err := ag.Propose(context.Background(), testContext())

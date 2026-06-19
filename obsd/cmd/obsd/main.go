@@ -1595,6 +1595,69 @@ const dgxAgentInterval = 5 * time.Minute
 // dgxAgentObsCap bounds how many of each observation kind enter the prompt.
 const dgxAgentObsCap = 20
 
+// dgxAgentStrayCap bounds how many unmapped strays are offered to the agent per run
+// (kept small so the prompt stays under the provider's token budget; the rest are tried
+// on later cycles as the store is re-read).
+const dgxAgentStrayCap = 12
+
+// unmappedStrayObservations pulls the strays the deterministic ER could not join (a
+// cei-fallback provisional NODE with no associated-with edge) and renders each as a
+// "stray-metric" observation the agent may try to map to a real entity. main reads the
+// candidate store; the agent only ever sees these as read-only grounding context.
+func unmappedStrayObservations(cs *candidate.Store, max int) []dgx.Observation {
+	if cs == nil {
+		return nil
+	}
+	nodes, err := cs.List(candidate.Filter{Kind: candidate.KindNode})
+	if err != nil {
+		return nil
+	}
+	edges, _ := cs.List(candidate.Filter{Kind: candidate.KindEdge})
+	mapped := map[string]bool{}
+	for _, e := range edges {
+		if e.Lineage.Source == "cei-fallback" {
+			if i := strings.Index(e.Subject, " ~> "); i > 0 {
+				mapped[e.Subject[:i]] = true
+			}
+		}
+	}
+	out := make([]dgx.Observation, 0, max)
+	for _, n := range nodes {
+		if n.Lineage.Source != "cei-fallback" || mapped[n.Subject] {
+			continue
+		}
+		metric, _ := n.Payload["metric"].(string)
+		out = append(out, dgx.Observation{
+			Ref:    n.Subject,
+			Kind:   "stray-metric",
+			Detail: "unmapped metric " + metric + " labels{" + labelSummary(n.Payload["labels"]) + "}",
+		})
+		if len(out) >= max {
+			break
+		}
+	}
+	return out
+}
+
+// labelSummary renders a stray candidate's labels (a map[string]any from JSON) as a
+// compact, deterministic "k=v,k=v" string for the agent prompt.
+func labelSummary(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok || len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, m[k]))
+	}
+	return strings.Join(parts, ",")
+}
+
 // dgxAgentLoop runs the LLM proposer over read-only context each interval and stages
 // the gated survivors (doc 20 P3). Off the deterministic path; the agent authors
 // nothing — it proposes, the gates filter, a human promotes later.
@@ -1614,7 +1677,7 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 			if now.Before(rateLimitedUntil) {
 				continue // backing off after a provider rate-limit; no per-tick log spam
 			}
-			c := buildAgentContext(graphVersion, depView.Load(), silenceView.Load(), buildEntityRefs(store))
+			c := buildAgentContext(graphVersion, depView.Load(), silenceView.Load(), buildEntityRefs(store), unmappedStrayObservations(cs, dgxAgentStrayCap))
 			if len(c.Observations) == 0 {
 				continue
 			}
@@ -1660,11 +1723,16 @@ func truncStr(s string, n int) string {
 // buildAgentContext maps the read-only surfaces into the agent's grounding context
 // (doc 20 P3): associations + coverage gaps as MEASURED observations the agent may
 // cite, and the valid entity keys. main does the mapping so dgx never imports api.
-func buildAgentContext(graphVersion string, dep *vapi.DependencyView, silence *vapi.SilenceLedgerView, entities []candidate.EntityRef) dgx.Context {
+func buildAgentContext(graphVersion string, dep *vapi.DependencyView, silence *vapi.SilenceLedgerView, entities []candidate.EntityRef, strayObs []dgx.Observation) dgx.Context {
 	c := dgx.Context{GraphVersion: graphVersion, ValidEntities: make(map[string]bool, len(entities))}
 	for _, e := range entities {
 		c.ValidEntities[e.Key] = true
 	}
+	// doc 20: the unmapped strays the deterministic ER could not join (their names didn't
+	// reach the ≥2-coordinate floor). The agent may PROPOSE an associated-with edge mapping
+	// a stray to a real entity when its labels identify one — a semantic join the discrete
+	// ER cannot make, staged as a candidate for human verification (never authored).
+	c.Observations = append(c.Observations, strayObs...)
 	if dep != nil && dep.Available {
 		for i, e := range dep.Edges {
 			if i >= dgxAgentObsCap {
