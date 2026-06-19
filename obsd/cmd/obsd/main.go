@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -498,6 +500,26 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				provider = dgx.NewOpenAICompatibleProvider("custom", base, apiKey, os.Getenv("DGX_MODEL"))
 			} else {
 				provider = dgx.NewGroqProvider(apiKey, os.Getenv("DGX_MODEL"))
+			}
+			// DGX_MAX_TOKENS bumps the completion bound — a reasoning model (deepseek-v4-flash,
+			// deepseek-reasoner) needs headroom for reasoning_tokens + the proposals JSON, or it
+			// returns empty content (observed live). Only the ChatProvider honours it.
+			if cp, ok := provider.(*dgx.ChatProvider); ok {
+				if v := os.Getenv("DGX_MAX_TOKENS"); v != "" {
+					if n, err := strconv.Atoi(v); err == nil {
+						cp.SetMaxTokens(n)
+					}
+				}
+				// DGX_EXTRA_BODY is a JSON object of provider-specific request fields, e.g.
+				// {"thinking":{"type":"disabled"}} to turn OFF deepseek-v4-flash reasoning.
+				if v := os.Getenv("DGX_EXTRA_BODY"); v != "" {
+					var extra map[string]any
+					if err := json.Unmarshal([]byte(v), &extra); err == nil {
+						cp.SetExtraBody(extra)
+					} else {
+						logger.Warn("dgx: DGX_EXTRA_BODY is not valid JSON; ignoring", "err", err.Error())
+					}
+				}
 			}
 			dgxAgent = dgx.New(provider, dgx.DefaultParams)
 			logger.Info("dgx agent enabled (doc 20 P3)", "provider", provider.Name())

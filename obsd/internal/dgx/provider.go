@@ -66,10 +66,18 @@ type ChatProvider struct {
 	apiKey      string
 	model       string
 	temperature float64
+	maxTokens   int
+	extraBody   map[string]any // provider-specific request fields merged into every call
 	httpc       *http.Client
 }
 
 const defaultGroqModel = "llama-3.3-70b-versatile"
+
+// defaultMaxTokens bounds the completion. 2048 (not 1024) so a REASONING model — whose
+// hidden reasoning_tokens count against this budget — has room to both think AND emit the
+// proposals JSON; a 1024 cap starves such a model and it returns empty content (observed
+// live on deepseek-v4-flash). Override per provider via SetMaxTokens / DGX_MAX_TOKENS.
+const defaultMaxTokens = 2048
 
 // NewGroqProvider builds the default backend: Groq's OpenAI-compatible endpoint. An
 // empty model uses a sensible default; override via the DGX_MODEL env / config.
@@ -79,7 +87,7 @@ func NewGroqProvider(apiKey, model string) *ChatProvider {
 	}
 	return &ChatProvider{
 		name: "groq", baseURL: "https://api.groq.com/openai/v1", apiKey: apiKey,
-		model: model, temperature: 0.1, httpc: &http.Client{Timeout: 60 * time.Second},
+		model: model, temperature: 0.1, maxTokens: defaultMaxTokens, httpc: &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -92,7 +100,28 @@ func NewOpenAICompatibleProvider(name, baseURL, apiKey, model string) *ChatProvi
 	}
 	return &ChatProvider{
 		name: name, baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey,
-		model: model, temperature: 0.1, httpc: &http.Client{Timeout: 60 * time.Second},
+		model: model, temperature: 0.1, maxTokens: defaultMaxTokens, httpc: &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+// SetMaxTokens overrides the completion-token bound (DGX_MAX_TOKENS). A larger budget is
+// needed for reasoning models (deepseek-reasoner, deepseek-v4-flash) whose reasoning_tokens
+// count against it; a non-positive value is ignored (keeps the default).
+func (p *ChatProvider) SetMaxTokens(n int) {
+	if n > 0 {
+		p.maxTokens = n
+	}
+}
+
+// SetExtraBody merges provider-specific top-level fields into every request (DGX_EXTRA_BODY).
+// Vendor-agnostic escape hatch: e.g. {"thinking":{"type":"disabled"}} turns OFF deepseek-v4-
+// flash's reasoning (no reasoning_tokens — faster, cheaper, and more decisive tool-use), or
+// {"reasoning_effort":"low"}. The fields are merged AFTER the typed request, so a vendor key
+// the struct does not model still reaches the wire. Never set a string field on clock.proto —
+// this is the LLM transport, entirely off the deterministic path.
+func (p *ChatProvider) SetExtraBody(m map[string]any) {
+	if len(m) > 0 {
+		p.extraBody = m
 	}
 }
 
@@ -156,6 +185,11 @@ func (p *ChatProvider) doChat(ctx context.Context, reqBody chatRequest) (*chatRe
 	if err != nil {
 		return nil, 0, fmt.Errorf("dgx %s: marshal request: %w", p.name, err)
 	}
+	if len(p.extraBody) > 0 {
+		if b, err = mergeExtraBody(b, p.extraBody); err != nil {
+			return nil, 0, fmt.Errorf("dgx %s: merge extra body: %w", p.name, err)
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/chat/completions", bytes.NewReader(b))
 	if err != nil {
 		return nil, 0, fmt.Errorf("dgx %s: new request: %w", p.name, err)
@@ -186,7 +220,7 @@ func (p *ChatProvider) Complete(ctx context.Context, system, user string) (strin
 	cr, _, err := p.doChat(ctx, chatRequest{
 		Model:          p.model,
 		Temperature:    p.temperature,
-		MaxTokens:      1024,
+		MaxTokens:      p.maxTokens,
 		ResponseFormat: &respFormat{Type: "json_object"},
 		Messages: []chatMessage{
 			{Role: "system", Content: system},
@@ -210,7 +244,7 @@ func (p *ChatProvider) CompleteTools(ctx context.Context, msgs []ChatTurn, tools
 	req := chatRequest{
 		Model:       p.model,
 		Temperature: p.temperature,
-		MaxTokens:   1024,
+		MaxTokens:   p.maxTokens,
 		Messages:    toWireMessages(msgs),
 	}
 	if len(tools) > 0 {
@@ -243,6 +277,23 @@ func (p *ChatProvider) CompleteTools(ctx context.Context, msgs []ChatTurn, tools
 		return AssistantTurn{}, fmt.Errorf("dgx %s: empty response (no tool calls, no text content)", p.name)
 	}
 	return AssistantTurn{Content: msg.Content}, nil
+}
+
+// mergeExtraBody splices provider-specific top-level fields into a marshaled request body.
+// The extra fields win on a key clash (the operator's explicit override is authoritative).
+func mergeExtraBody(base []byte, extra map[string]any) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(base, &m); err != nil {
+		return nil, err
+	}
+	for k, v := range extra {
+		rv, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		m[k] = rv
+	}
+	return json.Marshal(m)
 }
 
 func toWireMessages(turns []ChatTurn) []chatMessage {
