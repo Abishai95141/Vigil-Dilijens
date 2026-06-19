@@ -17,8 +17,8 @@ func TestPhenomenonObservabilityKind(t *testing.T) {
 	avail := GateSignals(g, kindFacts())
 	rep := PhenomenonObservability(g, avail)
 
-	if got := rep.Full + rep.Partial + rep.None; got != 40 || len(rep.PerPhenomenon) != 40 {
-		t.Fatalf("verdicts = %d (full %d partial %d none %d), want 40", got, rep.Full, rep.Partial, rep.None)
+	if got := rep.Full + rep.Partial + rep.None; got != 41 || len(rep.PerPhenomenon) != 41 {
+		t.Fatalf("verdicts = %d (full %d partial %d none %d), want 41 (+ PHEN_DISK_FILLING, v0.9.0)", got, rep.Full, rep.Partial, rep.None)
 	}
 	for _, p := range rep.PerPhenomenon {
 		if p.Observability != "full" && len(p.MissingReasons) == 0 {

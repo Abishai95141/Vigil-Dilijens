@@ -1,0 +1,61 @@
+# Chaos: bounded ephemeral-storage fill — exercises PHEN_DISK_FILLING (v0.9.0).
+#
+# The container declares its OWN ephemeral-storage limit (64Mi) — THIS is the
+# customer-declared bar (borrowed normativity), fully resolvable on this pod. It
+# writes 1MiB/10s to its own writable layer (/tmp), a ~6MiB/min linear ramp, until
+# 58MiB then HOLDS (sleep) — crossing 0.85x64Mi = 54.4Mi (the bar) at ~minute 9
+# while RISING (the slope/at-threshold check fires), then sitting above it.
+#
+# SAFETY: double-bounded. (1) The 58-iteration cap stops well under the 64Mi limit,
+# so the kubelet never needs to evict and the writable layer never grows unbounded.
+# (2) Writes go to the container's OWN /tmp (writable layer) — never a hostPath/PVC,
+# so node disk is untouched. memory limit 64Mi caps the process. Cleanup:
+# `kubectl delete deploy disk-filler -n chaos` (NOT `delete -f` — that nukes the ns).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chaos
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: disk-filler
+  namespace: chaos
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: disk-filler}
+  template:
+    metadata:
+      labels: {app: disk-filler}
+    spec:
+      containers:
+        - name: filler
+          image: alpine:3.20
+          command:
+            - sh
+            - -c
+            - |
+              # Linear ~6 MiB/min fill of the container's own writable layer to
+              # 58Mi, crossing 0.85x64Mi = 54.4Mi (the bar) while rising, then HOLD
+              # below the 64Mi limit (no eviction). container_fs_usage_bytes is the
+              # MEASURED gauge the new THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT bars.
+              i=0
+              while [ "$i" -lt 58 ]; do
+                dd if=/dev/zero of=/tmp/fill-$i.dat bs=1M count=1 2>/dev/null
+                i=$((i+1))
+                sleep 10
+              done
+              echo "fill complete at ${i}MiB — holding above the bar"
+              sleep 100000
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+              ephemeral-storage: 64Mi
+            # The declared ephemeral-storage limit IS the bar (borrowed normativity):
+            # the disk-fill bar resolves to 0.85 x 64Mi = 54.4Mi.
+            limits:
+              cpu: 100m
+              memory: 64Mi
+              ephemeral-storage: 64Mi

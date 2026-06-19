@@ -57,6 +57,9 @@ func SnapshotConfig(ctx context.Context, cs kubernetes.Interface) (*ConfigSnapsh
 			if q, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
 				cc.CPULimitMilli = q.MilliValue()
 			}
+			if q, ok := c.Resources.Limits[corev1.ResourceEphemeralStorage]; ok {
+				cc.EphemeralStorageLimitBytes = q.Value()
+			}
 			pc.Containers = append(pc.Containers, cc)
 		}
 		// Customer-declared application SLO bars (doc 15 cap. A) from vigil.io/slo.*

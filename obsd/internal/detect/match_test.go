@@ -151,11 +151,12 @@ func TestMatchDeterministic(t *testing.T) {
 func TestOnlyEntityLocalPhenomena(t *testing.T) {
 	g := loadGraph(t)
 	m := NewMatcher(g)
-	// 18 after v0.4.0 (doc 15 Phase C): + PHEN_UPSTREAM_DEGRADATION (entity-local).
-	// It carries no detection condition, so it sits in the matcher's set but never
-	// fires (proven detection-neutral); this count is a graph-structure assertion.
-	if m.EntityLocalCount() != 18 {
-		t.Errorf("entity-local phenomena = %d, want 18", m.EntityLocalCount())
+	// 19 after v0.9.0: + PHEN_DISK_FILLING (entity-local, the hanging-signal wire).
+	// (18 after v0.4.0: + PHEN_UPSTREAM_DEGRADATION, entity-local.) This count is a
+	// graph-structure assertion; PHEN_DISK_FILLING DOES carry a check, so unlike
+	// PHEN_UPSTREAM_DEGRADATION it can fire on a container filling toward its limit.
+	if m.EntityLocalCount() != 19 {
+		t.Errorf("entity-local phenomena = %d, want 19", m.EntityLocalCount())
 	}
 	// OOM is first-order — must not be in the matcher's set.
 	for _, p := range m.entityLoc {

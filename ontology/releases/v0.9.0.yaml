@@ -1,0 +1,50 @@
+# Graph release v0.9.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.9.0
+graph_version: "sha256:1f6790cde16dc39d7122fbbd8b6d2d401be5faceddc06a11856c9bd2669a5673"
+created: "2026-06-19"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - disk-filling-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Closes a HANGING signal — the ingest→use gap made concrete. cAdvisor's
+  container_fs_usage_bytes (a Gauge, SIG_container_fs_usage_bytes_cf188e5e) was
+  scraped and mapped to the Container entity but referenced by NO rule and NO
+  phenomenon — ingested and inert. This release wires it into the deterministic
+  path as PHEN_DISK_FILLING (disk-filling-v1.yaml): a container's ephemeral
+  storage usage rising toward its OWN declared ephemeral-storage limit, the
+  eviction precursor — the direct analogue of PHEN_MEMORY_LEAK (working-set vs
+  the memory limit). It becomes (a) MEASURED-detectable (the slope/at-threshold
+  check), (b) forecastable (a Gauge with a config-relative bar auto-enters the
+  forecast funnel; the new class's WARNING stays gate-pending per doc 11 §3.5
+  until its backtest gate passes — detection is non-gating and surfaces now), and
+  (c) chain-eligible (the authored PHEN_DISK_FILLING → PHEN_DISK_PID_INODE_PRESSURE
+  cascade relation). BORROWED NORMATIVITY: the bar is the container's OWN declared
+  ephemeral-storage limit × 0.85; undeclared → unbounded (listed, Tier-B-ineligible),
+  never a guessed default (the node-level 15% kubelet eviction default is a
+  DIFFERENT phenomenon and is deliberately NOT borrowed). Ships a new config path
+  (container.resources.limits.ephemeral-storage) the closed vocabulary did not
+  have — code, not graph: graph/overlay.go (const + knownConfigPaths), binding
+  ContainerConfig.EphemeralStorageLimitBytes, compile.readContainerPath, and
+  kube/config.go reads it from the pod spec. BEHAVIOURAL governance class (a new
+  phenomenon + a new config path): the graph hash bumps v0.8.0→v0.9.0 deliberately,
+  v0.8.0 stays immutable. NON-GATING: the check is INERT without a rising bound
+  series, so every cluster with no filling container behaves byte-identically.

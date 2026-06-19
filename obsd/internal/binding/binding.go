@@ -41,9 +41,10 @@ type PodConfig struct {
 
 // ContainerConfig carries one container's declared limits. 0 = not declared.
 type ContainerConfig struct {
-	Name          string
-	MemLimitBytes int64
-	CPULimitMilli int64
+	Name                       string
+	MemLimitBytes              int64
+	CPULimitMilli              int64
+	EphemeralStorageLimitBytes int64 // 0 = not declared
 }
 
 // NodeConfig carries a node's declared allocatable capacity. 0 = unknown.

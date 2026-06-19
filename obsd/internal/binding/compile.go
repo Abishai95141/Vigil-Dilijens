@@ -363,6 +363,10 @@ func eligibilityMet(path string, c ContainerConfig) (bool, string) {
 		if c.MemLimitBytes == 0 {
 			return false, "out-of-scope: no memory limit declared (eligibility: " + path + ")"
 		}
+	case graph.PathContainerLimitsEphemeralStorage:
+		if c.EphemeralStorageLimitBytes == 0 {
+			return false, "out-of-scope: no ephemeral-storage limit declared, fill-toward-limit has no bar (eligibility: " + path + ")"
+		}
 	}
 	return true, ""
 }
@@ -381,6 +385,11 @@ func readContainerPath(path string, c ContainerConfig) (value float64, unit stri
 			return 0, "millicores", false
 		}
 		return float64(c.CPULimitMilli), "millicores", true
+	case graph.PathContainerLimitsEphemeralStorage:
+		if c.EphemeralStorageLimitBytes == 0 {
+			return 0, "bytes", false
+		}
+		return float64(c.EphemeralStorageLimitBytes), "bytes", true
 	default:
 		return 0, "", false
 	}

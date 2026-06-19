@@ -23,8 +23,8 @@ func loadKGWithOverlays(t *testing.T) *Graph {
 // their traversal edge types — the doc 14 A14 gap, closed by authored content.
 func TestOverlaysCloseTheSpanGap(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Phenomena) != 40 {
-		t.Fatalf("phenomena = %d, want 40", len(g.Phenomena))
+	if len(g.Phenomena) != 41 {
+		t.Fatalf("phenomena = %d, want 41 (+ PHEN_DISK_FILLING, disk-filling-v1 / v0.9.0)", len(g.Phenomena))
 	}
 	counts := map[string]int{}
 	for id, p := range g.Phenomena {
@@ -44,8 +44,8 @@ func TestOverlaysCloseTheSpanGap(t *testing.T) {
 	// to the overlay shows up as a deliberate diff here too. v0.4.0 (doc 15 Phase C)
 	// added PHEN_UPSTREAM_DEGRADATION (entity-local) + PHEN_DOWNSTREAM_IMPACT
 	// (first-order over the new "flow" traversal edge).
-	if counts[SpanEntityLocal] != 18 || counts[SpanFirstOrder] != 17 || counts[SpanSecondOrder] != 5 {
-		t.Errorf("span distribution = %v, want entity-local:18 first-order:17 second-order:5", counts)
+	if counts[SpanEntityLocal] != 19 || counts[SpanFirstOrder] != 17 || counts[SpanSecondOrder] != 5 {
+		t.Errorf("span distribution = %v, want entity-local:19 first-order:17 second-order:5", counts)
 	}
 }
 
@@ -67,8 +67,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 15 {
-		t.Fatalf("rules = %d, want 15 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING)", len(g.Rules))
+	if len(g.Rules) != 16 {
+		t.Fatalf("rules = %d, want 16 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -124,8 +124,8 @@ func TestOverlayVersionPinning(t *testing.T) {
 	// threshold-rules-v5 + detect-conditions-v6 (the KSM node-condition disk-pressure
 	// member of DISK_PID_INODE_PRESSURE). v0.8.0 (PVC): + threshold-rules-v6 +
 	// detect-conditions-v7 (the KSM stuck-Pending member of VOLUME_MOUNT_FAILURE), so 15.
-	if len(merged.Overlays) != 15 {
-		t.Fatalf("overlay provenance records = %d, want 15 (spans, rules v1-v6, conditions v1-v7, cross-service-v0)", len(merged.Overlays))
+	if len(merged.Overlays) != 16 {
+		t.Fatalf("overlay provenance records = %d, want 16 (spans, rules v1-v6, conditions v1-v7, cross-service-v0, disk-filling-v1)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

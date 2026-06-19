@@ -1,0 +1,99 @@
+# Disk-filling phenomenon — authored overlay v1 (doc 02 §3.5, doc 04 §3.3, doc 07 §3.1).
+#
+# Wires a previously HANGING signal into the deterministic path: cAdvisor's
+# container_fs_usage_bytes (a Gauge, SIG_container_fs_usage_bytes_cf188e5e) was
+# scraped, mapped to the Container entity, but referenced by NO rule and NO
+# phenomenon — ingested and inert. This overlay makes it MEASURED-detectable,
+# forecastable, and chain-eligible, the direct analogue of PHEN_MEMORY_LEAK
+# (working-set rising vs the memory limit) for ephemeral storage.
+#
+# BORROWED NORMATIVITY: the bar is the container's OWN declared ephemeral-storage
+# limit (container.resources.limits.ephemeral-storage) x 0.85 — never learned,
+# never a guessed default. Undeclared limit -> no bar -> unbounded (listed,
+# Tier-B-ineligible). The node-level 15% kubelet eviction default is a DIFFERENT
+# phenomenon and is deliberately NOT borrowed here.
+#
+# BEHAVIOURAL governance class (doc 12): a NEW phenomenon + a NEW config path
+# deliberately bump the graph hash (v0.8.0 -> v0.9.0). The forecast WARNING for
+# this new class stays gate-pending (doc 11 §3.5) until its backtest gate passes;
+# DETECTION surfaces immediately (non-gating).
+overlay: disk-filling
+version: 1
+author: vigil-engineering
+status: proposed-v1 (the hanging-signal demonstration — container_fs_usage_bytes wired to a config-relative ephemeral-storage bar)
+
+phenomena:
+  - id: PHEN_DISK_FILLING
+    label: Ephemeral storage filling
+    signals:
+      - ["container_fs_usage_bytes", "required", "T0+", "container writable-layer + emptyDir filesystem usage rising toward its declared ephemeral-storage limit — the eviction precursor"]
+    notes: >-
+      The direct analogue of PHEN_MEMORY_LEAK for disk: a container's ephemeral
+      storage usage rising toward its OWN declared limit. The kubelet evicts the
+      pod when usage reaches the limit, so a sustained rising approach is the
+      early bar. Single required member; absent corroboration (inode / eviction
+      signals) is named in the check note, never fabricated as a dangling edge.
+
+members:
+  PHEN_DISK_FILLING:
+    - signal: SIG_container_fs_usage_bytes_cf188e5e
+      role: required
+      temporal: T0+
+      why: ephemeral storage usage rising toward the container's declared limit
+
+spans:
+  PHEN_DISK_FILLING:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      The rising-usage member is observed AT the container itself (its own
+      ephemeral-storage gauge vs its own declared limit) — no topology walk joins
+      it. Entity-local, the direct analogue of PHEN_MEMORY_LEAK.
+
+rules:
+  - id: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT
+    signal: SIG_container_fs_usage_bytes_cf188e5e
+    metric: container_fs_usage_bytes
+    kind: config-relative
+    config_path: container.resources.limits.ephemeral-storage
+    eligibility_config_path: container.resources.limits.ephemeral-storage
+    factor: 0.85
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      The eviction-precursor bar: the kubelet evicts the pod when ephemeral
+      storage usage reaches the container's declared limit, so 85% of the
+      container's OWN declared ephemeral-storage limit is the early bar (earlier
+      than memory's 0.95 — storage fills coarser, buying forecast lead time). No
+      limit declared -> no bar -> unbounded (listed, Tier-B-ineligible), never a
+      guessed default; the node-level 15% kubelet eviction default is a DIFFERENT
+      phenomenon and is deliberately NOT borrowed.
+
+checks:
+  PHEN_DISK_FILLING:
+    - signal: SIG_container_fs_usage_bytes_cf188e5e
+      metric: container_fs_usage_bytes
+      facet: slope
+      expect: rising
+      min_state: at-threshold
+      on: anchor
+      note: >-
+        rising while at/over the 0.85x ephemeral-storage limit bar; the 5m slope
+        approximates a sustained fill. Corroborating inode/eviction signals are
+        not authored here (no resolvable member signal) — surfaced as a
+        single-member DEGRADED match, never fabricated. The emptyDir/ephemeral
+        limit may be unenforced on some distros (GOTCHA_EMPTYDIR_LIMIT_NOT_ENFORCED);
+        the declared limit is the contract regardless of kernel enforcement.
+
+relations:
+  - src: PHEN_DISK_FILLING
+    dst: PHEN_DISK_PID_INODE_PRESSURE
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      Per the curated ontology: a container exhausting its ephemeral storage at
+      scale drives node-level filesystem / inode pressure; kubelet evictions
+      emerge at the pod level and aggregate to the node DiskPressure condition.
+      The node-level pressure is related to, not independent of, the container
+      fill — surfaced verbatim as the AUTHORED why, never an inferred cause.

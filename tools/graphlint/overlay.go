@@ -70,18 +70,29 @@ type ovRelation struct {
 	Why           string `yaml:"why"`
 }
 
+// ovMember mirrors the runtime loader's overlayMember (doc 15 Phase C): the SIG_-bearing
+// participates_in membership a check binds against. The loader appends the edge; graphlint
+// reads the block so an overlay phenomenon's own member resolves for check validation.
+type ovMember struct {
+	Signal   string `yaml:"signal"`
+	Role     string `yaml:"role"`
+	Temporal string `yaml:"temporal"`
+	Why      string `yaml:"why"`
+}
+
 type overlayDoc struct {
 	path      string
-	Overlay   string               `yaml:"overlay"`
-	Version   int                  `yaml:"version"`
-	Author    string               `yaml:"author"`
-	Status    string               `yaml:"status"`
-	Phenomena []ovPhenomenon       `yaml:"phenomena"`
-	Relations []ovRelation         `yaml:"relations"`
-	Spans     map[string]ovSpan    `yaml:"spans"`
-	Rules     []ovRule             `yaml:"rules"`
-	Checks    map[string][]ovCheck `yaml:"checks"`
-	Anchors   map[string]string    `yaml:"anchors"`
+	Overlay   string                `yaml:"overlay"`
+	Version   int                   `yaml:"version"`
+	Author    string                `yaml:"author"`
+	Status    string                `yaml:"status"`
+	Phenomena []ovPhenomenon        `yaml:"phenomena"`
+	Members   map[string][]ovMember `yaml:"members"`
+	Relations []ovRelation          `yaml:"relations"`
+	Spans     map[string]ovSpan     `yaml:"spans"`
+	Rules     []ovRule              `yaml:"rules"`
+	Checks    map[string][]ovCheck  `yaml:"checks"`
+	Anchors   map[string]string     `yaml:"anchors"`
 }
 
 var (
@@ -96,10 +107,11 @@ var (
 	ovMinStateVocab  = map[string]bool{"": true, "at-threshold": true, "above": true, "well-above": true}
 	ovOnVocab        = map[string]bool{"": true, "anchor": true, "neighbour": true, "two-hop": true}
 	ovPathVocab      = map[string]bool{
-		"container.resources.limits.memory":   true,
-		"container.resources.limits.cpu":      true,
-		"pvc.spec.resources.requests.storage": true,
-		"node.status.allocatable.memory":      true,
+		"container.resources.limits.memory":            true,
+		"container.resources.limits.cpu":               true,
+		"container.resources.limits.ephemeral-storage": true,
+		"pvc.spec.resources.requests.storage":          true,
+		"node.status.allocatable.memory":               true,
 	}
 )
 
@@ -197,6 +209,21 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 				errs = append(errs, fmt.Sprintf("%s: overlay phenomenon %q: at least one member signal is required", at, op.ID))
 			}
 			nodeType[op.ID] = "CorrelationGroup"
+		}
+		// doc 15 Phase C: an overlay phenomenon's structured members (the loader appends
+		// these as participates_in edges). Register them so this overlay's own checks can
+		// bind them — mirrors the runtime overlay loader's members block.
+		for phen, ms := range o.Members {
+			for _, m := range ms {
+				if nodeType[m.Signal] != "Signal" {
+					errs = append(errs, fmt.Sprintf("%s: %s member %q is not a known Signal", at, phen, m.Signal))
+					continue
+				}
+				if memberOf[phen] == nil {
+					memberOf[phen] = map[string]bool{}
+				}
+				memberOf[phen][m.Signal] = true
+			}
 		}
 		for _, r := range o.Relations {
 			if nodeType[r.Src] != "CorrelationGroup" {

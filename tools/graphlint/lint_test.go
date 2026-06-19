@@ -115,10 +115,10 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 		t.Fatalf("loadOverlays: %v", err)
 	}
 	// The production overlay glob (experimental/ excluded): cross-service-v0, spans-v1,
-	// threshold-rules-v1..v6, detect-conditions-v1..v7 = 15 (G2/G2b/DISK/PVC added the KSM
-	// object-state lane overlays).
-	if len(ovls) != 15 {
-		t.Fatalf("overlays = %d, want 15", len(ovls))
+	// threshold-rules-v1..v6, detect-conditions-v1..v7 = 15; + disk-filling-v1 (v0.9.0,
+	// the hanging-signal wire) = 16.
+	if len(ovls) != 16 {
+		t.Fatalf("overlays = %d, want 16", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {
@@ -128,14 +128,15 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 		t.Errorf("merged lint should be clean: schema=%v ref=%v overlay=%v", res.schemaErrors, res.refErrors, res.overlayErrors)
 	}
 	g := res.gap
-	// 40 after v0.4.0 (doc 15 Phase C): the cross-service overlay adds 2 spanned phenomena.
-	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 40 {
-		t.Errorf("merged spans = with %d / missing %d, want 40/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
+	// 41 after v0.9.0: + PHEN_DISK_FILLING (entity-local span). (40 after v0.4.0: the
+	// cross-service overlay added 2 spanned phenomena.)
+	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 41 {
+		t.Errorf("merged spans = with %d / missing %d, want 41/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
 	}
 	// 8 v1 + 2 v2 + 2 v3 + 1 v4 (THR_POD_EVICTED) + 1 v5 (THR_NODE_DISK_PRESSURE) + 1 v6
-	// (THR_PVC_PENDING).
-	if g.ThresholdRulesStructured != 15 {
-		t.Errorf("structured rules = %d, want 15", g.ThresholdRulesStructured)
+	// (THR_PVC_PENDING) + 1 disk-filling (THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT) = 16.
+	if g.ThresholdRulesStructured != 16 {
+		t.Errorf("structured rules = %d, want 16", g.ThresholdRulesStructured)
 	}
 	if g.hasGaps() {
 		t.Error("no gaps should remain with overlays applied (-strict must pass)")

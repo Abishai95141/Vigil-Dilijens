@@ -40,17 +40,19 @@ const (
 // binding engine (04) knows how to read from live cluster objects. Adding a path
 // here requires a matching resolver in binding.
 const (
-	PathContainerLimitsMemory = "container.resources.limits.memory"
-	PathContainerLimitsCPU    = "container.resources.limits.cpu"
-	PathPVCRequestsStorage    = "pvc.spec.resources.requests.storage"
-	PathNodeAllocatableMemory = "node.status.allocatable.memory"
+	PathContainerLimitsMemory           = "container.resources.limits.memory"
+	PathContainerLimitsCPU              = "container.resources.limits.cpu"
+	PathContainerLimitsEphemeralStorage = "container.resources.limits.ephemeral-storage"
+	PathPVCRequestsStorage              = "pvc.spec.resources.requests.storage"
+	PathNodeAllocatableMemory           = "node.status.allocatable.memory"
 )
 
 var knownConfigPaths = map[string]bool{
-	PathContainerLimitsMemory: true,
-	PathContainerLimitsCPU:    true,
-	PathPVCRequestsStorage:    true,
-	PathNodeAllocatableMemory: true,
+	PathContainerLimitsMemory:           true,
+	PathContainerLimitsCPU:              true,
+	PathContainerLimitsEphemeralStorage: true,
+	PathPVCRequestsStorage:              true,
+	PathNodeAllocatableMemory:           true,
 }
 
 // SLOConfigPathPrefix names the customer-declared application-SLO config-path family
@@ -86,9 +88,10 @@ const EligibilityAppSLODeclared = "slo.*"
 // unrecognized predicate is rejected at load, never accepted and ignored. Distinct from
 // knownConfigPath, which accepts the open slo.* value family for config_path bars.
 var knownEligibilityPredicates = map[string]bool{
-	PathContainerLimitsCPU:    true,
-	PathContainerLimitsMemory: true,
-	EligibilityAppSLODeclared: true,
+	PathContainerLimitsCPU:              true,
+	PathContainerLimitsMemory:           true,
+	PathContainerLimitsEphemeralStorage: true,
+	EligibilityAppSLODeclared:           true,
 }
 
 // Transform vocabulary (doc 15 cap. A — L6 freshness): an optional, AUTHORED
@@ -728,7 +731,7 @@ func (g *Graph) validateRule(r *ThresholdRule) error {
 			if r.EntityScope != "Pod" {
 				return fmt.Errorf("eligibility %q is a Pod-workload predicate, but entity_scope is %q", r.Eligibility, r.EntityScope)
 			}
-		case PathContainerLimitsCPU, PathContainerLimitsMemory:
+		case PathContainerLimitsCPU, PathContainerLimitsMemory, PathContainerLimitsEphemeralStorage:
 			if r.EntityScope != "Container" {
 				return fmt.Errorf("eligibility %q is a Container predicate, but entity_scope is %q", r.Eligibility, r.EntityScope)
 			}

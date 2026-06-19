@@ -24,8 +24,8 @@ func loadGraph(t *testing.T) *graph.Graph {
 	if err != nil {
 		t.Fatalf("LoadWithOverlays: %v", err)
 	}
-	if len(g.Rules) != 15 {
-		t.Fatalf("rules = %d, want 15 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING)", len(g.Rules))
+	if len(g.Rules) != 16 {
+		t.Fatalf("rules = %d, want 16 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT)", len(g.Rules))
 	}
 	return g
 }
