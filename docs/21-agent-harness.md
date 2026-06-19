@@ -1,7 +1,8 @@
 # 21 — The Intelligent Agent Harness: control surface, lifecycle & semantic coverage
 
-> **Status:** forward dev track (PROPOSED, 2026-06-19). Phase 1 (§5) is **building now**;
-> Phases 2–5 are specified, not shipped. Every item graduates only through the existing
+> **Status:** forward dev track (2026-06-19). **Phase 1 (§5) and Phase 2 (§2.2–2.3) are
+> SHIPPED** (branch v5, adversarially reviewed, `just ci` green, graph hash unchanged);
+> Phases 3–5 are specified, not yet built. Every item graduates only through the existing
 > governance gate (doc 12) and the firewall below.
 >
 > **Binding constraint:** this doc lives entirely under
@@ -299,11 +300,21 @@ These are code-review rules, restated so the expansion cannot erode them:
 
 | Phase | What | Moves MEASURED coverage? | Status |
 |---|---|---|---|
-| **1** | `equiv_group` candidate + overlay absorb path + deterministic support | **Yes** (the absorb) | **building now** |
-| 2 | Agent memory (proposal ledger) + read-only retrieval tools (MCP surface) | indirectly | specified |
+| **1** | `equiv_group` candidate + overlay absorb path + deterministic support | **Yes** (the absorb) | **SHIPPED** |
+| **2** | Agent memory (proposal ledger) + read-only retrieval tools (MCP surface) | indirectly | **SHIPPED** |
 | 3 | Lifecycle: event/threshold triggers + support-scored, diff/grouped governance UI | no (surfacing) | specified |
 | 4 | `phenomenon_candidate` kind + the anomaly→phenomenon loop | yes (new wired phenomena) | specified |
 | 5 | Author a `severity` field on phenomena (the prioritisation input) | no (ranking) | specified |
+
+**Phase 2 as built (branch v5 @ `9c815df`):** the Provider gained `CompleteTools`
+(OpenAI tool-calling, with `ErrToolsUnsupported` → single-shot fallback); a read-only
+`ToolRegistry` of 6 tools (`get_strays`, `search_equivalence_groups`, `get_topology`,
+`get_silence_ledger`, `get_coverage`, `get_unexplained`) whose CONTRACT lives in `dgx`
+and whose IMPLEMENTATIONS live in `package main` (`dgxtools.go`) so the firewall holds;
+a bounded multi-turn loop where tool-returned refs ACCUMULATE into the grounding index
+(a proposal may cite only a row the model was shown — truncated rows never become
+groundable); and the proposal-ledger memory (`buildLedger` → the prompt). `DGX_TOOLS=off`
+is the rollback to single-shot.
 
 Phase 1 de-risks the rest: it is the smallest slice that proves the full PROPOSE → VERIFY →
 PROMOTE → *deterministic absorb* round trip end to end.
