@@ -577,6 +577,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// can also reason over the MODALITY lanes — mined log templates, observed trace edges,
 	// and discrete events — alongside associations + coverage gaps + unmapped strays.
 	if dgxAgent != nil {
+		// doc 21 Phase 2: attach the read-only retrieval tools so the agent gathers MEASURED
+		// evidence on demand (and reads its own proposal ledger as memory in the loop). The
+		// tools wrap the SAME atomic snapshots the api/MCP serve — one source of truth, no
+		// writer in scope. DGX_TOOLS=off is the safe rollback to the Phase-1 single-shot path.
+		if os.Getenv("DGX_TOOLS") != "off" {
+			dgxAgent.SetTools(newDGXToolRegistry(candStore, ontologyGraph, &coverage, &silenceView, &topoView, &unexpView))
+			logger.Info("dgx agent: read-only retrieval tools enabled (doc 21 Phase 2)",
+				"tools", "get_strays search_equivalence_groups get_topology get_silence_ledger get_coverage get_unexplained")
+		}
 		go dgxAgentLoop(ctx, logger, dgxAgent, candStore, store, graphVersion, equivGroupCatalog(ontologyGraph),
 			&depView, &silenceView, &logsView, &traceView, &eventsView, envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval))
 	}
@@ -1765,7 +1774,10 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 			if len(c.Observations) == 0 {
 				continue
 			}
-			rep, err := agent.RunOnce(ctx, cs, now, c)
+			// doc 21 §2.2c: the agent reads its OWN prior proposals (promoted/rejected/pending)
+			// as memory so it does not re-propose what was already decided.
+			led := buildLedger(cs)
+			rep, err := agent.RunOnce(ctx, cs, now, c, led)
 			if err != nil {
 				if isRateLimited(err) {
 					// Provider quota exhausted (e.g. Groq tokens-per-day). Back off so we do
@@ -1781,7 +1793,9 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 				logger.Error("dgx agent run failed (non-gating)", "err", err)
 				continue
 			}
-			logger.Info("dgx agent run (doc 20 P3)", "provider", rep.Provider, "proposed", rep.Proposed, "accepted", rep.Accepted, "rejected", len(rep.Rejected))
+			logger.Info("dgx agent run (doc 20 P3 + doc 21 Phase 2)", "provider", rep.Provider,
+				"proposed", rep.Proposed, "accepted", rep.Accepted, "rejected", len(rep.Rejected),
+				"toolCalls", rep.ToolCalls, "iterations", rep.Iterations, "note", rep.Note)
 		}
 	}
 }

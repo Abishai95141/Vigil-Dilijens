@@ -20,11 +20,28 @@ The group/pattern/canonical/label fields are used ONLY for kind "equiv_group"; o
 const maxPromptEntities = 40
 const maxPromptGroups = 40 // the full base catalog is ~35 groups; bound it like the entity list
 
+// toolSystemSuffix appends the TOOL USAGE rule to the system prompt (doc 21 Phase 2). The
+// tool schemas are advertised on the wire; this reminds the model of the discipline: gather
+// MEASURED evidence FIRST, then emit ONE proposals JSON, citing only refs a tool returned.
+func toolSystemSuffix(tools *ToolRegistry) string {
+	if tools.Len() == 0 {
+		return ""
+	}
+	return "\n\n7. TOOL USAGE: You have READ-ONLY tools to gather more MEASURED evidence before proposing: " +
+		strings.Join(tools.Names(), ", ") + ". Call them to discover strays to map, the equivalence groups and real " +
+		"entity keys to map them into, coverage gaps, and loud-but-unmatched signals. A tool result lists facts as " +
+		"\"- [ref] (kind) detail\" — you may then cite those exact refs. The SAME grounding rule applies: cite ONLY a " +
+		"ref that appeared in the OBSERVATIONS, the VALID ENTITY KEYS, or a TOOL RESULT this session — never invent one. " +
+		"Gather what you need (a few calls), THEN emit exactly one proposals JSON. The tools never change anything."
+}
+
 // userPrompt renders the read-only context the model may reason over, BOUNDED by a
 // char budget (p.MaxContextChars) so the prompt stays under the model's token/rate
 // limit even when a real cluster has hundreds of observations (a 413 TPM rejection was
-// surfaced live against the boutique). Truncation is stated, never silent.
-func userPrompt(c Context, p Params) string {
+// surfaced live against the boutique). Truncation is stated, never silent. The prior-
+// proposal ledger (doc 21 §2.2c) is rendered so the agent does not re-propose its own
+// rejected/promoted/pending candidates.
+func userPrompt(c Context, led Ledger, p Params) string {
 	budget := p.MaxContextChars
 	if budget <= 0 {
 		budget = DefaultParams.MaxContextChars
@@ -88,6 +105,9 @@ func userPrompt(c Context, p Params) string {
 		}
 	}
 
-	b.WriteString("\nPropose candidate graph extensions grounded ONLY in the OBSERVATIONS above. Return strict JSON.")
+	// Prior-proposal memory (doc 21 §2.2c): rendered last, capped within the same budget.
+	led.render(&b, budget)
+
+	b.WriteString("\nPropose candidate graph extensions grounded ONLY in the refs above (and any tool results). Return strict JSON.")
 	return b.String()
 }

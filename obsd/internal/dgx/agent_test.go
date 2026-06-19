@@ -130,7 +130,7 @@ func TestAgentRunOnceStages(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	rep, err := ag.RunOnce(context.Background(), s, t0, testContext())
+	rep, err := ag.RunOnce(context.Background(), s, t0, testContext(), dgx.Ledger{})
 	if err != nil {
 		t.Fatal(err)
 	}

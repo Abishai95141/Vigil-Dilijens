@@ -2,7 +2,10 @@ package dgx
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -54,12 +57,18 @@ type Params struct {
 	MinEvidence     int // evidence-sufficiency floor: a proposal must cite ≥ this many grounded refs
 	MaxProposals    int // cap accepted per run (bounds a runaway model)
 	MaxContextChars int // bound the rendered prompt so it stays under the model's token/rate limit
+	// MaxToolIterations bounds the multi-turn tool loop (doc 21 Phase 2) — a hard ceiling so
+	// the agent always terminates even if the model keeps calling tools. 0 ⇒ the default.
+	MaxToolIterations int
+	// MaxToolResultChars caps one tool result rendered into the prompt (keeps the running
+	// context under the model's TPM limit across turns). 0 ⇒ the default.
+	MaxToolResultChars int
 }
 
 // DefaultParams: cite ≥1 grounded fact; at most 20 accepted per run; ~6k-char context
-// budget (a real cluster can have hundreds of observations — the budget keeps the
-// prompt under typical model TPM limits, surfaced live against the boutique).
-var DefaultParams = Params{MinEvidence: 1, MaxProposals: 20, MaxContextChars: 6000}
+// budget; ≤4 tool turns with ≤1500-char tool results (the Phase-2 retrieval loop stays
+// bounded under typical model TPM limits, surfaced live against the boutique).
+var DefaultParams = Params{MinEvidence: 1, MaxProposals: 20, MaxContextChars: 6000, MaxToolIterations: 4, MaxToolResultChars: 1500}
 
 // Rejection records why a proposal was discarded (auditable, never silent).
 type Rejection struct {
@@ -69,20 +78,25 @@ type Rejection struct {
 
 // Report is the outcome of one agent run.
 type Report struct {
-	Provider string
-	Proposed int
-	Accepted int
-	Rejected []Rejection
+	Provider   string
+	Proposed   int
+	Accepted   int
+	Rejected   []Rejection
+	ToolCalls  int    // tool calls dispatched this run (Phase 2)
+	Iterations int    // tool-loop turns taken (Phase 2)
+	Note       string // a non-fatal note (e.g. "tools-unsupported: single-shot fallback")
 }
 
-// Agent is the propose→verify harness. It holds a provider + the declared gate params.
+// Agent is the propose→verify harness. It holds a provider + the declared gate params,
+// and (Phase 2) an optional read-only tool registry the agent may call to gather evidence.
 type Agent struct {
 	provider Provider
 	params   Params
+	tools    *ToolRegistry
 }
 
-// New builds an agent. A zero Params uses DefaultParams; a zero MaxContextChars is
-// filled with the default budget.
+// New builds an agent. A zero Params uses DefaultParams; a zero MaxContextChars /
+// MaxToolIterations / MaxToolResultChars is filled with the default budget.
 func New(provider Provider, params Params) *Agent {
 	if params.MinEvidence == 0 && params.MaxProposals == 0 {
 		params = DefaultParams
@@ -90,16 +104,41 @@ func New(provider Provider, params Params) *Agent {
 	if params.MaxContextChars <= 0 {
 		params.MaxContextChars = DefaultParams.MaxContextChars
 	}
+	if params.MaxToolIterations <= 0 {
+		params.MaxToolIterations = DefaultParams.MaxToolIterations
+	}
+	if params.MaxToolResultChars <= 0 {
+		params.MaxToolResultChars = DefaultParams.MaxToolResultChars
+	}
 	return &Agent{provider: provider, params: params}
 }
 
+// SetTools attaches a read-only tool registry (doc 21 Phase 2). With tools attached the
+// agent runs the bounded multi-turn retrieval loop; with none it stays the Phase-1
+// single-shot proposer. Setting nil (or DGX_TOOLS=off upstream) is the safe rollback.
+func (a *Agent) SetTools(r *ToolRegistry) { a.tools = r }
+
 // Propose asks the provider for proposals over the context and runs the VERIFY gates,
 // returning the survivors (as candidate.Candidate, status defaulted at staging) and a
-// report. The provider's text is untrusted: a parse failure or provider error is
-// returned as an error (nothing is staged).
+// report. With a tool registry attached it runs the bounded multi-turn retrieval loop;
+// otherwise the Phase-1 single-shot path. A parse failure or provider error is returned
+// as an error (nothing is staged). Back-compat: Propose with no ledger uses an empty one.
 func (a *Agent) Propose(ctx context.Context, c Context) ([]candidate.Candidate, Report, error) {
+	return a.propose(ctx, c, Ledger{})
+}
+
+func (a *Agent) propose(ctx context.Context, c Context, led Ledger) ([]candidate.Candidate, Report, error) {
+	if a.tools.Len() > 0 {
+		return a.proposeWithTools(ctx, c, led)
+	}
+	return a.proposeOneShot(ctx, c, led)
+}
+
+// proposeOneShot is the Phase-1 single-shot path (also the graceful fallback when the
+// provider cannot do tool-calling). It grounds proposals against the SEED context only.
+func (a *Agent) proposeOneShot(ctx context.Context, c Context, led Ledger) ([]candidate.Candidate, Report, error) {
 	rep := Report{Provider: a.provider.Name()}
-	raw, err := a.provider.Complete(ctx, systemPrompt, userPrompt(c, a.params))
+	raw, err := a.provider.Complete(ctx, systemPrompt, userPrompt(c, led, a.params))
 	if err != nil {
 		return nil, rep, fmt.Errorf("dgx: provider: %w", err)
 	}
@@ -107,7 +146,117 @@ func (a *Agent) Propose(ctx context.Context, c Context) ([]candidate.Candidate, 
 	if err != nil {
 		return nil, rep, fmt.Errorf("dgx: %w", err)
 	}
-	index := c.refIndex()
+	out := a.verifyProposals(doc, c, c.refIndex(), &rep)
+	rep.Accepted = len(out)
+	return out, rep, nil
+}
+
+// proposeWithTools runs the bounded multi-turn retrieval loop (doc 21 Phase 2). The agent
+// may call read-only tools to gather MEASURED evidence; each tool's returned refs are ADDED
+// to the accumulating grounding index `acc`, so a proposal may cite ONLY a fact a tool
+// actually returned (the anti-fabrication guarantee — groundEvidence is unchanged, the
+// index just grows). The loop is hard-bounded by MaxToolIterations and degrades gracefully:
+// a tools-unsupported provider falls back to single-shot, and any tool error becomes a
+// TOOL ERROR turn (the model recovers; nothing is fabricated).
+func (a *Agent) proposeWithTools(ctx context.Context, c Context, led Ledger) ([]candidate.Candidate, Report, error) {
+	rep := Report{Provider: a.provider.Name()}
+	acc := c.refIndex() // accumulating grounding index: seed facts ∪ tool-returned refs
+	msgs := []ChatTurn{
+		{Role: "system", Content: systemPrompt + toolSystemSuffix(a.tools)},
+		{Role: "user", Content: userPrompt(c, led, a.params)},
+	}
+	for iter := 0; iter < a.params.MaxToolIterations; iter++ {
+		rep.Iterations++
+		turn, err := a.provider.CompleteTools(ctx, msgs, a.tools.Schemas())
+		if err != nil {
+			// A provider that cannot do tool-calling — at ANY iteration — degrades gracefully to
+			// the single-shot Complete() path (a different transport that should work). Seeded
+			// from the same context; the partial tool telemetry is preserved for the log.
+			if errors.Is(err, ErrToolsUnsupported) {
+				cands, frep, ferr := a.proposeOneShot(ctx, c, led)
+				frep.Note = "tools-unsupported: single-shot fallback"
+				frep.ToolCalls, frep.Iterations = rep.ToolCalls, rep.Iterations
+				return cands, frep, ferr
+			}
+			return nil, rep, fmt.Errorf("dgx: provider: %w", err)
+		}
+		if len(turn.ToolCalls) == 0 {
+			// Final text turn: parse + verify against the accumulated index.
+			doc, perr := parseProposals(turn.Content)
+			if perr != nil {
+				return nil, rep, fmt.Errorf("dgx: %w", perr)
+			}
+			out := a.verifyProposals(doc, c, acc, &rep)
+			rep.Accepted = len(out)
+			return out, rep, nil
+		}
+		// Dispatch deterministically (sorted by name,id) so the accumulation order — and
+		// thus the staged candidates given the same provider responses — is reproducible.
+		calls := append([]ToolCall(nil), turn.ToolCalls...)
+		sort.Slice(calls, func(i, j int) bool {
+			if calls[i].Name != calls[j].Name {
+				return calls[i].Name < calls[j].Name
+			}
+			return calls[i].ID < calls[j].ID
+		})
+		msgs = append(msgs, ChatTurn{Role: "assistant", ToolCalls: calls})
+		rep.ToolCalls += len(calls)
+		for _, call := range calls {
+			obs, terr := a.tools.Call(ctx, call.Name, json.RawMessage(call.Arguments))
+			if terr != nil {
+				// A tool error is surfaced as a tool-result turn, NEVER a crash, and adds NO
+				// refs to acc — so a failed tool can never launder an invented fact.
+				msgs = append(msgs, ChatTurn{Role: "tool", ToolCallID: call.ID,
+					Content: "TOOL ERROR: " + terr.Error() + " (no refs returned)"})
+				continue
+			}
+			msgs = append(msgs, ChatTurn{Role: "tool", ToolCallID: call.ID,
+				Content: accumulate(acc, obs, a.params.MaxToolResultChars)})
+		}
+	}
+	// Budget exhausted: one final forced text turn over what was gathered; if it still will
+	// not emit proposals, accept nothing (bounded — never an infinite loop).
+	rep.Note = "tool budget exhausted; forced final turn"
+	msgs = append(msgs, ChatTurn{Role: "user",
+		Content: "Tool budget exhausted. Output your proposals JSON now using ONLY the refs already gathered."})
+	final, err := a.provider.CompleteTools(ctx, msgs, nil)
+	if err == nil {
+		if doc, perr := parseProposals(final.Content); perr == nil {
+			out := a.verifyProposals(doc, c, acc, &rep)
+			rep.Accepted = len(out)
+			return out, rep, nil
+		}
+	}
+	return nil, rep, nil
+}
+
+// accumulate adds each tool-returned observation's ref to the grounding index and renders a
+// deterministic, budget-capped text block for the tool-result turn. Refs ONLY ever enter the
+// index here (or from the seed context), which is what makes grounding tool-aware yet honest.
+func accumulate(acc map[string]Observation, obs []Observation, budget int) string {
+	if len(obs) == 0 {
+		return "(no rows)"
+	}
+	var b strings.Builder
+	for _, o := range obs {
+		line := "- [" + o.Ref + "] (" + o.Kind + ") " + truncate(o.Detail, 200) + "\n"
+		if b.Len() > 0 && b.Len()+len(line) > budget {
+			b.WriteString("(+more rows omitted to fit the tool-result budget)\n")
+			break
+		}
+		b.WriteString(line)
+		// A ref becomes groundable ONLY if the model actually SAW it: acc tracks exactly the
+		// rows shown, so a budget-truncated row is never silently citable (the anti-fabrication
+		// invariant is airtight — acc ⊆ what the model was shown this cycle).
+		acc[o.Ref] = o
+	}
+	return b.String()
+}
+
+// verifyProposals runs the VERIFY gates over a parsed proposal doc against `index` (the
+// accumulated grounding index in the tool path; the seed index in single-shot), staging the
+// survivors. The per-proposal logic is identical to Phase 1 — only the index may be larger.
+func (a *Agent) verifyProposals(doc proposalDoc, c Context, index map[string]Observation, rep *Report) []candidate.Candidate {
 	var out []candidate.Candidate
 	for _, rp := range doc.Proposals {
 		rep.Proposed++
@@ -123,15 +272,14 @@ func (a *Agent) Propose(ctx context.Context, c Context) ([]candidate.Candidate, 
 		}
 		out = append(out, cand)
 	}
-	rep.Accepted = len(out)
-	return out, rep, nil
+	return out
 }
 
-// RunOnce proposes and stages the survivors. `now` is injected. A candidate that
-// fails the store's structural guard at staging is counted as rejected (never aborts
-// the run) — the store is the final structural authority.
-func (a *Agent) RunOnce(ctx context.Context, store *candidate.Store, now time.Time, c Context) (Report, error) {
-	cands, rep, err := a.Propose(ctx, c)
+// RunOnce proposes (with the prior-proposal ledger as memory) and stages the survivors.
+// `now` is injected. A candidate that fails the store's structural guard at staging is
+// counted as rejected (never aborts the run) — the store is the final structural authority.
+func (a *Agent) RunOnce(ctx context.Context, store *candidate.Store, now time.Time, c Context, led Ledger) (Report, error) {
+	cands, rep, err := a.propose(ctx, c, led)
 	if err != nil {
 		return rep, err
 	}
@@ -162,7 +310,7 @@ func (a *Agent) buildCandidate(rp rawProposal, c Context, index map[string]Obser
 		return candidate.Candidate{}, fmt.Sprintf("evidence below floor (%d < %d)", len(ev), a.params.MinEvidence)
 	}
 	if candidate.Kind(rp.Kind) == candidate.KindEquivGroup {
-		return a.buildEquivGroupCandidate(rp, ev, c)
+		return a.buildEquivGroupCandidate(rp, ev, c, index)
 	}
 	cand := candidate.Candidate{
 		Kind:     candidate.Kind(rp.Kind),
@@ -210,7 +358,7 @@ func groundEvidence(refs []string, index map[string]Observation) ([]candidate.Ev
 // in c.KnownGroups) or a NEW group (otherwise — requiring canonical + label). The proposal is
 // structurally validated (pattern compiles + matches its own metric, exactly one target), and
 // the deterministic capture SUPPORT is computed over the strays the agent saw.
-func (a *Agent) buildEquivGroupCandidate(rp rawProposal, ev []candidate.EvidenceRef, c Context) (candidate.Candidate, string) {
+func (a *Agent) buildEquivGroupCandidate(rp rawProposal, ev []candidate.EvidenceRef, c Context, index map[string]Observation) (candidate.Candidate, string) {
 	metric := ""
 	for _, e := range ev {
 		if m, ok := candidate.StrayMetricFromSubject(e.Ref); ok {
@@ -233,9 +381,10 @@ func (a *Agent) buildEquivGroupCandidate(rp rawProposal, ev []candidate.Evidence
 	if err := candidate.ValidateEquivGroupProposal(prop); err != nil {
 		return candidate.Candidate{}, "structural: " + err.Error()
 	}
-	// Deterministic SUPPORT: which of the strays the agent saw this pattern would also
-	// capture. A count of MEASURED facts surfaced for the reviewer, never a model confidence.
-	sample, err := candidate.EquivGroupSupport(prop.Pattern, strayPool(c.Observations))
+	// Deterministic SUPPORT: which of the strays the agent has SEEN (seed context + any
+	// pulled via get_strays) this pattern would also capture. A count of MEASURED facts
+	// surfaced for the reviewer, never a model confidence.
+	sample, err := candidate.EquivGroupSupport(prop.Pattern, strayPoolFromIndex(index))
 	if err != nil {
 		return candidate.Candidate{}, "structural: " + err.Error()
 	}
@@ -256,16 +405,18 @@ func (a *Agent) buildEquivGroupCandidate(rp rawProposal, ev []candidate.Evidence
 	return cand, ""
 }
 
-// strayPool collects the distinct stray metric names visible in the context observations —
-// the deterministic universe over which a proposed pattern's capture support is measured.
-func strayPool(obs []Observation) []string {
+// strayPoolFromIndex collects the distinct stray metric names visible in the grounding
+// index — the deterministic universe over which a proposed pattern's capture support is
+// measured. Sorted because map iteration order is unspecified (determinism of the support).
+func strayPoolFromIndex(index map[string]Observation) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, o := range obs {
+	for _, o := range index {
 		if m, ok := candidate.StrayMetricFromSubject(o.Ref); ok && !seen[m] {
 			seen[m] = true
 			out = append(out, m)
 		}
 	}
+	sort.Strings(out)
 	return out
 }

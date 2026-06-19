@@ -147,7 +147,7 @@ func TestLiveGroqRunOnceStages(t *testing.T) {
 	defer s.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	rep, err := ag.RunOnce(ctx, s, time.Now().UTC(), liveContext())
+	rep, err := ag.RunOnce(ctx, s, time.Now().UTC(), liveContext(), dgx.Ledger{})
 	if err != nil {
 		t.Fatalf("live run failed: %v", err)
 	}
