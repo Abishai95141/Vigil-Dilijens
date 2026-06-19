@@ -54,6 +54,84 @@ function kindSummary(it: GovernanceItem): string {
   return it.kind;
 }
 
+// What promoting THIS candidate authors and where it lands — so the operator knows exactly
+// what they are committing, and (just as important) what it does NOT do. Promotion changes
+// the GRAPH (identity + topology); it never adds a metric bar, so it never makes a metric
+// "watched" on its own — that is a separate detection-rule authoring act.
+function promoteDestination(it: GovernanceItem): {
+  becomes: string;
+  lands: string;
+  caveat: string;
+} {
+  if (it.kind === "edge" && it.relation === "topology")
+    return {
+      becomes: "an AUTHORED dependency edge (caller → callee)",
+      lands: "the cluster graph topology — read by cascade & root-cause-chain reasoning",
+      caveat: "Adds a dependency link, not a metric bar — it does not make any metric watched.",
+    };
+  if (it.kind === "edge")
+    return {
+      becomes: "an AUTHORED identity rule attributing this metric to the entity",
+      lands: "the bound graph — the metric stops being a stray and is grouped under that entity",
+      caveat:
+        "Resolves WHICH entity owns the metric. It is still NOT watched against a bar — that needs a separate detection rule + a declared bar.",
+    };
+  if (it.kind === "causal_hypothesis")
+    return {
+      becomes: "a direction-free CO-OCCURRENCE record (change ↔ incident)",
+      lands: "the investigation surface — shown to a human, never asserted as a cause",
+      caveat: "Asserts no causal direction and never drives detection.",
+    };
+  if (it.kind === "node")
+    return {
+      becomes: "a provisional node for the unmapped metric (no entity link yet)",
+      lands: "the candidate graph only — it is below the ≥2-coordinate identification floor",
+      caveat: "Low value alone: it maps to nothing. Prefer promoting a mapping EDGE.",
+    };
+  return { becomes: it.kind, lands: "the bound graph", caveat: "" };
+}
+
+// entityLabel renders a CEI key ("i|cluster|ns|Kind|name|uid" or "r|cluster|ns|Kind|RoleKey")
+// as a human name "Kind name (ns)" so the operator sees the concrete target, not a key.
+function entityLabel(key: string): string {
+  const p = key.replace(/^entity:/, "").split("|");
+  if (p.length >= 5 && p[0] === "i") return `${p[3]} ${p[4]} · ${p[2]}`;
+  if (p.length >= 5 && p[0] === "r") return `${p[3]} ${(p[4] ?? "").split("/").pop()} · ${p[2]}`;
+  return key.slice(0, 48);
+}
+
+// concreteTarget is the SPECIFIC mapping/dependency this candidate makes, in plain names —
+// the "what equivalent group / which dependency" the operator must see before promoting.
+function concreteTarget(it: GovernanceItem): { label: string; value: string } | null {
+  if (it.kind === "edge" && it.relation === "topology") {
+    const m = it.subject.match(/trace-call:(.+?)->(.+)/);
+    if (m) return { label: "new dependency", value: `${m[1]}  →  ${m[2]}` };
+  }
+  if (it.kind === "edge") {
+    const i = it.subject.indexOf(" ~> ");
+    if (i > 0) {
+      const metric = it.subject
+        .slice(0, i)
+        .replace(/^stray:/, "")
+        .split("/")[0];
+      return {
+        label: "grouped under",
+        value: `${metric}  →  ${entityLabel(it.subject.slice(i + 4))}`,
+      };
+    }
+  }
+  if (it.kind === "causal_hypothesis") {
+    const m = it.subject.match(/change:(.+?) ~ incident:(.+)/);
+    if (m)
+      return { label: "co-occurrence", value: `change ${m[1]}  ↔  incident ${m[2].slice(0, 14)}…` };
+  }
+  if (it.kind === "node") {
+    const metric = it.subject.replace(/^stray:/, "").split("/")[0];
+    return { label: "metric (unmapped)", value: `${metric} — no entity match met the floor yet` };
+  }
+  return null;
+}
+
 export function GovernancePage() {
   const q = useGovernance();
   const qc = useQueryClient();
@@ -142,6 +220,48 @@ export function GovernancePage() {
 
               <LaneNote kind="info" title="The discipline" note={d.gateNote} />
 
+              {/* What promotion does — and the load-bearing thing it does NOT do. Operators
+                  routinely assume "clear the queue ⇒ everything is watched"; it is not true. */}
+              <div className="v-panel p-4">
+                <div className="v-eyebrow mb-2 text-[10px]">what a promotion does</div>
+                <ol className="ml-4 list-decimal space-y-1 text-[12px] leading-relaxed text-ink-soft">
+                  <li>
+                    You sign it, and Vigil emits a committable{" "}
+                    <span className="text-ink">AUTHORED overlay</span> — a starting artifact, not a
+                    live change.
+                  </li>
+                  <li>
+                    You commit that overlay through the release-governance gate; the next graph
+                    release carries it. Until then the candidate stays firewalled from detection.
+                  </li>
+                </ol>
+                <div className="mt-3 rounded-[6px] border border-warning/40 bg-surface-hi px-3 py-2 text-[12px] leading-relaxed text-ink-soft">
+                  <span className="font-semibold text-warning">
+                    Clearing this queue does NOT make every metric watched.
+                  </span>{" "}
+                  Promotion changes the graph's <span className="text-ink">identity</span> (which
+                  entity a metric belongs to) and <span className="text-ink">topology</span>{" "}
+                  (dependency edges). A metric is <span className="text-ink">watched</span> only
+                  when it also has an authored detection rule and a bar — a separate act. So
+                  promoting a stray mapping resolves WHO owns the metric; it never, by itself,
+                  starts watching it against a threshold.
+                </div>
+              </div>
+
+              {/* Non-actionable k8s object-metadata strays are CLASSIFIED and counted, but kept
+                  out of the review queue so it stays the necessary decisions, not hundreds of
+                  un-mappable KSM inventory rows. Honest: still in counts + /api/provisional-coverage. */}
+              {d.suppressedMetadata > 0 && (
+                <LaneNote
+                  kind="empty"
+                  title={`${d.suppressedMetadata} k8s object-metadata series classified non-actionable — not enqueued`}
+                  note={
+                    d.suppressedNote ??
+                    "Pure KSM object inventory (ReplicaSet generation, Endpoints addresses, ConfigMap/Secret info): non-actionable as an operational signal. Counted, never hidden — just not a human decision."
+                  }
+                />
+              )}
+
               {err && <div className="text-[12px] text-error">Decision failed: {err}</div>}
 
               {/* The committable overlay of the latest promotion — persists past the refetch. */}
@@ -164,8 +284,8 @@ export function GovernancePage() {
                     <Mono>{promotion.subject}</Mono>
                   </div>
                   <p className="mb-2.5 text-[11.5px] leading-relaxed text-ink-mid">
-                    {promotion.res.message} The firewall between candidates and detection stays intact
-                    until you commit it.
+                    {promotion.res.message} The firewall between candidates and detection stays
+                    intact until you commit it.
                   </p>
                   <CodeBlock code={promotion.res.overlayYaml} lang="yaml" />
                 </div>
@@ -254,6 +374,41 @@ export function GovernancePage() {
                               </div>
                             </div>
                           )}
+
+                          {/* WHERE this lands on promote — explicit so the operator commits with eyes open */}
+                          {(() => {
+                            const dest = promoteDestination(it);
+                            const target = concreteTarget(it);
+                            return (
+                              <div className="mb-2.5 rounded-[6px] border border-rule bg-surface-hi px-3 py-2">
+                                <div className="v-eyebrow mb-1 text-[9.5px] text-ink-low">
+                                  on promote →
+                                </div>
+                                {/* the CONCRETE mapping/dependency in plain names — the thing the operator
+                                    is actually committing (which group / which dependency edge). */}
+                                {target && (
+                                  <div className="mb-2 rounded-[5px] border border-rule-strong bg-plane px-2.5 py-1.5">
+                                    <span className="v-eyebrow text-[9px] text-ink-low">
+                                      {target.label}
+                                    </span>
+                                    <div className="v-mono text-[12px] break-all text-ink">
+                                      {target.value}
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="text-[12px] leading-relaxed text-ink-soft">
+                                  becomes <span className="text-ink">{dest.becomes}</span>
+                                  <br />
+                                  lands in <span className="text-ink">{dest.lands}</span>
+                                </div>
+                                {dest.caveat && (
+                                  <div className="mt-1.5 text-[11px] leading-relaxed text-warning">
+                                    {dest.caveat}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                           {/* the human authors the note, then signs the decision */}
                           <textarea

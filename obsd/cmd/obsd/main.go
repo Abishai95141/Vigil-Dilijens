@@ -1650,6 +1650,11 @@ func unmappedStrayObservations(cs *candidate.Store, max int) []dgx.Observation {
 			continue
 		}
 		metric, _ := n.Payload["metric"].(string)
+		// Don't spend the agent's bounded budget mapping pure k8s object-metadata inventory
+		// (KSM kube_<object>_* state) — it is non-actionable; feed only operational strays.
+		if candidate.ClassifyStrayMetric(metric) == candidate.StrayObjectMetadata {
+			continue
+		}
 		out = append(out, dgx.Observation{
 			Ref:    n.Subject,
 			Kind:   "stray-metric",
@@ -2318,6 +2323,9 @@ func mapGovernanceItems(cs []candidate.Candidate) []vapi.GovernanceItem {
 			Relation: c.Relation, Source: c.Lineage.Source, Method: c.Lineage.Method,
 			GraphVersion: c.Lineage.GraphVersion, Rationale: rationale, Evidence: ev,
 			DecidedBy: c.DecidedBy, Note: c.Note, CreatedAt: c.CreatedAt,
+			// A pure k8s object-metadata stray is non-actionable: counted, but kept out of the
+			// human review queue (the deterministic classifier owns this; api never imports us).
+			Actionable: candidate.StrayCandidateActionable(c.Subject),
 		}
 		if !c.DecidedAt.IsZero() {
 			t := c.DecidedAt

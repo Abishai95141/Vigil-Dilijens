@@ -10,9 +10,13 @@ import (
 
 func govItems() []GovernanceItem {
 	return []GovernanceItem{
+		// operational stray mapping → actionable → enqueued for review
 		{ID: "c1", Kind: "edge", Status: "candidate", Subject: "stray:x ~> entity:y", Relation: "associated-with", Source: "dgx-agent",
-			Evidence: []GovernanceEvidence{{Kind: "context:stray-metric", Ref: "stray:x"}}},
+			Evidence: []GovernanceEvidence{{Kind: "context:stray-metric", Ref: "stray:x"}}, Actionable: true},
+		// trace topology, already decided → the audit trail
 		{ID: "c2", Kind: "edge", Status: "promoted", Subject: "trace-call:a->b", Relation: "topology", Source: "trace", DecidedBy: "alice"},
+		// pure k8s object-metadata stray → NOT actionable → counted but suppressed from review
+		{ID: "c3", Kind: "node", Status: "candidate", Subject: "stray:kube_replicaset_status_replicas/abc", Source: "cei-fallback", Actionable: false},
 	}
 }
 
@@ -32,11 +36,15 @@ func TestGovernanceViewSplitsPendingAndDecided(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
+	// c1 (actionable) → pending; c2 (decided) → trail; c3 (object-metadata) → suppressed, counted.
 	if !got.Available || len(got.Pending) != 1 || len(got.Decided) != 1 {
 		t.Errorf("split wrong: pending=%d decided=%d", len(got.Pending), len(got.Decided))
 	}
-	if got.Counts["candidate"] != 1 || got.Counts["promoted"] != 1 {
-		t.Errorf("counts wrong: %+v", got.Counts)
+	if got.SuppressedMetadata != 1 || got.SuppressedNote == "" {
+		t.Errorf("metadata suppression wrong: suppressed=%d note=%q", got.SuppressedMetadata, got.SuppressedNote)
+	}
+	if got.Counts["candidate"] != 2 || got.Counts["promoted"] != 1 {
+		t.Errorf("counts wrong (object-metadata must still be COUNTED): %+v", got.Counts)
 	}
 }
 

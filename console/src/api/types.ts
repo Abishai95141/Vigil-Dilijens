@@ -1162,6 +1162,7 @@ export interface GovernanceItem {
   note?: string;                // the human's AUTHORED note
   decidedAt?: string;           // RFC3339
   createdAt: string;
+  actionable: boolean;          // false ⇒ a non-actionable k8s object-metadata stray (suppressed from the queue)
 }
 
 // GET /api/governance — the pending review queue + the decided audit trail.
@@ -1170,9 +1171,11 @@ export interface GovernanceView {
   available: boolean;           // false ⇒ --dgx-enabled is off
   generatedAt: string;
   graphVersion?: string;
-  pending: GovernanceItem[];    // status=candidate
+  pending: GovernanceItem[];    // status=candidate AND actionable — the review queue
   decided: GovernanceItem[];    // promoted | rejected | shadow
-  counts: Record<string, number>;
+  counts: Record<string, number>; // by status (all candidates, honest total)
+  suppressedMetadata: number;   // status=candidate but NOT enqueued (pure k8s object-metadata strays)
+  suppressedNote?: string;      // why those are not actionable
   gateNote: string;             // the harness blocks; a named human approves
   note: string;
 }
