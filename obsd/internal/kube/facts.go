@@ -33,9 +33,14 @@ func GatherFacts(ctx context.Context, cs kubernetes.Interface) (binding.Platform
 	}
 	// Heterogeneous node pools: report the divergence rather than pretending one
 	// version. (Single-version is by far the common case; the fact records it.)
-	for _, n := range nodes.Items[1:] {
-		if n.Status.NodeInfo.KernelVersion != facts.KernelVersion {
-			facts.MixedKernels = true
+	// Guard the [1:] reslice: on a zero/one-node cluster there are no peers to
+	// compare, and nodes.Items[1:] would panic ("slice bounds out of range [1:0]")
+	// on an empty list.
+	if len(nodes.Items) > 1 {
+		for _, n := range nodes.Items[1:] {
+			if n.Status.NodeInfo.KernelVersion != facts.KernelVersion {
+				facts.MixedKernels = true
+			}
 		}
 	}
 

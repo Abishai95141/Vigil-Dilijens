@@ -15,10 +15,17 @@ import (
 // and auth plumbing in Phase 0.
 type ProxyFetcher struct {
 	cs kubernetes.Interface
+	// now is the injected receive-time clock (charter: no time.Now in logic). The
+	// composition root (NewProxyFetcher) defaults it to a UTC wall clock; tests
+	// inject a fixed clock to assert the stamped receive-time exactly.
+	now func() time.Time
 }
 
-// NewProxyFetcher wraps a clientset.
-func NewProxyFetcher(cs kubernetes.Interface) *ProxyFetcher { return &ProxyFetcher{cs: cs} }
+// NewProxyFetcher wraps a clientset, defaulting the receive-time clock to the UTC
+// wall clock.
+func NewProxyFetcher(cs kubernetes.Interface) *ProxyFetcher {
+	return &ProxyFetcher{cs: cs, now: func() time.Time { return time.Now().UTC() }}
+}
 
 // NodeMetrics GETs nodes/<name>/proxy/<path> and stamps receive time (doc 14
 // A12: wall-clock UTC at ingest receive).
@@ -26,7 +33,7 @@ func (p *ProxyFetcher) NodeMetrics(ctx context.Context, nodeName, path string) (
 	body, err := p.cs.CoreV1().RESTClient().Get().
 		Resource("nodes").Name(nodeName).SubResource("proxy").
 		Suffix(path).DoRaw(ctx)
-	receivedAt := time.Now().UTC()
+	receivedAt := p.now()
 	if err != nil {
 		return nil, receivedAt, fmt.Errorf("proxy %s/%s: %w", nodeName, path, err)
 	}
@@ -45,7 +52,7 @@ func (p *ProxyFetcher) PodMetrics(ctx context.Context, namespace, name, port, pa
 	body, err := p.cs.CoreV1().RESTClient().Get().
 		Namespace(namespace).Resource("pods").Name(target).SubResource("proxy").
 		Suffix(path).DoRaw(ctx)
-	receivedAt := time.Now().UTC()
+	receivedAt := p.now()
 	if err != nil {
 		return nil, receivedAt, fmt.Errorf("pod-proxy %s/%s:%s/%s: %w", namespace, name, port, path, err)
 	}

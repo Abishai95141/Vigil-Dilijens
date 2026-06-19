@@ -136,7 +136,6 @@ var untestedAllowlist = map[string]string{
 	"cmd/govern":             "thin CLI over internal/governance (tested with 42 funcs).",
 	"cmd/conntrack-agent":    "privileged DaemonSet binary; no hermetic surface — certified by the flow Phase-A live gate.",
 	"cmd/flowprobe":          "conntrack probe binary; live-only, no hermetic surface — certified by the flow live path.",
-	"internal/kube":          "k8s clientset/proxy config; exercised live behind the integration tag — no hermetic unit surface.",
 	"internal/version":       "build-stamp ldflags only; no logic to test.",
 	"internal/replay/export": "Parquet export bridge; exercised by the harness Parquet round-trip (test_replay_determinism.py) and the replay export path.",
 }
