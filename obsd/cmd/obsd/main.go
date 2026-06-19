@@ -577,7 +577,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// can also reason over the MODALITY lanes — mined log templates, observed trace edges,
 	// and discrete events — alongside associations + coverage gaps + unmapped strays.
 	if dgxAgent != nil {
-		go dgxAgentLoop(ctx, logger, dgxAgent, candStore, store, graphVersion,
+		go dgxAgentLoop(ctx, logger, dgxAgent, candStore, store, graphVersion, equivGroupCatalog(ontologyGraph),
 			&depView, &silenceView, &logsView, &traceView, &eventsView, envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval))
 	}
 	var eventsConds []events.Corroboration
@@ -1741,7 +1741,7 @@ func labelSummary(v any) string {
 // dgxAgentLoop runs the LLM proposer over read-only context each interval and stages
 // the gated survivors (doc 20 P3). Off the deterministic path; the agent authors
 // nothing — it proposes, the gates filter, a human promotes later.
-func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, store *identity.Store, graphVersion string,
+func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, store *identity.Store, graphVersion string, knownGroups map[string]string,
 	depView *atomic.Pointer[vapi.DependencyView], silenceView *atomic.Pointer[vapi.SilenceLedgerView],
 	logsView *atomic.Pointer[vapi.LogTemplatesView], traceView *atomic.Pointer[vapi.TraceGraphView], eventsView *atomic.Pointer[vapi.EventsView],
 	every time.Duration) {
@@ -1760,7 +1760,7 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 			if now.Before(rateLimitedUntil) {
 				continue // backing off after a provider rate-limit; no per-tick log spam
 			}
-			c := buildAgentContext(graphVersion, depView.Load(), silenceView.Load(), buildEntityRefs(store), unmappedStrayObservations(cs, dgxAgentStrayCap))
+			c := buildAgentContext(graphVersion, knownGroups, depView.Load(), silenceView.Load(), buildEntityRefs(store), unmappedStrayObservations(cs, dgxAgentStrayCap))
 			c.Observations = append(c.Observations, modalityObservations(logsView.Load(), traceView.Load(), eventsView.Load())...)
 			if len(c.Observations) == 0 {
 				continue
@@ -1807,8 +1807,8 @@ func truncStr(s string, n int) string {
 // buildAgentContext maps the read-only surfaces into the agent's grounding context
 // (doc 20 P3): associations + coverage gaps as MEASURED observations the agent may
 // cite, and the valid entity keys. main does the mapping so dgx never imports api.
-func buildAgentContext(graphVersion string, dep *vapi.DependencyView, silence *vapi.SilenceLedgerView, entities []candidate.EntityRef, strayObs []dgx.Observation) dgx.Context {
-	c := dgx.Context{GraphVersion: graphVersion, ValidEntities: make(map[string]bool, len(entities))}
+func buildAgentContext(graphVersion string, knownGroups map[string]string, dep *vapi.DependencyView, silence *vapi.SilenceLedgerView, entities []candidate.EntityRef, strayObs []dgx.Observation) dgx.Context {
+	c := dgx.Context{GraphVersion: graphVersion, ValidEntities: make(map[string]bool, len(entities)), KnownGroups: knownGroups}
 	for _, e := range entities {
 		c.ValidEntities[e.Key] = true
 	}
@@ -1840,6 +1840,21 @@ func buildAgentContext(graphVersion string, dep *vapi.DependencyView, silence *v
 		}
 	}
 	return c
+}
+
+// equivGroupCatalog builds the read-only equivalence-group catalog (id → canonical OTel)
+// the agent maps operational strays into (doc 21 §5). Computed ONCE from the immutable bound
+// graph; nil-safe (an empty catalog when binding is disabled simply means the agent proposes
+// no equiv_group mappings that cycle).
+func equivGroupCatalog(g *graph.Graph) map[string]string {
+	if g == nil {
+		return nil
+	}
+	out := make(map[string]string, len(g.EquivalenceGroups))
+	for id, eg := range g.EquivalenceGroups {
+		out[id] = eg.CanonicalOTel
+	}
+	return out
 }
 
 // envDuration reads a duration from env (e.g. tuning a lane cadence), falling back to

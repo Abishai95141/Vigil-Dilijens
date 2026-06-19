@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -80,19 +81,34 @@ type ovMember struct {
 	Why      string `yaml:"why"`
 }
 
+// ovEquivGroup mirrors the runtime loader's overlayEquivGroup (doc 21 §5.3): the deterministic
+// absorb path for a promoted stray→group mapping. graphlint validates it offline so a
+// defective equivalence-group delta (non-compiling pattern, redefinition, incomplete new
+// group) is a HARD error before it merges.
+type ovEquivGroup struct {
+	ID            string   `yaml:"id"`
+	Label         string   `yaml:"label"`
+	CanonicalOTel string   `yaml:"canonical_otel"`
+	Patterns      []string `yaml:"patterns"`
+	AddPatterns   []string `yaml:"add_patterns"`
+	Rationale     string   `yaml:"rationale"`
+	Notes         string   `yaml:"notes"`
+}
+
 type overlayDoc struct {
-	path      string
-	Overlay   string                `yaml:"overlay"`
-	Version   int                   `yaml:"version"`
-	Author    string                `yaml:"author"`
-	Status    string                `yaml:"status"`
-	Phenomena []ovPhenomenon        `yaml:"phenomena"`
-	Members   map[string][]ovMember `yaml:"members"`
-	Relations []ovRelation          `yaml:"relations"`
-	Spans     map[string]ovSpan     `yaml:"spans"`
-	Rules     []ovRule              `yaml:"rules"`
-	Checks    map[string][]ovCheck  `yaml:"checks"`
-	Anchors   map[string]string     `yaml:"anchors"`
+	path        string
+	Overlay     string                `yaml:"overlay"`
+	Version     int                   `yaml:"version"`
+	Author      string                `yaml:"author"`
+	Status      string                `yaml:"status"`
+	Phenomena   []ovPhenomenon        `yaml:"phenomena"`
+	EquivGroups []ovEquivGroup        `yaml:"equivalence_groups"`
+	Members     map[string][]ovMember `yaml:"members"`
+	Relations   []ovRelation          `yaml:"relations"`
+	Spans       map[string]ovSpan     `yaml:"spans"`
+	Rules       []ovRule              `yaml:"rules"`
+	Checks      map[string][]ovCheck  `yaml:"checks"`
+	Anchors     map[string]string     `yaml:"anchors"`
 }
 
 var (
@@ -193,6 +209,51 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 		}
 		if strings.TrimSpace(o.Author) == "" {
 			errs = append(errs, fmt.Sprintf("%s: missing author provenance (doc 02 §3.6)", at))
+		}
+		// doc 21 §5.3: equivalence-group deltas — extend an existing group's dialect
+		// patterns or define a new group. Mirrors the runtime loader's overlayEquivGroup:
+		// id + rationale required; existing groups use add_patterns (never redefine
+		// canonical); a new group needs label + canonical_otel + ≥1 pattern; every pattern
+		// must compile (a bad regex would silently shrink the dialect bridge).
+		for _, eg := range o.EquivGroups {
+			if strings.TrimSpace(eg.ID) == "" {
+				errs = append(errs, fmt.Sprintf("%s: equivalence_group with missing id", at))
+				continue
+			}
+			if strings.TrimSpace(eg.Rationale) == "" {
+				errs = append(errs, fmt.Sprintf("%s: equivalence_group %q needs a rationale (falsifiable claim, doc 02 §3.6)", at, eg.ID))
+			}
+			switch typ := nodeType[eg.ID]; typ {
+			case "EquivalenceGroup":
+				if len(eg.Patterns) > 0 {
+					errs = append(errs, fmt.Sprintf("%s: equivalence_group %q already exists: use add_patterns to extend it (patterns: defines a NEW group)", at, eg.ID))
+				}
+				if len(eg.AddPatterns) == 0 {
+					errs = append(errs, fmt.Sprintf("%s: equivalence_group %q: add_patterns is required to extend an existing group", at, eg.ID))
+				}
+			case "":
+				if len(eg.AddPatterns) > 0 {
+					errs = append(errs, fmt.Sprintf("%s: equivalence_group %q does not exist: use patterns to define it (add_patterns extends an EXISTING group)", at, eg.ID))
+				}
+				if strings.TrimSpace(eg.Label) == "" || strings.TrimSpace(eg.CanonicalOTel) == "" {
+					errs = append(errs, fmt.Sprintf("%s: equivalence_group %q: a new group needs label + canonical_otel", at, eg.ID))
+				}
+				if len(eg.Patterns) == 0 {
+					errs = append(errs, fmt.Sprintf("%s: equivalence_group %q: a new group needs at least one pattern", at, eg.ID))
+				}
+				nodeType[eg.ID] = "EquivalenceGroup" // register so a later overlay sees it
+			default:
+				errs = append(errs, fmt.Sprintf("%s: equivalence_group %q is a %s, not an EquivalenceGroup", at, eg.ID, typ))
+			}
+			for _, p := range append(append([]string{}, eg.Patterns...), eg.AddPatterns...) {
+				if strings.TrimSpace(p) == "" {
+					errs = append(errs, fmt.Sprintf("%s: equivalence_group %q: empty pattern", at, eg.ID))
+					continue
+				}
+				if _, err := regexp.Compile(p); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: equivalence_group %q: pattern %q does not compile: %v", at, eg.ID, p, err))
+				}
+			}
 		}
 		// doc 15 Phase C: register overlay-added phenomena (so this overlay's own
 		// spans/relations + later overlays resolve them) and validate added relations.

@@ -12,11 +12,13 @@ const systemPrompt = `You are the Vigil Dynamic Graph eXtension PROPOSER. You PR
 2. NO CAUSATION: A correlation or co-occurrence is association, NOT cause. For "X is related to Y" use kind "edge" with relation "associated-with" (or "topology"/"topo-adjacent"). For a temporal "X co-occurs with / precedes Y" hunch use kind "causal_hypothesis" with relation "co-occurrence" — it is direction-free and is NEVER a cause. An edge using a causal relation ("causes", "leads to", ...) is discarded.
 3. EVIDENCE: cite at least the stated minimum number of refs per proposal. Propose only what the listed evidence supports; propose nothing if the evidence is thin.
 4. STRAY MAPPING: an observation of kind "stray-metric" is a metric that could not be auto-joined to an entity. If (and ONLY if) its labels clearly identify the workload/entity it belongs to, propose an "edge" with relation "associated-with" whose subject is "<stray-ref> ~> <entity-key>" and which cites BOTH the stray's ref AND the matching "entity:<key>" ref. If no listed entity clearly matches, propose nothing for that stray — never guess.
-5. OUTPUT: STRICT JSON only, no prose, no markdown fence:
-{"proposals":[{"kind":"node|edge|member|bar_source|causal_hypothesis","subject":"short id","relation":"associated-with|topology|topo-adjacent|co-occurrence|","evidence":["ref","ref"],"rationale":"short, non-causal note"}]}
-If nothing is well-grounded, return {"proposals":[]}.`
+5. EQUIVALENCE-GROUP MAPPING: a "stray-metric" whose metric is a real OPERATIONAL signal (an exporter series like redis_*, mysqld_*, pg_*, node_*, or an app /metrics gauge) can be mapped into an equivalence group so the resolver stops treating it as a stray. If its meaning clearly matches one of the EQUIVALENCE GROUPS listed (by canonical name), propose kind "equiv_group" with: subject = the metric name, group = the matching group id, pattern = an ANCHORED regex matching the metric exactly (e.g. "^redis_connected_clients$"), evidence = [the stray-metric ref]. If NO listed group fits but the metric is a clearly known quantity, propose a NEW group: set group to a fresh id "EQG_...", and ALSO provide canonical (the canonical OTel name) and label (a short human label). NEVER map a kube_* object-inventory metric. Propose nothing if unsure.
+6. OUTPUT: STRICT JSON only, no prose, no markdown fence:
+{"proposals":[{"kind":"node|edge|member|bar_source|causal_hypothesis|equiv_group","subject":"short id","relation":"associated-with|topology|topo-adjacent|co-occurrence|","group":"EQG_…","pattern":"^…$","canonical":"…","label":"…","evidence":["ref","ref"],"rationale":"short, non-causal note"}]}
+The group/pattern/canonical/label fields are used ONLY for kind "equiv_group"; omit them otherwise. If nothing is well-grounded, return {"proposals":[]}.`
 
 const maxPromptEntities = 40
+const maxPromptGroups = 40 // the full base catalog is ~35 groups; bound it like the entity list
 
 // userPrompt renders the read-only context the model may reason over, BOUNDED by a
 // char budget (p.MaxContextChars) so the prompt stays under the model's token/rate
@@ -64,6 +66,25 @@ func userPrompt(c Context, p Params) string {
 		}
 		if len(keys) > n {
 			fmt.Fprintf(&b, "(+%d more entity keys omitted)\n", len(keys)-n)
+		}
+	}
+
+	if len(c.KnownGroups) > 0 {
+		ids := make([]string, 0, len(c.KnownGroups))
+		for id := range c.KnownGroups {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		b.WriteString("\nEQUIVALENCE GROUPS (map an operational stray into one of these by id, or propose a new EQG_… id):\n")
+		n := len(ids)
+		if n > maxPromptGroups {
+			n = maxPromptGroups
+		}
+		for _, id := range ids[:n] {
+			fmt.Fprintf(&b, "- %s = %s\n", id, c.KnownGroups[id])
+		}
+		if len(ids) > n {
+			fmt.Fprintf(&b, "(+%d more groups omitted)\n", len(ids)-n)
 		}
 	}
 

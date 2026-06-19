@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -207,18 +208,38 @@ var knownOns = map[string]bool{"": true, "anchor": true, "neighbour": true, "two
 // delta. Added phenomena are applied BEFORE this file's spans/checks so they can
 // be spanned/checked in the same overlay.
 type overlayFile struct {
-	Overlay   string                     `yaml:"overlay"`
-	Version   int                        `yaml:"version"`
-	Author    string                     `yaml:"author"`
-	Status    string                     `yaml:"status"`
-	Signals   []overlaySignal            `yaml:"signals"`
-	Phenomena []overlayPhenomenon        `yaml:"phenomena"`
-	Members   map[string][]overlayMember `yaml:"members"`
-	Relations []overlayRelation          `yaml:"relations"`
-	Spans     map[string]spanDecl        `yaml:"spans"`
-	Rules     []ThresholdRule            `yaml:"rules"`
-	Checks    map[string][]MemberCheck   `yaml:"checks"`
-	Anchors   map[string]string          `yaml:"anchors"`
+	Overlay     string                     `yaml:"overlay"`
+	Version     int                        `yaml:"version"`
+	Author      string                     `yaml:"author"`
+	Status      string                     `yaml:"status"`
+	Signals     []overlaySignal            `yaml:"signals"`
+	EquivGroups []overlayEquivGroup        `yaml:"equivalence_groups"`
+	Phenomena   []overlayPhenomenon        `yaml:"phenomena"`
+	Members     map[string][]overlayMember `yaml:"members"`
+	Relations   []overlayRelation          `yaml:"relations"`
+	Spans       map[string]spanDecl        `yaml:"spans"`
+	Rules       []ThresholdRule            `yaml:"rules"`
+	Checks      map[string][]MemberCheck   `yaml:"checks"`
+	Anchors     map[string]string          `yaml:"anchors"`
+}
+
+// overlayEquivGroup is an authored equivalence-group delta (doc 21 §5.3): the
+// deterministic ABSORB path for a promoted stray→group mapping. It either EXTENDS an
+// existing group with new dialect patterns (add_patterns; canonical never redefined) or
+// DEFINES a new group (label + canonical_otel + patterns). Every pattern is regex-compile-
+// checked at load — a non-compiling pattern would silently shrink the dialect bridge, so it
+// fails loudly (mirrors binding.NewEquivalenceResolver). Promoting an `equiv_group` candidate
+// (candidate.KindEquivGroup) authors exactly this block; on reload binding.EquivalenceResolver
+// picks the patterns up and the metric stops being a stray — the one promotion that moves
+// MEASURED coverage. Overlays ADD, never redefine (same discipline as signals/phenomena).
+type overlayEquivGroup struct {
+	ID            string   `yaml:"id"`
+	Label         string   `yaml:"label"`          // required for a NEW group only
+	CanonicalOTel string   `yaml:"canonical_otel"` // required for a NEW group only
+	Patterns      []string `yaml:"patterns"`       // NEW group: the group's dialect patterns
+	AddPatterns   []string `yaml:"add_patterns"`   // EXISTING group: patterns to append
+	Rationale     string   `yaml:"rationale"`      // falsifiable authored claim (doc 02 §3.6)
+	Notes         string   `yaml:"notes"`
 }
 
 // overlaySignal is an authored Signal node added by an overlay (doc 15 cap. A): a new
@@ -450,6 +471,57 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 			modality = "Metric"
 		}
 		g.Signals[os.ID] = &Signal{ID: os.ID, Name: os.Name, DataType: os.DataType, Modality: modality, Entity: os.Entity, Notes: os.Notes}
+	}
+
+	// Equivalence-group deltas (doc 21 §5.3): the deterministic ABSORB path for a promoted
+	// stray→group mapping. Extends an existing group's dialect patterns, or defines a new
+	// group. Independent of signals/phenomena, so merge order is irrelevant — placed here
+	// with the other vocabulary additions. Every pattern is compile-checked (a bad pattern
+	// would silently shrink the dialect bridge). Overlays ADD, never redefine.
+	for i := range f.EquivGroups {
+		eg := f.EquivGroups[i]
+		if strings.TrimSpace(eg.ID) == "" {
+			return fmt.Errorf("overlay equivalence_group %d: id is required", i)
+		}
+		if strings.TrimSpace(eg.Rationale) == "" {
+			return fmt.Errorf("overlay equivalence_group %q: a rationale is required (authored deltas are falsifiable claims, doc 02 §3.6)", eg.ID)
+		}
+		if existing := g.EquivalenceGroups[eg.ID]; existing != nil {
+			// Extend an existing group. canonical_otel/label may not be redefined; new
+			// patterns go through add_patterns (patterns: is the new-group field).
+			if eg.CanonicalOTel != "" && eg.CanonicalOTel != existing.CanonicalOTel {
+				return fmt.Errorf("overlay equivalence_group %q: canonical_otel may not be redefined (overlays add, never redefine)", eg.ID)
+			}
+			if len(eg.Patterns) > 0 {
+				return fmt.Errorf("overlay equivalence_group %q already exists: use add_patterns to extend it (patterns: defines a NEW group)", eg.ID)
+			}
+			if len(eg.AddPatterns) == 0 {
+				return fmt.Errorf("overlay equivalence_group %q: add_patterns is required to extend an existing group", eg.ID)
+			}
+			for _, p := range eg.AddPatterns {
+				if err := addEquivPattern(existing, p); err != nil {
+					return fmt.Errorf("overlay equivalence_group %q: %w", eg.ID, err)
+				}
+			}
+			continue
+		}
+		// Define a new group. Needs the identity (label + canonical_otel) and ≥1 pattern.
+		if len(eg.AddPatterns) > 0 {
+			return fmt.Errorf("overlay equivalence_group %q does not exist: use patterns to define it (add_patterns extends an EXISTING group)", eg.ID)
+		}
+		if strings.TrimSpace(eg.Label) == "" || strings.TrimSpace(eg.CanonicalOTel) == "" {
+			return fmt.Errorf("overlay equivalence_group %q: a new group needs label + canonical_otel", eg.ID)
+		}
+		if len(eg.Patterns) == 0 {
+			return fmt.Errorf("overlay equivalence_group %q: a new group needs at least one pattern", eg.ID)
+		}
+		ng := &EquivalenceGroup{ID: eg.ID, Label: eg.Label, CanonicalOTel: eg.CanonicalOTel, Notes: eg.Notes}
+		for _, p := range eg.Patterns {
+			if err := addEquivPattern(ng, p); err != nil {
+				return fmt.Errorf("overlay equivalence_group %q: %w", eg.ID, err)
+			}
+		}
+		g.EquivalenceGroups[eg.ID] = ng
 	}
 
 	// New phenomena (doc 15 Phase C): authored CorrelationGroup nodes added by the
@@ -785,4 +857,25 @@ func (g *Graph) validateRule(r *ThresholdRule) error {
 func (g *Graph) RuleByID(id string) (*ThresholdRule, bool) {
 	r, ok := g.rulesByID[id]
 	return r, ok
+}
+
+// addEquivPattern compile-checks a dialect pattern and appends it to a group, skipping a
+// duplicate (idempotent). A non-compiling pattern is an authoring defect — it would
+// silently shrink the dialect bridge, so it fails loudly (same discipline as
+// binding.NewEquivalenceResolver, which compiles every authored pattern at startup).
+func addEquivPattern(eg *EquivalenceGroup, pattern string) error {
+	p := strings.TrimSpace(pattern)
+	if p == "" {
+		return fmt.Errorf("empty pattern")
+	}
+	if _, err := regexp.Compile(p); err != nil {
+		return fmt.Errorf("pattern %q does not compile: %w", p, err)
+	}
+	for _, existing := range eg.Patterns {
+		if existing == p {
+			return nil // already present — idempotent add
+		}
+	}
+	eg.Patterns = append(eg.Patterns, p)
+	return nil
 }

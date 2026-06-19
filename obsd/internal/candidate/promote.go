@@ -42,6 +42,11 @@ const promotionOverlayHeader = "# Promoted candidate — AUTHORED overlay (doc 2
 // It refuses a non-promoted candidate or one with no named human — a promotion's overlay
 // must carry an author (doc 02 §3.6). Pure given the candidate + version.
 func PromotedOverlayYAML(c Candidate, graphVersion string) (string, error) {
+	// An equivalence-group mapping promotes into a REAL equivalence_groups overlay block the
+	// resolver absorbs (doc 21 §5), not the generic starting artifact.
+	if c.Kind == KindEquivGroup {
+		return PromotedEquivGroupOverlayYAML(c, graphVersion)
+	}
 	if c.Status != StatusPromoted {
 		return "", fmt.Errorf("candidate %s is not promoted (status %q) — only a promoted candidate has an authored overlay", c.ID, c.Status)
 	}

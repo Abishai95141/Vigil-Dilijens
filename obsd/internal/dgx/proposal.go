@@ -13,6 +13,11 @@ type rawProposal struct {
 	Relation  string   `json:"relation"`
 	Evidence  []string `json:"evidence"`
 	Rationale string   `json:"rationale"`
+	// equiv_group fields (doc 21 §5) — read ONLY when kind=="equiv_group", ignored otherwise.
+	Group     string `json:"group,omitempty"`     // target equivalence-group id (existing) or a new EQG_... id
+	Pattern   string `json:"pattern,omitempty"`   // anchored regex that captures the stray metric
+	Canonical string `json:"canonical,omitempty"` // NEW group only: canonical OTel variable name
+	Label     string `json:"label,omitempty"`     // NEW group only: short human label
 }
 
 type proposalDoc struct {

@@ -23,6 +23,7 @@ const (
 	KindMember           Kind = "member"            // a proposed phenomenon member binding
 	KindBarSource        Kind = "bar_source"        // a proposed declared-config bar pointer
 	KindCausalHypothesis Kind = "causal_hypothesis" // a direction-free co-occurrence hypothesis (never a cause)
+	KindEquivGroup       Kind = "equiv_group"       // a proposed stray→equivalence-group mapping (doc 21 §5); promotion authors a regex the resolver absorbs
 )
 
 // Status is the lifecycle position of a candidate. It is ORTHOGONAL to the three
@@ -398,7 +399,7 @@ func validate(c Candidate) error {
 
 func knownKind(k Kind) bool {
 	switch k {
-	case KindNode, KindEdge, KindMember, KindBarSource, KindCausalHypothesis:
+	case KindNode, KindEdge, KindMember, KindBarSource, KindCausalHypothesis, KindEquivGroup:
 		return true
 	}
 	return false

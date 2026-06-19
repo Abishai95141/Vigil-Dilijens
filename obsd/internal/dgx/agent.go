@@ -24,6 +24,11 @@ type Context struct {
 	GraphVersion  string
 	Observations  []Observation
 	ValidEntities map[string]bool
+	// KnownGroups is the equivalence-group catalog (id → canonical OTel) the agent maps
+	// strays into (doc 21 §5). A stray whose meaning matches a listed group is proposed as
+	// an `equiv_group` into that id; a stray matching none may be proposed as a NEW EQG_ id.
+	// Read-only; never a write target.
+	KnownGroups map[string]string
 }
 
 func (c Context) refIndex() map[string]Observation {
@@ -111,7 +116,7 @@ func (a *Agent) Propose(ctx context.Context, c Context) ([]candidate.Candidate, 
 			rep.Rejected = append(rep.Rejected, Rejection{subj, "max-proposals cap reached"})
 			continue
 		}
-		cand, reason := a.buildCandidate(rp, index, c.GraphVersion)
+		cand, reason := a.buildCandidate(rp, c, index)
 		if reason != "" {
 			rep.Rejected = append(rep.Rejected, Rejection{subj, reason})
 			continue
@@ -141,28 +146,23 @@ func (a *Agent) RunOnce(ctx context.Context, store *candidate.Store, now time.Ti
 
 // buildCandidate runs the VERIFY gates on one raw proposal and builds the candidate, or
 // returns a non-empty reason for rejection. Order: grounding → evidence floor →
-// structural validity (candidate.Validate, which rejects a causal edge).
-func (a *Agent) buildCandidate(rp rawProposal, index map[string]Observation, graphVersion string) (candidate.Candidate, string) {
+// structural validity (candidate.Validate, which rejects a causal edge). An equiv_group
+// proposal takes the dedicated typed path (buildEquivGroupCandidate) after grounding.
+func (a *Agent) buildCandidate(rp rawProposal, c Context, index map[string]Observation) (candidate.Candidate, string) {
 	if strings.TrimSpace(rp.Subject) == "" {
 		return candidate.Candidate{}, "empty subject"
 	}
 	// GROUNDING: every cited ref must exist in the context.
-	ev := make([]candidate.EvidenceRef, 0, len(rp.Evidence))
-	seen := map[string]bool{}
-	for _, ref := range rp.Evidence {
-		if seen[ref] {
-			continue
-		}
-		seen[ref] = true
-		obs, ok := index[ref]
-		if !ok {
-			return candidate.Candidate{}, "ungrounded evidence ref: " + ref
-		}
-		ev = append(ev, candidate.EvidenceRef{Kind: "context:" + obs.Kind, Ref: ref, Detail: obs.Detail})
+	ev, reason := groundEvidence(rp.Evidence, index)
+	if reason != "" {
+		return candidate.Candidate{}, reason
 	}
 	// EVIDENCE FLOOR (declared).
 	if len(ev) < a.params.MinEvidence {
 		return candidate.Candidate{}, fmt.Sprintf("evidence below floor (%d < %d)", len(ev), a.params.MinEvidence)
+	}
+	if candidate.Kind(rp.Kind) == candidate.KindEquivGroup {
+		return a.buildEquivGroupCandidate(rp, ev, c)
 	}
 	cand := candidate.Candidate{
 		Kind:     candidate.Kind(rp.Kind),
@@ -170,7 +170,7 @@ func (a *Agent) buildCandidate(rp rawProposal, index map[string]Observation, gra
 		Subject:  rp.Subject,
 		Evidence: ev,
 		Lineage: candidate.Lineage{
-			Source: "dgx-agent", Method: "llm:" + a.provider.Name(), GraphVersion: graphVersion,
+			Source: "dgx-agent", Method: "llm:" + a.provider.Name(), GraphVersion: c.GraphVersion,
 		},
 		// The model's words are stored as PROPOSED payload — never a surfaced authored
 		// reason. A human authors the note at promotion.
@@ -182,4 +182,90 @@ func (a *Agent) buildCandidate(rp rawProposal, index map[string]Observation, gra
 		return candidate.Candidate{}, "structural: " + err.Error()
 	}
 	return cand, ""
+}
+
+// groundEvidence resolves each cited ref against the context index (the grounding gate),
+// deduping and returning a context-tagged EvidenceRef per cited fact. A ref not in the
+// context is an immediate rejection (the model invented it).
+func groundEvidence(refs []string, index map[string]Observation) ([]candidate.EvidenceRef, string) {
+	ev := make([]candidate.EvidenceRef, 0, len(refs))
+	seen := map[string]bool{}
+	for _, ref := range refs {
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		obs, ok := index[ref]
+		if !ok {
+			return nil, "ungrounded evidence ref: " + ref
+		}
+		ev = append(ev, candidate.EvidenceRef{Kind: "context:" + obs.Kind, Ref: ref, Detail: obs.Detail})
+	}
+	return ev, ""
+}
+
+// buildEquivGroupCandidate builds a stray→equivalence-group mapping candidate (doc 21 §5).
+// The focal metric is derived from a CITED stray-metric observation (so it is grounded in a
+// real fact, not the model's free text). The target is an EXISTING group (if the cited id is
+// in c.KnownGroups) or a NEW group (otherwise — requiring canonical + label). The proposal is
+// structurally validated (pattern compiles + matches its own metric, exactly one target), and
+// the deterministic capture SUPPORT is computed over the strays the agent saw.
+func (a *Agent) buildEquivGroupCandidate(rp rawProposal, ev []candidate.EvidenceRef, c Context) (candidate.Candidate, string) {
+	metric := ""
+	for _, e := range ev {
+		if m, ok := candidate.StrayMetricFromSubject(e.Ref); ok {
+			metric = m
+			break
+		}
+	}
+	if metric == "" {
+		return candidate.Candidate{}, "equiv_group must cite a stray-metric observation (the metric to map)"
+	}
+	if strings.TrimSpace(rp.Group) == "" {
+		return candidate.Candidate{}, "equiv_group: missing target group id"
+	}
+	prop := candidate.EquivGroupProposal{Metric: metric, Pattern: rp.Pattern}
+	if _, ok := c.KnownGroups[rp.Group]; ok {
+		prop.GroupID = rp.Group
+	} else {
+		prop.NewGroup = &candidate.NewEquivGroup{ID: rp.Group, Label: rp.Label, CanonicalOTel: rp.Canonical}
+	}
+	if err := candidate.ValidateEquivGroupProposal(prop); err != nil {
+		return candidate.Candidate{}, "structural: " + err.Error()
+	}
+	// Deterministic SUPPORT: which of the strays the agent saw this pattern would also
+	// capture. A count of MEASURED facts surfaced for the reviewer, never a model confidence.
+	sample, err := candidate.EquivGroupSupport(prop.Pattern, strayPool(c.Observations))
+	if err != nil {
+		return candidate.Candidate{}, "structural: " + err.Error()
+	}
+	prop.CaptureSample = sample
+	payload := candidate.EquivGroupPayload(prop)
+	payload["rationale"] = rp.Rationale // PROPOSED model words, discarded at promotion
+	payload["proposed"] = true
+	cand := candidate.Candidate{
+		Kind:     candidate.KindEquivGroup,
+		Subject:  candidate.EquivGroupSubject(metric),
+		Evidence: ev,
+		Lineage:  candidate.Lineage{Source: "dgx-agent", Method: "llm:" + a.provider.Name(), GraphVersion: c.GraphVersion},
+		Payload:  payload,
+	}
+	if err := candidate.Validate(cand); err != nil {
+		return candidate.Candidate{}, "structural: " + err.Error()
+	}
+	return cand, ""
+}
+
+// strayPool collects the distinct stray metric names visible in the context observations —
+// the deterministic universe over which a proposed pattern's capture support is measured.
+func strayPool(obs []Observation) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, o := range obs {
+		if m, ok := candidate.StrayMetricFromSubject(o.Ref); ok && !seen[m] {
+			seen[m] = true
+			out = append(out, m)
+		}
+	}
+	return out
 }
