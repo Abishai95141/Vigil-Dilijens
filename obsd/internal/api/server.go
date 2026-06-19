@@ -82,6 +82,13 @@ type Providers struct {
 	// classified (strays → nodes/groups, agent/modality proposals). nil ⇒ --dgx-enabled is
 	// off; the route serves the honest OFF state. status=candidate, never MEASURED coverage.
 	ProvisionalCoverage func() *ProvisionalCoverageView
+	// Governance returns the candidate review queue (doc 20 + doc 12 §3.3): pending
+	// proposals + the decided audit trail. nil ⇒ --dgx-enabled is off (honest OFF state).
+	Governance func() *GovernanceView
+	// GovernanceDecide records a NAMED HUMAN's promote/reject decision (POST). It is the
+	// ONE place a candidate becomes authoritative — and only by a human. nil ⇒ the route
+	// reports the lane is not enabled. Promotion returns a committable authored overlay.
+	GovernanceDecide func(GovernanceDecisionRequest) GovernanceDecisionResult
 	// Dependency returns the MEASURED metric-dependency graph (doc 20 P2): observed
 	// series that move together, as undirected associations (never causal). nil ⇒ the
 	// lane is not enabled (--assoc-enabled); the route serves the honest OFF state.
@@ -187,6 +194,48 @@ func Register(mux *http.ServeMux, p Providers) {
 			v = UnavailableProvisionalCoverage(timeNowUTC())
 		}
 		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/governance", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *GovernanceView
+		if p.Governance != nil {
+			v = p.Governance()
+		}
+		if v == nil {
+			v = UnavailableGovernance(timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/governance/decide", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed (POST a JSON {candidateId, decision, decidedBy, note})", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.GovernanceDecide == nil {
+			writeJSON(w, GovernanceDecisionResult{OK: false, Message: "the governance lane is not enabled (--dgx-enabled)"})
+			return
+		}
+		var req GovernanceDecisionRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBody)).Decode(&req); err != nil {
+			http.Error(w, "POST a JSON body {candidateId, decision, decidedBy, note}", http.StatusBadRequest)
+			return
+		}
+		res := p.GovernanceDecide(req)
+		if !res.OK {
+			// A refused decision (missing human, bad id) is a 400 — the client mis-asked.
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			enc := json.NewEncoder(w)
+			enc.SetEscapeHTML(false)
+			_ = enc.Encode(res)
+			return
+		}
+		writeJSON(w, res)
 	})
 
 	mux.HandleFunc("/api/dependency", func(w http.ResponseWriter, r *http.Request) {

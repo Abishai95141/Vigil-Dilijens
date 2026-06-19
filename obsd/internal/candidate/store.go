@@ -69,17 +69,22 @@ type Lineage struct {
 // stable): re-proposing the same content updates the row in place without losing its
 // lifecycle position.
 type Candidate struct {
-	ID        string         `json:"id"`
-	Kind      Kind           `json:"kind"`
-	Status    Status         `json:"status"`
-	Subject   string         `json:"subject"`            // the focal identifier (stray CEI, signal node, "from→to", …)
-	Relation  string         `json:"relation,omitempty"` // structural relation for KindEdge; co-occurrence label for KindCausalHypothesis; else empty
-	Payload   map[string]any `json:"payload,omitempty"`  // typed-per-kind detail (opaque to the store)
-	Evidence  []EvidenceRef  `json:"evidence,omitempty"`
-	Lineage   Lineage        `json:"lineage"`
-	Reason    string         `json:"reason,omitempty"` // SYSTEM reason for the current status (e.g. "evidence<k"); never a causal claim
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
+	ID       string         `json:"id"`
+	Kind     Kind           `json:"kind"`
+	Status   Status         `json:"status"`
+	Subject  string         `json:"subject"`            // the focal identifier (stray CEI, signal node, "from→to", …)
+	Relation string         `json:"relation,omitempty"` // structural relation for KindEdge; co-occurrence label for KindCausalHypothesis; else empty
+	Payload  map[string]any `json:"payload,omitempty"`  // typed-per-kind detail (opaque to the store)
+	Evidence []EvidenceRef  `json:"evidence,omitempty"`
+	Lineage  Lineage        `json:"lineage"`
+	Reason   string         `json:"reason,omitempty"` // SYSTEM reason for the current status (e.g. "evidence<k"); never a causal claim
+	// Human decision (governance promotion, doc 12 §3.3 — approval is a NAMED human, never
+	// the harness). Set only when a human promotes/rejects; the model never writes these.
+	DecidedBy string    `json:"decidedBy,omitempty"` // the named human who promoted/rejected
+	Note      string    `json:"note,omitempty"`      // the human's AUTHORED note (the model's rationale is discarded at promotion)
+	DecidedAt time.Time `json:"decidedAt,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Filter selects candidates by lifecycle status and/or kind (empty fields match any).
@@ -103,12 +108,24 @@ CREATE TABLE IF NOT EXISTS candidates (
   evidence_json TEXT,
   lineage_json  TEXT,
   reason        TEXT,
+  decided_by    TEXT,
+  note          TEXT,
+  decided_at    TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS candidates_status ON candidates(status);
 CREATE INDEX IF NOT EXISTS candidates_kind   ON candidates(kind);
 `
+
+// migrations bring an older candidates.db up to the current schema. ADD COLUMN is
+// idempotent-by-intent here: a "duplicate column" error means the column already
+// exists, which is success, so it is ignored.
+var migrations = []string{
+	`ALTER TABLE candidates ADD COLUMN decided_by TEXT`,
+	`ALTER TABLE candidates ADD COLUMN note TEXT`,
+	`ALTER TABLE candidates ADD COLUMN decided_at TEXT`,
+}
 
 // Store is the SQLite-backed candidate staging store. It is OUTSIDE the graph
 // loader and OFF the deterministic path (see the package doc).
@@ -132,6 +149,14 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("candidate: migrate: %w", err)
+	}
+	for _, m := range migrations {
+		// A "duplicate column" error means the column already exists (an up-to-date db) —
+		// that is success. Any other error is fatal.
+		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, fmt.Errorf("candidate: migrate %q: %w", m, err)
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -184,7 +209,7 @@ ON CONFLICT(id) DO UPDATE SET
 // candidate and nil error) when no such row exists.
 func (s *Store) Get(id string) (*Candidate, bool, error) {
 	row := s.db.QueryRow(`
-SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, created_at, updated_at
+SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, decided_by, note, decided_at, created_at, updated_at
 FROM candidates WHERE id = ?`, id)
 	c, err := scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -199,7 +224,7 @@ FROM candidates WHERE id = ?`, id)
 // List returns candidates matching the filter, ordered deterministically by
 // (created_at, id).
 func (s *Store) List(f Filter) ([]Candidate, error) {
-	q := `SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, created_at, updated_at FROM candidates`
+	q := `SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, decided_by, note, decided_at, created_at, updated_at FROM candidates`
 	var conds []string
 	var args []any
 	if f.Status != "" {
@@ -251,6 +276,40 @@ func (s *Store) SetStatus(now time.Time, id string, st Status, reason string) er
 	return nil
 }
 
+// Decide records a NAMED HUMAN's governance decision on a candidate (doc 12 §3.3:
+// approval is a human act — the harness can block but never approve). It transitions the
+// status (candidate→promoted | rejected | shadow) and records WHO decided, their AUTHORED
+// note, and WHEN. decidedBy is MANDATORY: a decision with no named human is refused. The
+// model's rationale stays in the payload (PROPOSED); the human's note is the AUTHORED
+// prose that a promotion carries onto its overlay. `now` is injected. Decided candidates
+// stay OFF the deterministic path — promotion produces a committable artifact, it does
+// not mutate the released graph here (the firewall holds).
+func (s *Store) Decide(now time.Time, id string, st Status, decidedBy, note string) error {
+	if !knownStatus(st) {
+		return fmt.Errorf("candidate: unknown status %q", st)
+	}
+	if st == StatusCandidate {
+		return errors.New("candidate: Decide records a human decision (promoted | rejected | shadow), not a reset to candidate")
+	}
+	if strings.TrimSpace(decidedBy) == "" {
+		return errors.New("candidate: a governance decision requires a named human (decidedBy) — the harness can block but never approve (doc 12 §3.3)")
+	}
+	at := now.UTC().Format(sqlTime)
+	res, err := s.db.Exec(`UPDATE candidates SET status = ?, reason = ?, decided_by = ?, note = ?, decided_at = ?, updated_at = ? WHERE id = ?`,
+		string(st), "human decision", decidedBy, note, at, at, id)
+	if err != nil {
+		return fmt.Errorf("candidate: decide: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("candidate: decide: no candidate %q", id)
+	}
+	return nil
+}
+
 // --- internals ---
 
 type scanner interface {
@@ -261,15 +320,19 @@ func scan(r scanner) (*Candidate, error) {
 	var (
 		c                                              Candidate
 		kind, status, relation, payload, evi, lin, rsn string
+		decidedBy, note                                sql.NullString
+		decidedAt                                      sql.NullString
 		created, updated                               string
 	)
-	if err := r.Scan(&c.ID, &kind, &status, &c.Subject, &relation, &payload, &evi, &lin, &rsn, &created, &updated); err != nil {
+	if err := r.Scan(&c.ID, &kind, &status, &c.Subject, &relation, &payload, &evi, &lin, &rsn, &decidedBy, &note, &decidedAt, &created, &updated); err != nil {
 		return nil, err
 	}
 	c.Kind = Kind(kind)
 	c.Status = Status(status)
 	c.Relation = relation
 	c.Reason = rsn
+	c.DecidedBy = decidedBy.String
+	c.Note = note.String
 	if err := unmarshalJSON(payload, &c.Payload); err != nil {
 		return nil, fmt.Errorf("candidate: scan payload: %w", err)
 	}
@@ -285,6 +348,11 @@ func scan(r scanner) (*Candidate, error) {
 	}
 	if c.UpdatedAt, err = time.Parse(sqlTime, updated); err != nil {
 		return nil, fmt.Errorf("candidate: scan updated_at: %w", err)
+	}
+	if decidedAt.Valid && decidedAt.String != "" {
+		if c.DecidedAt, err = time.Parse(sqlTime, decidedAt.String); err != nil {
+			return nil, fmt.Errorf("candidate: scan decided_at: %w", err)
+		}
 	}
 	return &c, nil
 }

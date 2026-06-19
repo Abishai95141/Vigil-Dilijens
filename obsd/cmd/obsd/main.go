@@ -484,6 +484,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// context (associations + coverage gaps), gated (grounding + evidence floor + the
 	// structural causal guard) and staged into the candidate store. Off-digest; the model
 	// authors nothing. Needs --dgx-enabled (the store) + a provider key.
+	var dgxAgent *dgx.Agent // launched below, AFTER the modality views exist (so the agent can reason over logs/traces/events)
 	if dgxAgentEnabled && candStore != nil {
 		apiKey := os.Getenv("GROQ_API_KEY")
 		if apiKey == "" {
@@ -498,8 +499,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			} else {
 				provider = dgx.NewGroqProvider(apiKey, os.Getenv("DGX_MODEL"))
 			}
-			agent := dgx.New(provider, dgx.DefaultParams)
-			go dgxAgentLoop(ctx, logger, agent, candStore, store, graphVersion, &depView, &silenceView, envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval))
+			dgxAgent = dgx.New(provider, dgx.DefaultParams)
 			logger.Info("dgx agent enabled (doc 20 P3)", "provider", provider.Name())
 		}
 	}
@@ -572,6 +572,14 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	var eventsSnap atomic.Pointer[eventsSnapshot]
 	var eventsView atomic.Pointer[vapi.EventsView]
 	eventsView.Store(vapi.BuildEvents(graphVersion, time.Now(), nil))
+
+	// doc 20 P3: launch the agent here (not at its setup above) so its read-only context
+	// can also reason over the MODALITY lanes — mined log templates, observed trace edges,
+	// and discrete events — alongside associations + coverage gaps + unmapped strays.
+	if dgxAgent != nil {
+		go dgxAgentLoop(ctx, logger, dgxAgent, candStore, store, graphVersion,
+			&depView, &silenceView, &logsView, &traceView, &eventsView, envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval))
+	}
 	var eventsConds []events.Corroboration
 	var eventsDets []events.Detection // graph-robustness #2 G1: event-driven detection conditions (validated referential)
 	var fcIn *atomic.Pointer[forecastInputs]
@@ -805,6 +813,21 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					return nil
 				}
 				return vapi.BuildProvisionalCoverage(time.Now().UTC(), mapCandidateRows(rows))
+			}
+			// doc 20 + doc 12 §3.3: the governance review queue + the human decide endpoint.
+			// A candidate becomes authoritative ONLY by a named human's promotion here; main
+			// maps candidate.Candidate -> vapi.GovernanceItem (api never imports candidate).
+			gv := graphVersion
+			providers.Governance = func() *vapi.GovernanceView {
+				rows, err := candStore.List(candidate.Filter{})
+				if err != nil {
+					logger.Error("dgx governance surface: list failed (non-gating)", "err", err)
+					return nil
+				}
+				return vapi.NewGovernanceView(time.Now().UTC(), gv, mapGovernanceItems(rows))
+			}
+			providers.GovernanceDecide = func(req vapi.GovernanceDecisionRequest) vapi.GovernanceDecisionResult {
+				return decideGovernance(candStore, gv, logger, req)
 			}
 		}
 		if assocEnabled {
@@ -1639,6 +1662,58 @@ func unmappedStrayObservations(cs *candidate.Store, max int) []dgx.Observation {
 	return out
 }
 
+// dgxAgentModalityCap bounds how many of each modality observation enter the prompt.
+const dgxAgentModalityCap = 8
+
+// modalityObservations renders the MEASURED modality lanes — mined log templates, observed
+// trace call edges, and discrete events — as read-only agent observations, so the agent can
+// reason over them (e.g. associate a loud log template or an erroring trace edge with a
+// workload) instead of seeing only metric associations. Each is bounded + cited by a stable
+// ref; the agent proposes only associated-with edges / direction-free hypotheses from them.
+func modalityObservations(logs *vapi.LogTemplatesView, traces *vapi.TraceGraphView, events *vapi.EventsView) []dgx.Observation {
+	var out []dgx.Observation
+	if logs != nil && logs.Available {
+		n := 0
+		for _, t := range logs.Templates {
+			if n >= dgxAgentModalityCap {
+				break
+			}
+			out = append(out, dgx.Observation{
+				Ref: "logtmpl:" + t.Pattern, Kind: "log-template",
+				Detail: fmt.Sprintf("mined log template (count %d): %s", t.Count, t.Pattern),
+			})
+			n++
+		}
+	}
+	if traces != nil && traces.Available {
+		n := 0
+		for _, e := range traces.Edges {
+			if n >= dgxAgentModalityCap {
+				break
+			}
+			out = append(out, dgx.Observation{
+				Ref: "trace:" + e.Caller + "->" + e.Callee, Kind: "trace-edge",
+				Detail: fmt.Sprintf("observed call %s -> %s (calls %d, errors %d, p95 %.0fms)", e.Caller, e.Callee, e.Calls, e.Errors, e.P95Millis),
+			})
+			n++
+		}
+	}
+	if events != nil && events.Available {
+		n := 0
+		for _, ev := range events.Events {
+			if n >= dgxAgentModalityCap {
+				break
+			}
+			out = append(out, dgx.Observation{
+				Ref: "event:" + ev.Reason + "@" + ev.Namespace + "/" + ev.Name, Kind: "k8s-event",
+				Detail: fmt.Sprintf("%s on %s/%s (kind %s, count %d)", ev.Reason, ev.Namespace, ev.Name, ev.Kind, ev.Count),
+			})
+			n++
+		}
+	}
+	return out
+}
+
 // labelSummary renders a stray candidate's labels (a map[string]any from JSON) as a
 // compact, deterministic "k=v,k=v" string for the agent prompt.
 func labelSummary(v any) string {
@@ -1661,7 +1736,10 @@ func labelSummary(v any) string {
 // dgxAgentLoop runs the LLM proposer over read-only context each interval and stages
 // the gated survivors (doc 20 P3). Off the deterministic path; the agent authors
 // nothing — it proposes, the gates filter, a human promotes later.
-func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, store *identity.Store, graphVersion string, depView *atomic.Pointer[vapi.DependencyView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], every time.Duration) {
+func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, store *identity.Store, graphVersion string,
+	depView *atomic.Pointer[vapi.DependencyView], silenceView *atomic.Pointer[vapi.SilenceLedgerView],
+	logsView *atomic.Pointer[vapi.LogTemplatesView], traceView *atomic.Pointer[vapi.TraceGraphView], eventsView *atomic.Pointer[vapi.EventsView],
+	every time.Duration) {
 	if every <= 0 {
 		every = 5 * time.Minute
 	}
@@ -1678,6 +1756,7 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 				continue // backing off after a provider rate-limit; no per-tick log spam
 			}
 			c := buildAgentContext(graphVersion, depView.Load(), silenceView.Load(), buildEntityRefs(store), unmappedStrayObservations(cs, dgxAgentStrayCap))
+			c.Observations = append(c.Observations, modalityObservations(logsView.Load(), traceView.Load(), eventsView.Load())...)
 			if len(c.Observations) == 0 {
 				continue
 			}
@@ -2220,6 +2299,66 @@ func dgxResolveLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingest
 			}
 		}
 	}
+}
+
+// mapGovernanceItems projects candidate rows into the governance review surface (doc 20 +
+// doc 12 §3.3) — the full provenance a human needs to decide, including the cited evidence
+// and (when decided) who decided + their authored note. main maps so api never imports
+// internal/candidate.
+func mapGovernanceItems(cs []candidate.Candidate) []vapi.GovernanceItem {
+	out := make([]vapi.GovernanceItem, 0, len(cs))
+	for _, c := range cs {
+		ev := make([]vapi.GovernanceEvidence, 0, len(c.Evidence))
+		for _, e := range c.Evidence {
+			ev = append(ev, vapi.GovernanceEvidence{Kind: e.Kind, Ref: e.Ref, Detail: e.Detail})
+		}
+		rationale, _ := c.Payload["rationale"].(string)
+		it := vapi.GovernanceItem{
+			ID: c.ID, Kind: string(c.Kind), Status: string(c.Status), Subject: c.Subject,
+			Relation: c.Relation, Source: c.Lineage.Source, Method: c.Lineage.Method,
+			GraphVersion: c.Lineage.GraphVersion, Rationale: rationale, Evidence: ev,
+			DecidedBy: c.DecidedBy, Note: c.Note, CreatedAt: c.CreatedAt,
+		}
+		if !c.DecidedAt.IsZero() {
+			t := c.DecidedAt
+			it.DecidedAt = &t
+		}
+		out = append(out, it)
+	}
+	return out
+}
+
+// decideGovernance records a NAMED HUMAN's promote/reject decision and, on a promotion,
+// renders the committable AUTHORED overlay artifact (doc 12 §3.3 — the human owns the call;
+// the system never approves). It never mutates the released graph (the firewall holds).
+func decideGovernance(cs *candidate.Store, graphVersion string, logger *slog.Logger, req vapi.GovernanceDecisionRequest) vapi.GovernanceDecisionResult {
+	var st candidate.Status
+	switch req.Decision {
+	case "promote":
+		st = candidate.StatusPromoted
+	case "reject":
+		st = candidate.StatusRejected
+	default:
+		return vapi.GovernanceDecisionResult{OK: false, CandidateID: req.CandidateID, Message: "decision must be 'promote' or 'reject'"}
+	}
+	now := time.Now().UTC()
+	if err := cs.Decide(now, req.CandidateID, st, req.DecidedBy, req.Note); err != nil {
+		return vapi.GovernanceDecisionResult{OK: false, CandidateID: req.CandidateID, Message: err.Error()}
+	}
+	res := vapi.GovernanceDecisionResult{OK: true, CandidateID: req.CandidateID, Status: string(st)}
+	if st == candidate.StatusPromoted {
+		if c, found, err := cs.Get(req.CandidateID); err == nil && found {
+			if y, err := candidate.PromotedOverlayYAML(*c, graphVersion); err == nil {
+				res.OverlayYAML = y
+			}
+		}
+		res.Message = "promoted by " + req.DecidedBy + " — commit the overlay artifact through the release governance gate (it does not auto-load)"
+		logger.Info("governance: candidate promoted (doc 12 §3.3 — named human owns the call)", "id", req.CandidateID, "by", req.DecidedBy)
+	} else {
+		res.Message = "rejected by " + req.DecidedBy
+		logger.Info("governance: candidate rejected", "id", req.CandidateID, "by", req.DecidedBy)
+	}
+	return res
 }
 
 // mapCandidateRows projects the DGX candidate store's rows into the surfacing row
