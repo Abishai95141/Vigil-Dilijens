@@ -26,17 +26,19 @@ import (
 // wantMCPTools is the pinned set of MCP tool names. It is the human-acknowledged registry;
 // the discovery + behavioural checks below tie it to reality in three directions.
 var wantMCPTools = map[string]bool{
-	"get_coverage":           true,
-	"get_silence_ledger":     true,
-	"get_warnings":           true,
-	"get_incidents":          true,
-	"get_events":             true,
-	"get_insights":           true,
-	"get_root_cause_chain":   true,
-	"get_cross_service":      true,
-	"get_topology":           true,
-	"get_unexplained":        true,
-	"get_departures":         true,
+	"get_coverage":         true,
+	"get_silence_ledger":   true,
+	"get_warnings":         true,
+	"get_incidents":        true,
+	"get_events":           true,
+	"get_insights":         true,
+	"get_root_cause_chain": true,
+	"get_cross_service":    true,
+	"get_topology":         true,
+	"get_unexplained":      true,
+	"get_departures":       true,
+	"get_blindspots":       true, // v5: coverage blind-spot registry (MEASURED), advertised + dispatched
+
 	"get_authored_relations": true,
 	"validate_claim":         true,
 	"emit_advisory":          true,

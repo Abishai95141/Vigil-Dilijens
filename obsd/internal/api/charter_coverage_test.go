@@ -72,6 +72,22 @@ var apiRouteDisposition = map[string]charterDisposition{
 	"/api/silence-ledger":  dispMeasuredStructured,
 	"/api/context-windows": dispMeasuredStructured,
 	"/api/config":          dispMeasuredStructured,
+	// v5 doc-20/21 dynamic-graph-extension + governance surfaces. MEASURED structured
+	// rows/enums + system status notes only — no authored causal "why", no projected band
+	// (the same bar as /api/findings, /api/coverage above; verified field-by-field).
+	"/api/blindspots":           dispMeasuredStructured,
+	"/api/provisional-coverage": dispMeasuredStructured,
+	"/api/governance":           dispMeasuredStructured,
+	"/api/dependency":           dispMeasuredStructured, // assoc "associated-with" edges — never causal
+	"/api/log-templates":        dispMeasuredStructured, // MEASURED mined templates; the denylist would false-positive on quoted log text
+	"/api/audit-changes":        dispMeasuredStructured, // MEASURED change records; hypotheses are counted here, staged to /api/candidates
+	"/api/trace-graph":          dispMeasuredStructured, // observed call graph — MEASURED topology
+	// the dgx lane's LLM-PROPOSED grounding text (CandidateRow.Reason) is generated prose,
+	// so it is SWEPT through the register audit here (payload in chartableSurfaces).
+	"/api/candidates": dispSwept,
+	// a governance decision returns the human-promoted overlay YAML verbatim — authored
+	// graph text, correct by design (like /api/authored-relations).
+	"/api/governance/decide": dispAuthoredVerbatim,
 }
 
 // discoverRegisteredRoutes AST-parses server.go and returns every string literal passed
@@ -166,10 +182,23 @@ func chartableSurfaces(t *testing.T) map[string][]byte {
 		Confidence: "wide-band", Detail: "realized sample left its projected band (above edge)",
 	}}
 
+	// A representative dgx-PROPOSED candidate carrying the lane's free-text grounding
+	// (CandidateRow.Reason). The register audit must find no causal/fusion register in the
+	// proposed prose — the lane GROUNDS (evidence + co-occurrence), it never authors a cause.
+	candidates := NewCandidatesView(at, []CandidateRow{{
+		ID: "cand-eqg-001", Kind: "equivalence_group_candidate", Status: "proposed",
+		Subject: "container_memory_working_set_bytes ⋈ container_memory_rss",
+		Source:  "dgx-agent", Method: "co-occurrence + name-affinity", GraphVersion: "v0.8.0",
+		EvidenceCount: 7,
+		Reason:        "co-occurs across 7 observed windows; staged for human review (PROPOSED, never authored)",
+		CreatedAt:     at, UpdatedAt: at,
+	}})
+
 	extra := map[string]any{
 		"cross-service":    BuildCrossService(&chain, nil, true, phaseECrossServiceGatePassedForTest, at),
 		"root-cause-chain": BuildRootCauseChain([]flow.Chain{chain}, nil, true, false, at),
 		"departures":       BuildDepartures(deps, true, true, at),
+		"candidates":       candidates,
 	}
 	for name, v := range extra {
 		raw := mustJSON(t, v)

@@ -130,7 +130,8 @@ func TestGatePassedFlagsAreRegistered(t *testing.T) {
 // the dev must either test it or consciously exempt it (and justify why).
 
 var untestedAllowlist = map[string]string{
-	"cmd/obsd":               "thin runtime wiring; the logic lives in internal/* (tested) and is exercised by the integration e2e suite (obsd/internal/e2e).",
+	// cmd/obsd was here, but v5 added cmd/obsd tests (dgx tool wiring) — the gate now
+	// requires the stale exemption to be removed (it is exercised hermetically + by e2e).
 	"cmd/replay":             "thin CLI over internal/replay (tested); the replay engine + bundles are golden-tested there.",
 	"cmd/govern":             "thin CLI over internal/governance (tested with 42 funcs).",
 	"cmd/conntrack-agent":    "privileged DaemonSet binary; no hermetic surface — certified by the flow Phase-A live gate.",
