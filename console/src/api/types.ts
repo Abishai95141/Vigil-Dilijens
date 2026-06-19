@@ -1146,6 +1146,17 @@ export interface GovernanceEvidence {
   detail?: string;
 }
 
+// A candidate's DETERMINISTIC support (doc 21 §4): integer COUNTS of agreed MEASURED facts —
+// NEVER a model confidence, a weighted sum, or a 0-1 score. Render the counts verbatim and
+// rank by the lexicographic tuple; never show a percentage or a synthesized score.
+export interface GovernanceSupport {
+  evidenceCount: number;
+  captureSample: number;
+  recurrence: number;
+  distinctEntities: number;
+  ageSeconds: number;
+}
+
 // One candidate as the review surface presents it — full provenance to decide.
 export interface GovernanceItem {
   id: string;
@@ -1158,6 +1169,7 @@ export interface GovernanceItem {
   graphVersion?: string;
   rationale?: string;           // the MODEL's proposed note (PROPOSED context; discarded at promotion)
   evidence: GovernanceEvidence[];
+  support: GovernanceSupport;   // deterministic MEASURED support — counts, never a confidence
   decidedBy?: string;           // the named human (when decided)
   note?: string;                // the human's AUTHORED note
   decidedAt?: string;           // RFC3339

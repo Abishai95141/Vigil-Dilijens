@@ -6,7 +6,7 @@
 // and emits a committable overlay; reject removes it. Clear evidence, signed decisions.
 
 import { decideGovernance, useGovernance } from "@/api/client";
-import type { GovernanceDecisionResult, GovernanceItem } from "@/api/types";
+import type { GovernanceDecisionResult, GovernanceItem, GovernanceSupport } from "@/api/types";
 import {
   Button,
   LaneNote,
@@ -52,6 +52,32 @@ function kindSummary(it: GovernanceItem): string {
   if (it.kind === "member") return "phenomenon member binding";
   if (it.kind === "bar_source") return "declared-bar pointer";
   return it.kind;
+}
+
+// Render a candidate's DETERMINISTIC support as COUNTS only (doc 21 §4) — verbatim integers,
+// NEVER a confidence, percentage, or synthesized score (support is MEASURED, not a belief).
+function supportLabel(s?: GovernanceSupport): string {
+  const ev = s?.evidenceCount ?? 0;
+  const de = s?.distinctEntities ?? 0;
+  const cs = s?.captureSample ?? 0;
+  const rc = s?.recurrence ?? 0;
+  const parts = [`${ev} evidence`];
+  if (de > 0) parts.push(`${de} ${de === 1 ? "entity" : "entities"}`);
+  if (cs > 0) parts.push(`captures ${cs}`);
+  if (rc > 0) parts.push(`seen ${rc}×`);
+  return parts.join(" · ");
+}
+
+// Rank by the lexicographic tuple, STRONGEST first — a pure comparison of counts, no weight.
+function cmpSupportDesc(a: GovernanceItem, b: GovernanceItem): number {
+  const x = a.support;
+  const y = b.support;
+  if (!x || !y) return 0;
+  if (x.evidenceCount !== y.evidenceCount) return y.evidenceCount - x.evidenceCount;
+  if (x.captureSample !== y.captureSample) return y.captureSample - x.captureSample;
+  if (x.recurrence !== y.recurrence) return y.recurrence - x.recurrence;
+  if (x.distinctEntities !== y.distinctEntities) return y.distinctEntities - x.distinctEntities;
+  return x.ageSeconds - y.ageSeconds; // newer (smaller age) ranks higher
 }
 
 // What promoting THIS candidate authors and where it lands — so the operator knows exactly
@@ -309,10 +335,12 @@ export function GovernancePage() {
                   />
                 ) : (
                   <div className="flex flex-col gap-3">
-                    {d.pending.map((it) => {
+                    {/* Ranked STRONGEST-support first — a lexicographic compare of MEASURED
+                        counts, never a learned/weighted score (doc 21 §4). */}
+                    {[...d.pending].sort(cmpSupportDesc).map((it) => {
                       return (
                         <div key={it.id} className="v-panel p-4">
-                          {/* header: producer · kind · relation */}
+                          {/* header: producer · kind · relation · support */}
                           <div className="mb-2 flex flex-wrap items-center gap-2">
                             <Tag title="the producer that proposed this">
                               {SOURCE[it.source] ?? it.source}
@@ -320,6 +348,12 @@ export function GovernancePage() {
                             <Tag sev="info">candidate</Tag>
                             {it.relation && <Tag>{it.relation}</Tag>}
                             <span className="text-[11px] text-ink-low">{kindSummary(it)}</span>
+                            <span
+                              className="v-mono rounded-[4px] border border-rule bg-surface-hi px-1.5 py-0.5 text-[10px] text-ink-soft"
+                              title="deterministic MEASURED support — a count of agreed facts, never a confidence score"
+                            >
+                              support · {supportLabel(it.support)}
+                            </span>
                             <span className="ml-auto v-mono text-[10.5px] text-ink-low">
                               {relTime(it.createdAt)}
                             </span>

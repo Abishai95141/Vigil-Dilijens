@@ -29,6 +29,19 @@ type GovernanceEvidence struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// GovernanceSupport is a candidate's DETERMINISTIC support (doc 21 §4): a struct of integer
+// COUNTS of agreed MEASURED facts, NEVER a model confidence, a weighted sum, or a 0-1 score.
+// The review UI ranks by the lexicographic tuple of these counts and renders them verbatim
+// ("3 evidence · captures 7 strays · seen 2×") — it must never display a percentage or a
+// synthesized score. main computes it via candidate.Score (api never imports internal/candidate).
+type GovernanceSupport struct {
+	EvidenceCount    int   `json:"evidenceCount"`
+	CaptureSample    int   `json:"captureSample"`
+	Recurrence       int   `json:"recurrence"`
+	DistinctEntities int   `json:"distinctEntities"`
+	AgeSeconds       int64 `json:"ageSeconds"`
+}
+
 // GovernanceItem is one candidate as the review surface presents it — the full provenance
 // the human needs to decide: what is proposed, by which producer, on what evidence, and (if
 // decided) who decided + their authored note.
@@ -43,6 +56,7 @@ type GovernanceItem struct {
 	GraphVersion string               `json:"graphVersion,omitempty"`
 	Rationale    string               `json:"rationale,omitempty"` // the MODEL's proposed note (PROPOSED, for context; discarded at promotion)
 	Evidence     []GovernanceEvidence `json:"evidence"`
+	Support      GovernanceSupport    `json:"support"` // deterministic MEASURED support (doc 21 §4) — counts, never a confidence
 	DecidedBy    string               `json:"decidedBy,omitempty"`
 	Note         string               `json:"note,omitempty"`
 	DecidedAt    *time.Time           `json:"decidedAt,omitempty"`

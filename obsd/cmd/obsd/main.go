@@ -2369,10 +2369,17 @@ func mapGovernanceItems(cs []candidate.Candidate) []vapi.GovernanceItem {
 			ev = append(ev, vapi.GovernanceEvidence{Kind: e.Kind, Ref: e.Ref, Detail: e.Detail})
 		}
 		rationale, _ := c.Payload["rationale"].(string)
+		// Deterministic MEASURED support (doc 21 §4): a struct of counts, computed in main
+		// (api never imports candidate). Recurrence is 0 until gap_state lands (Phase 3 step 3).
+		sup := candidate.Score(c, 0)
 		it := vapi.GovernanceItem{
 			ID: c.ID, Kind: string(c.Kind), Status: string(c.Status), Subject: c.Subject,
 			Relation: c.Relation, Source: c.Lineage.Source, Method: c.Lineage.Method,
 			GraphVersion: c.Lineage.GraphVersion, Rationale: rationale, Evidence: ev,
+			Support: vapi.GovernanceSupport{
+				EvidenceCount: sup.EvidenceCount, CaptureSample: sup.CaptureSample,
+				Recurrence: sup.Recurrence, DistinctEntities: sup.DistinctEntities, AgeSeconds: sup.AgeSeconds,
+			},
 			DecidedBy: c.DecidedBy, Note: c.Note, CreatedAt: c.CreatedAt,
 			// A pure k8s object-metadata stray is non-actionable: counted, but kept out of the
 			// human review queue (the deterministic classifier owns this; api never imports us).
