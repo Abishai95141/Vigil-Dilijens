@@ -47,7 +47,8 @@ const spliceRelevanceWindow = 8 * time.Hour
 func forecastLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 	in *atomic.Pointer[forecastInputs], ingestor *observe.Ingestor,
 	graphVersion, graphRelease string, p params.Params,
-	warningsView *atomic.Pointer[vapi.WarningsView], cwStore *vapi.ContextWindowStore) {
+	warningsView *atomic.Pointer[vapi.WarningsView], cwStore *vapi.ContextWindowStore,
+	roleSeries bool, store *identity.Store) {
 
 	cl, err := clock.New(p.Forecast.ClockdTarget)
 	if err != nil {
@@ -85,9 +86,20 @@ func forecastLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 		healthy := herr == nil && ready
 
 		// Freeze exactly the series this cycle needs — microseconds under the
-		// read gate; the clock's RPCs then run lock-free on the copy.
+		// read gate; the clock's RPCs then run lock-free on the copy. When role-series
+		// is on (doc 20 P5), the reader resolves a role-keyed target to the deterministic
+		// per-bin sum of its live member pods (churn-stable), delegating otherwise.
+		var reader forecast.StreamReader = ingestor
+		if roleSeries {
+			reader = &forecast.RoleSeriesReader{
+				Base: ingestor, Members: buildRoleMembers(store),
+				Bin:    p.Scrape.Interval.Duration(),
+				Window: p.Scrape.Interval.Duration() * 1024,
+				Now:    func() time.Time { return time.Now().UTC() },
+			}
+		}
 		gate.RLock()
-		snap := forecast.Snapshot(ingestor, fin.targets, 1024)
+		snap := forecast.Snapshot(reader, fin.targets, 1024)
 		gate.RUnlock()
 
 		var splices []time.Time

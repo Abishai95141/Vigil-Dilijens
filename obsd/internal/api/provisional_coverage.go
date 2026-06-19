@@ -39,10 +39,11 @@ type ProvisionalCoverageView struct {
 	StraysUnresolved    int `json:"straysUnresolved"`    // strays surfaced alone (below the identification floor)
 
 	// Agent + modality proposals (doc 20 P3/P4).
-	AgentEdges      int `json:"agentEdges"`      // associated-with edges the LLM agent proposed
-	AgentHypotheses int `json:"agentHypotheses"` // direction-free co-occurrence hypotheses the agent proposed
-	AuditHypotheses int `json:"auditHypotheses"` // change->incident co-occurrence hypotheses (audit lane)
-	TraceTopology   int `json:"traceTopology"`   // observed service-call topology edges (trace lane)
+	AgentEdges         int `json:"agentEdges"`         // associated-with edges the LLM agent staged (raw count)
+	AgentEdgesDistinct int `json:"agentEdgesDistinct"` // distinct edge subjects (the same edge re-proposed across cycles is one promotion item)
+	AgentHypotheses    int `json:"agentHypotheses"`    // direction-free co-occurrence hypotheses the agent proposed
+	AuditHypotheses    int `json:"auditHypotheses"`    // change->incident co-occurrence hypotheses (audit lane)
+	TraceTopology      int `json:"traceTopology"`      // observed service-call topology edges (trace lane)
 
 	TotalCandidates int            `json:"totalCandidates"`
 	ByStatus        map[string]int `json:"byStatus"` // candidate | promoted | rejected | shadow
@@ -62,13 +63,18 @@ func BuildProvisionalCoverage(now time.Time, rows []CandidateRow) *ProvisionalCo
 		TotalCandidates: len(rows), Note: provisionalCoverageNote,
 	}
 	mappedStray := map[string]bool{}
+	agentEdgeSubjects := map[string]bool{}
 	for _, r := range rows {
 		if r.Source == "cei-fallback" && r.Kind == "edge" {
 			if i := strings.Index(r.Subject, " ~> "); i > 0 {
 				mappedStray[r.Subject[:i]] = true
 			}
 		}
+		if r.Source == "dgx-agent" && r.Kind == "edge" {
+			agentEdgeSubjects[r.Subject] = true
+		}
 	}
+	v.AgentEdgesDistinct = len(agentEdgeSubjects)
 	for _, r := range rows {
 		v.ByStatus[r.Status]++
 		v.BySource[r.Source]++

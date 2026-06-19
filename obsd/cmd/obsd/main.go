@@ -87,40 +87,41 @@ func run(args []string, stdout, stderr *os.File) error {
 	fs := flag.NewFlagSet("obsd", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		paramsPath      = fs.String("params", "", "path to a parameters override file (overlays embedded dev defaults)")
-		showVersion     = fs.Bool("version", false, "print version and exit")
-		logFormat       = fs.String("log", "json", "log format: json|text")
-		kubeconfig      = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
-		inCluster       = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
-		healthAddr      = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
-		ontology        = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
-		overlays        = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
-		releases        = fs.String("releases", "ontology/releases", "graph release manifests (doc 12 M1); the loaded graph self-identifies its release by hash")
-		storeDir        = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
-		dbPath          = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
-		apiEnabled      = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
-		dumpBindings    = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
-		flowEnabled     = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
-		flowInterval    = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
-		mcpEnabled      = fs.Bool("mcp-enabled", false, "v3 T-A: serve the read-only MCP harness at /mcp (coverage, silence-ledger, warnings, emit_advisory). OFF by default; off = byte-identical to no MCP. Auth is a separate (later) track — do not expose this beyond an isolated cluster.")
-		incidentMem     = fs.Bool("incident-memory", false, "v3 T-B: fold findings into the durable cross-run incident memory (recurrence counting). OFF by default; off = byte-identical. Needs --db (a persistent store) to survive restarts.")
-		eventsOn        = fs.Bool("events-enabled", false, "v3 T-C: ingest discrete k8s Events (OOMKilled, CrashLoopBackOff) as MEASURED findings joined by CEI to gauge phenomena. OFF by default; off = byte-identical (events ride off the digest).")
-		eventsConds     = fs.String("events-conditions", "ontology/graph/overlays/experimental/event-conditions-v1.yaml", "v3 T-C: the authored event-corroboration conditions overlay (experimental until the events-gate promotes it)")
-		appMetrics      = fs.Bool("app-metrics-enabled", false, "doc 15 cap. A: scrape application /metrics endpoints (prometheus.io/scrape pods) + bind to declared SLOs (vigil.io/slo.* annotations). OFF by default; off = byte-identical (the app overlay + app scrape are not loaded).")
-		appConds        = fs.String("app-conditions", "ontology/graph/overlays/experimental/app-conditions-v1.yaml", "doc 15 cap. A: the authored application-signal overlay (experimental until the app-slo-gate promotes it)")
-		eventsInt       = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
-		refereeOn       = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
-		departureOn     = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
-		ksmEnabled      = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
-		dgxEnabled      = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
-		histQuantiles   = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
-		assocEnabled    = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
-		dgxAgentEnabled = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
-		logsEnabled     = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
-		auditEnabled    = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
-		auditLogPath    = fs.String("audit-log-path", "", "doc 20 P4 AUDIT lane: path to the apiserver audit log in JSONL (audit.k8s.io/v1 Event per line). The apiserver audit policy is OFF by default on kind; this is config-dependent (mount the audit log to obsd). Empty ⇒ the audit lane stays off even with --audit-enabled.")
-		tracesEnabled   = fs.Bool("traces-enabled", false, "doc 20 P4 TRACE lane: read OTel spans (JSONL at --traces-path), build the MEASURED observed service call graph at /api/trace-graph, and stage each discovered call as a STRUCTURAL topology candidate (never causal) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the trace import-firewall). Needs --traces-path; the topology candidates also need --dgx-enabled (the store).")
-		tracesPath      = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
+		paramsPath         = fs.String("params", "", "path to a parameters override file (overlays embedded dev defaults)")
+		showVersion        = fs.Bool("version", false, "print version and exit")
+		logFormat          = fs.String("log", "json", "log format: json|text")
+		kubeconfig         = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
+		inCluster          = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
+		healthAddr         = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
+		ontology           = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
+		overlays           = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
+		releases           = fs.String("releases", "ontology/releases", "graph release manifests (doc 12 M1); the loaded graph self-identifies its release by hash")
+		storeDir           = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
+		dbPath             = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
+		apiEnabled         = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
+		dumpBindings       = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
+		flowEnabled        = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
+		flowInterval       = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
+		mcpEnabled         = fs.Bool("mcp-enabled", false, "v3 T-A: serve the read-only MCP harness at /mcp (coverage, silence-ledger, warnings, emit_advisory). OFF by default; off = byte-identical to no MCP. Auth is a separate (later) track — do not expose this beyond an isolated cluster.")
+		incidentMem        = fs.Bool("incident-memory", false, "v3 T-B: fold findings into the durable cross-run incident memory (recurrence counting). OFF by default; off = byte-identical. Needs --db (a persistent store) to survive restarts.")
+		eventsOn           = fs.Bool("events-enabled", false, "v3 T-C: ingest discrete k8s Events (OOMKilled, CrashLoopBackOff) as MEASURED findings joined by CEI to gauge phenomena. OFF by default; off = byte-identical (events ride off the digest).")
+		eventsConds        = fs.String("events-conditions", "ontology/graph/overlays/experimental/event-conditions-v1.yaml", "v3 T-C: the authored event-corroboration conditions overlay (experimental until the events-gate promotes it)")
+		appMetrics         = fs.Bool("app-metrics-enabled", false, "doc 15 cap. A: scrape application /metrics endpoints (prometheus.io/scrape pods) + bind to declared SLOs (vigil.io/slo.* annotations). OFF by default; off = byte-identical (the app overlay + app scrape are not loaded).")
+		appConds           = fs.String("app-conditions", "ontology/graph/overlays/experimental/app-conditions-v1.yaml", "doc 15 cap. A: the authored application-signal overlay (experimental until the app-slo-gate promotes it)")
+		eventsInt          = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
+		refereeOn          = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
+		departureOn        = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
+		ksmEnabled         = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
+		dgxEnabled         = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
+		histQuantiles      = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
+		assocEnabled       = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
+		dgxAgentEnabled    = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
+		logsEnabled        = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
+		auditEnabled       = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
+		auditLogPath       = fs.String("audit-log-path", "", "doc 20 P4 AUDIT lane: path to the apiserver audit log in JSONL (audit.k8s.io/v1 Event per line). The apiserver audit policy is OFF by default on kind; this is config-dependent (mount the audit log to obsd). Empty ⇒ the audit lane stays off even with --audit-enabled.")
+		tracesEnabled      = fs.Bool("traces-enabled", false, "doc 20 P4 TRACE lane: read OTel spans (JSONL at --traces-path), build the MEASURED observed service call graph at /api/trace-graph, and stage each discovered call as a STRUCTURAL topology candidate (never causal) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the trace import-firewall). Needs --traces-path; the topology candidates also need --dgx-enabled (the store).")
+		tracesPath         = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
+		forecastRoleSeries = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin sum of its live member pods, OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default; off = byte-identical (the forecast feeds per-pod targets unchanged). Gate-pending like every forecast class.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -202,7 +203,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -277,7 +278,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -973,9 +974,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView, &transitiveChainView, &projectedTransitiveView,
 		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
-		eventsEnabled, eventsConds, eventsDets, &eventsSnap, &eventsView)
+		eventsEnabled, eventsConds, eventsDets, &eventsSnap, &eventsView, forecastRoleSeries)
 	if p.Forecast.Enabled {
-		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore)
+		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore, forecastRoleSeries, store)
 	}
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
@@ -1030,7 +1031,8 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
 func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], transitiveChainView *atomic.Pointer[[]flow.Chain], projectedTransitiveView *atomic.Pointer[[]flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration,
-	eventsEnabled bool, eventsConds []events.Corroboration, eventsDets []events.Detection, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView]) {
+	eventsEnabled bool, eventsConds []events.Corroboration, eventsDets []events.Detection, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView],
+	forecastRoleSeries bool) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -1319,6 +1321,11 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 			// here so its view of bindings/topology is exactly one tick's.
 			if fcIn != nil {
 				targets, _ := forecast.EligibleTargets(bd.Result, bnd.graph)
+				if forecastRoleSeries {
+					// doc 20 P5: roll pod/container targets up to their durable workload ROLE
+					// so a churned pod doesn't sever the series (OwnerReference succession).
+					targets = rollUpTargetsToRole(targets, store)
+				}
 				sel := selection.SelectTierB(targets, tierBBudget)
 				fcIn.Store(&forecastInputs{
 					targets:    selection.BudgetedTargets(sel),
@@ -1597,23 +1604,57 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
+	var rateLimitedUntil time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			now := time.Now().UTC()
+			if now.Before(rateLimitedUntil) {
+				continue // backing off after a provider rate-limit; no per-tick log spam
+			}
 			c := buildAgentContext(graphVersion, depView.Load(), silenceView.Load(), buildEntityRefs(store))
 			if len(c.Observations) == 0 {
 				continue
 			}
-			rep, err := agent.RunOnce(ctx, cs, time.Now().UTC(), c)
+			rep, err := agent.RunOnce(ctx, cs, now, c)
 			if err != nil {
+				if isRateLimited(err) {
+					// Provider quota exhausted (e.g. Groq tokens-per-day). Back off so we do
+					// NOT re-fire every tick for the whole quota window; log ONCE at WARN.
+					// Non-gating: detection, forecasting, and every other lane are unaffected,
+					// and the candidates already staged remain. Swap providers (DGX_BASE_URL /
+					// a paid tier / a local model) to remove the ceiling.
+					rateLimitedUntil = now.Add(dgxAgentRateLimitCooldown)
+					logger.Warn("dgx agent rate-limited; backing off (non-gating — detection/forecast unaffected)",
+						"cooldown", dgxAgentRateLimitCooldown.String(), "err", truncStr(err.Error(), 200))
+					continue
+				}
 				logger.Error("dgx agent run failed (non-gating)", "err", err)
 				continue
 			}
 			logger.Info("dgx agent run (doc 20 P3)", "provider", rep.Provider, "proposed", rep.Proposed, "accepted", rep.Accepted, "rejected", len(rep.Rejected))
 		}
 	}
+}
+
+// dgxAgentRateLimitCooldown pauses the LLM proposer after a provider rate-limit so it does
+// not hammer the quota every tick (the agent is non-gating; nothing else waits on it).
+const dgxAgentRateLimitCooldown = 10 * time.Minute
+
+// isRateLimited reports whether a provider error is a rate-limit / quota rejection (HTTP
+// 429), so the loop can back off instead of retrying every tick.
+func isRateLimited(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "status 429") || strings.Contains(s, "rate limit") || strings.Contains(s, "Rate limit")
+}
+
+func truncStr(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // buildAgentContext maps the read-only surfaces into the agent's grounding context
@@ -1986,6 +2027,80 @@ func fetchPodLogLines(ctx context.Context, client kubernetes.Interface, pods []c
 		sampled++
 	}
 	return lines, sampled
+}
+
+// rollUpTargetsToRole maps pod/container forecast targets to their durable workload ROLE
+// (doc 20 P5 churn-stable identity): a target keyed on a single pod UID dies when the pod
+// is replaced, so we re-key it on the role CEI (the OwnerReference-derived RoleCEI the
+// identity store already tracks) and dedup per (role, container, metric). The role's
+// series is then the deterministic per-bin SUM of its live members (RoleSeriesReader), so
+// it survives churn. Node/PVC targets and unresolvable-role targets pass through unchanged
+// (honest). Deterministic: output sorted by (CEIKey, Metric).
+func rollUpTargetsToRole(targets []forecast.Target, store *identity.Store) []forecast.Target {
+	seen := map[string]bool{}
+	out := make([]forecast.Target, 0, len(targets))
+	for _, t := range targets {
+		if t.Entity != "Pod" && t.Entity != "Container" {
+			out = append(out, t)
+			continue
+		}
+		rec, ok := store.Get(t.CEIKey)
+		if !ok || rec.RoleCEI.RoleKey == "" {
+			out = append(out, t) // role unresolvable ⇒ keep per-instance, never guess
+			continue
+		}
+		roleKey := rec.RoleCEI.Key()
+		streamUID := roleKey
+		if t.Entity == "Container" && t.Container != "" {
+			streamUID = roleKey + "\x1f" + t.Container // role + container (the role-stream uid)
+		}
+		dedup := streamUID + "\x1f" + t.Metric
+		if seen[dedup] {
+			continue
+		}
+		seen[dedup] = true
+		rt := t
+		rt.CEIKey = roleKey
+		rt.StreamUID = streamUID
+		out = append(out, rt)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CEIKey != out[j].CEIKey {
+			return out[i].CEIKey < out[j].CEIKey
+		}
+		return out[i].Metric < out[j].Metric
+	})
+	return out
+}
+
+// buildRoleMembers groups the active inventory by role key and returns a resolver from a
+// role-stream uid (roleKey, or roleKey+"\x1f"+container) to its member STREAM uids (the
+// pod UID, or podUID/container) — the join keys observe.StreamsByUIDMetric matches. main
+// does this so the forecast package imports neither identity nor client-go.
+func buildRoleMembers(store *identity.Store) forecast.MemberResolver {
+	byRole := map[string][]string{}
+	for _, r := range store.ActiveInstances() {
+		if r.RoleCEI.RoleKey == "" || r.UID == "" {
+			continue
+		}
+		byRole[r.RoleCEI.Key()] = append(byRole[r.RoleCEI.Key()], r.UID)
+	}
+	return func(roleUID string) []string {
+		roleKey, container := roleUID, ""
+		if i := strings.Index(roleUID, "\x1f"); i >= 0 {
+			roleKey, container = roleUID[:i], roleUID[i+1:]
+		}
+		members := byRole[roleKey]
+		out := make([]string, 0, len(members))
+		for _, uid := range members {
+			if container != "" {
+				out = append(out, uid+"/"+container)
+			} else {
+				out = append(out, uid)
+			}
+		}
+		return out
+	}
 }
 
 // buildEntityRefs snapshots the active identity inventory as candidate.EntityRefs for
