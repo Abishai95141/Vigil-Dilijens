@@ -6,6 +6,7 @@ import { ConfigPage } from "./routes/config";
 import { CoveragePage } from "./routes/coverage";
 import { EventsPage } from "./routes/events";
 import { ForecastPage } from "./routes/forecast";
+import { GovernancePage } from "./routes/governance";
 import { IncidentsPage } from "./routes/incidents";
 import { InsightsPage } from "./routes/insights";
 import { McpPage } from "./routes/mcp";
@@ -34,6 +35,7 @@ const routeTree = root.addChildren([
   r("/timeline", TimelinePage),
   r("/coverage", CoveragePage),
   r("/silence", SilencePage),
+  r("/governance", GovernancePage),
   r("/referee", RefereePage),
   r("/config", ConfigPage),
   // NOTE: not "/mcp" — that path is proxied to obsd's POST-only JSON-RPC endpoint

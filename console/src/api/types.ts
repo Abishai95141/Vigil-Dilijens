@@ -1133,3 +1133,56 @@ export interface CurationCandidate {
   graphVersion: string;
 }
 
+
+// ── Governance (doc 20 + doc 12 §3.3): the candidate review queue ─────────────
+// Every DGX proposal is status=candidate, firewalled from the deterministic
+// detection/forecast path. A NAMED human promotes (authoring a committable overlay)
+// or rejects — the system never approves. Source: api/governance.go
+
+// One MEASURED fact a candidate rests on (review without evidence = rejection).
+export interface GovernanceEvidence {
+  kind: string;                 // e.g. "context:stray-metric", "context:entity", "co-occurrence"
+  ref: string;
+  detail?: string;
+}
+
+// One candidate as the review surface presents it — full provenance to decide.
+export interface GovernanceItem {
+  id: string;
+  kind: string;                 // node | edge | member | bar_source | causal_hypothesis
+  status: string;               // candidate | promoted | rejected | shadow
+  subject: string;
+  relation?: string;            // associated-with | topology | topo-adjacent | co-occurrence
+  source: string;               // cei-fallback | dgx-agent | audit | trace | assoc
+  method?: string;
+  graphVersion?: string;
+  rationale?: string;           // the MODEL's proposed note (PROPOSED context; discarded at promotion)
+  evidence: GovernanceEvidence[];
+  decidedBy?: string;           // the named human (when decided)
+  note?: string;                // the human's AUTHORED note
+  decidedAt?: string;           // RFC3339
+  createdAt: string;
+}
+
+// GET /api/governance — the pending review queue + the decided audit trail.
+export interface GovernanceView {
+  class: string;
+  available: boolean;           // false ⇒ --dgx-enabled is off
+  generatedAt: string;
+  graphVersion?: string;
+  pending: GovernanceItem[];    // status=candidate
+  decided: GovernanceItem[];    // promoted | rejected | shadow
+  counts: Record<string, number>;
+  gateNote: string;             // the harness blocks; a named human approves
+  note: string;
+}
+
+// POST /api/governance/decide — a named human's call. On promote, carries the
+// committable AUTHORED overlay artifact.
+export interface GovernanceDecisionResult {
+  ok: boolean;
+  candidateId: string;
+  status?: string;              // promoted | rejected
+  overlayYaml?: string;
+  message: string;
+}

@@ -12,6 +12,8 @@ import type {
   DepartureView,
   EventsView,
   FindingsResponse,
+  GovernanceDecisionResult,
+  GovernanceView,
   IncidentsView,
   InsightsView,
   McpInitializeResult,
@@ -78,9 +80,25 @@ export const useIncidents = () => useView<IncidentsView>("incidents", "/api/inci
 export const useTimeline = () => useView<TimelineView>("timeline", "/api/timeline");
 export const useConfig = () => useView<ConfigView>("config", "/api/config");
 export const useUnexplained = () => useView<UnexplainedView>("unexplained", "/api/unexplained");
+export const useGovernance = () => useView<GovernanceView>("governance", "/api/governance");
 
 export const validateClaim = (claim: string) =>
   postJson<ClaimVerdict>("/api/validate-claim", { claim });
+
+// A NAMED human's promote/reject decision (doc 12 §3.3 — the system never approves).
+// On a promote the result carries the committable AUTHORED overlay artifact.
+export const decideGovernance = (
+  candidateId: string,
+  decision: "promote" | "reject",
+  decidedBy: string,
+  note: string,
+) =>
+  postJson<GovernanceDecisionResult>("/api/governance/decide", {
+    candidateId,
+    decision,
+    decidedBy,
+    note,
+  });
 export const askChat = (question: string) => postJson<ChatResponse>("/api/chat", { question });
 
 // ── MCP JSON-RPC client ──────────────────────────────────────────────────────
