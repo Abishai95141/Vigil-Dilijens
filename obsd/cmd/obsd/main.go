@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -23,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +48,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/events"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/forecast"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/governance"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/identity"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
@@ -507,8 +510,44 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			} else {
 				provider = dgx.NewGroqProvider(apiKey, os.Getenv("DGX_MODEL"))
 			}
-			dgxAgent = dgx.New(provider, dgx.DefaultParams)
-			logger.Info("dgx agent enabled (doc 20 P3)", "provider", provider.Name())
+			// DGX_MAX_TOKENS bumps the completion bound — a reasoning model (deepseek-v4-flash,
+			// deepseek-reasoner) needs headroom for reasoning_tokens + the proposals JSON, or it
+			// returns empty content (observed live). Only the ChatProvider honours it.
+			if cp, ok := provider.(*dgx.ChatProvider); ok {
+				if v := os.Getenv("DGX_MAX_TOKENS"); v != "" {
+					if n, err := strconv.Atoi(v); err == nil {
+						cp.SetMaxTokens(n)
+					}
+				}
+				// DGX_EXTRA_BODY is a JSON object of provider-specific request fields, e.g.
+				// {"thinking":{"type":"disabled"}} to turn OFF deepseek-v4-flash reasoning.
+				if v := os.Getenv("DGX_EXTRA_BODY"); v != "" {
+					var extra map[string]any
+					if err := json.Unmarshal([]byte(v), &extra); err == nil {
+						cp.SetExtraBody(extra)
+					} else {
+						logger.Warn("dgx: DGX_EXTRA_BODY is not valid JSON; ignoring", "err", err.Error())
+					}
+				}
+			}
+			// doc 21 §3 slice 5: opt-in DECLARED threshold floors (off by default = no regression).
+			// DGX_MIN_SUPPORT raises the agreed-evidence bar a proposal must clear; DGX_MIN_CAPTURE_SAMPLE
+			// requires an equiv_group pattern to absorb ≥N seen strays. Counts vs a declared integer,
+			// never learned. A bad value is ignored (floor stays off).
+			params := dgx.DefaultParams
+			if v := os.Getenv("DGX_MIN_SUPPORT"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					params.MinSupport = n
+				}
+			}
+			if v := os.Getenv("DGX_MIN_CAPTURE_SAMPLE"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+					params.MinCaptureSample = n
+				}
+			}
+			dgxAgent = dgx.New(provider, params)
+			logger.Info("dgx agent enabled (doc 20 P3)", "provider", provider.Name(),
+				"minSupport", params.MinSupport, "minCaptureSample", params.MinCaptureSample)
 		}
 	}
 
@@ -594,8 +633,30 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			logger.Info("dgx agent: read-only retrieval tools enabled (doc 21 Phase 2)",
 				"tools", "get_strays search_equivalence_groups get_topology get_silence_ledger get_coverage get_unexplained")
 		}
+		// doc 21 §3 slice 4: the event-driven exploration lane. A watcher diffs the read-only
+		// surfaces (unexplained cards, k8s events, operational strays) against a seen-set and
+		// triggers an immediate agent run for genuinely-new items, BYPASSING the sweep cadence +
+		// gap_state backoff. Bounded queue; drop-on-full (the scheduled sweep is the net).
+		explorationQueue := make(chan dgx.ExplorationEvent, dgxExplorationQueueCap)
+		go dgxExplorationWatcher(ctx, logger, explorationQueue, candStore, &unexpView, &eventsView,
+			envDuration("DGX_EVENT_INTERVAL", dgxExplorationWatch))
 		go dgxAgentLoop(ctx, logger, dgxAgent, candStore, store, graphVersion, equivGroupCatalog(ontologyGraph),
-			&depView, &silenceView, &logsView, &traceView, &eventsView, envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval))
+			&depView, &silenceView, &logsView, &traceView, &eventsView, explorationQueue, envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval))
+	}
+	// doc 21 Phase 4: the anomaly→phenomenon-candidate producer. DETERMINISTIC (reads the
+	// unexplained channel's recurrence reports, no LLM), so it runs whenever the candidate store
+	// is open — independent of the agent. It stages recurring unexplained anomalies as
+	// phenomenon_candidate proposals for human curation via governance.
+	if candStore != nil {
+		go phenomenonCandidateLoop(ctx, logger, candStore, &unexpView, graphVersion,
+			envDuration("DGX_PHENOMENON_INTERVAL", dgxPhenomenonInterval))
+		// doc 21 Phase 4 §C: the agent enriches each phenomenon candidate with a PROJECTED
+		// human-readable label + non-causal description (a reviewer hint, discarded at promotion).
+		// Gated on the agent being enabled (it needs the LLM); DGX_ENRICH=off is the rollback.
+		if dgxAgent != nil && os.Getenv("DGX_ENRICH") != "off" {
+			go phenomenonEnrichmentLoop(ctx, logger, dgxAgent, candStore,
+				envDuration("DGX_ENRICHMENT_INTERVAL", dgxEnrichmentInterval))
+		}
 	}
 	var eventsConds []events.Corroboration
 	var eventsDets []events.Detection // graph-robustness #2 G1: event-driven detection conditions (validated referential)
@@ -841,10 +902,19 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					logger.Error("dgx governance surface: list failed (non-gating)", "err", err)
 					return nil
 				}
-				return vapi.NewGovernanceView(time.Now().UTC(), gv, mapGovernanceItems(rows))
+				return vapi.NewGovernanceView(time.Now().UTC(), gv, mapGovernanceItems(rows, gapAttemptsMap(candStore)))
 			}
+			// slice 3: a human rejection lengthens the candidate's exploration-gap backoff (using
+			// the same base as the agent sweep), so a rejected gap is not re-examined every tick.
+			gapBase := envDuration("DGX_AGENT_INTERVAL", dgxAgentInterval)
 			providers.GovernanceDecide = func(req vapi.GovernanceDecisionRequest) vapi.GovernanceDecisionResult {
-				return decideGovernance(candStore, gv, logger, req)
+				return decideGovernance(candStore, gv, logger, gapBase, req)
+			}
+			// doc 21 §4 Phase 3 slice 2: a READ-ONLY preview of what promoting a candidate would
+			// author — the overlay, plus (for equiv_group) the deterministic stray→group
+			// resolution delta on a SCRATCH graph. Never mutates the store or the live graph.
+			providers.GovernancePreview = func(candidateID string) *vapi.GovernancePreviewResult {
+				return previewGovernance(candStore, ontologyGraph, gv, candidateID)
 			}
 		}
 		if assocEnabled {
@@ -1762,15 +1832,283 @@ func labelSummary(v any) string {
 	return strings.Join(parts, ",")
 }
 
-// dgxAgentLoop runs the LLM proposer over read-only context each interval and stages
-// the gated survivors (doc 20 P3). Off the deterministic path; the agent authors
-// nothing — it proposes, the gates filter, a human promotes later.
-func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, store *identity.Store, graphVersion string, knownGroups map[string]string,
-	depView *atomic.Pointer[vapi.DependencyView], silenceView *atomic.Pointer[vapi.SilenceLedgerView],
-	logsView *atomic.Pointer[vapi.LogTemplatesView], traceView *atomic.Pointer[vapi.TraceGraphView], eventsView *atomic.Pointer[vapi.EventsView],
-	every time.Duration) {
+// dgxExplorationQueueCap bounds the event channel; on backpressure events are dropped (the
+// scheduled sweep is the net, so a drop is never a missed gap, only a delayed one).
+const dgxExplorationQueueCap = 100
+
+// dgxExplorationWatch is the default cadence the seen-set watcher diffs the read-only surfaces.
+const dgxExplorationWatch = 30 * time.Second
+
+// dgxExplorationWatcher diffs the read-only surfaces against a content-keyed seen-set every
+// interval and emits an ExplorationEvent for each NEWLY-seen unexplained card, k8s event, or
+// operational stray (doc 21 §3 slice 4). The FIRST tick seeds the seen-set WITHOUT firing (the
+// existing backlog is not "new"). Newness is a set DIFFERENCE, never a novelty score (charter:
+// no learned trigger). Reads the SAME atomic snapshots the api/MCP serve — one source of truth.
+func dgxExplorationWatcher(ctx context.Context, logger *slog.Logger, queue chan<- dgx.ExplorationEvent, cs *candidate.Store,
+	unexpView *atomic.Pointer[vapi.UnexplainedView], eventsView *atomic.Pointer[vapi.EventsView], interval time.Duration) {
+	if interval <= 0 {
+		interval = dgxExplorationWatch
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	seen := map[string]bool{}
+	primed := false
+	droppedLogged := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			fresh := diffNewExplorationEvents(seen, unexpView.Load(), eventsView.Load(), unmappedStrayObservations(cs, dgxAgentStrayCap), now)
+			if !primed {
+				// The first sweep seeds the seen-set with the existing backlog — those are not
+				// "new", so they must not all fire at once. Genuinely-new items fire next tick.
+				primed = true
+				continue
+			}
+			for _, e := range fresh {
+				select {
+				case queue <- e:
+				default:
+					if !droppedLogged {
+						logger.Warn("dgx exploration: event queue full, dropping (the scheduled sweep is the net)", "kind", e.Kind)
+						droppedLogged = true
+					}
+				}
+			}
+			if len(fresh) > 0 {
+				logger.Info("dgx exploration: new triggers queued (doc 21 §3 slice 4)", "count", len(fresh))
+			}
+		}
+	}
+}
+
+// diffNewExplorationEvents folds the current read-only surfaces against the seen-set and returns
+// the NEWLY-seen items as exploration events, recording each into `seen` so it never re-fires.
+// Pure given (seen, snapshots, now) — the testable core of the watcher.
+func diffNewExplorationEvents(seen map[string]bool, unexp *vapi.UnexplainedView, events *vapi.EventsView, strays []dgx.Observation, now time.Time) []dgx.ExplorationEvent {
+	var fresh []dgx.ExplorationEvent
+	add := func(kind, ref, detail string) {
+		if ref == "" || seen[ref] {
+			return
+		}
+		seen[ref] = true
+		fresh = append(fresh, dgx.ExplorationEvent{Kind: kind, Ref: ref, Detail: detail, EmittedAt: now})
+	}
+	if unexp != nil {
+		for _, f := range unexp.OpenCards {
+			// Only a genuinely NEW unexplained card (not an aging/superseded one) is a trigger.
+			if string(f.Status) != "new" {
+				continue
+			}
+			add("unexplained", "unexplained:"+f.Scope+"|"+f.Namespace+"|"+f.Name+"|"+f.Kind,
+				"new unexplained loud card on "+f.Kind+" "+f.Name+" ("+f.Namespace+")")
+		}
+	}
+	if events != nil && events.Available {
+		for _, e := range events.Events {
+			add("event", "event:"+e.Reason+"@"+e.Namespace+"/"+e.Name,
+				"k8s event "+e.Reason+" on "+e.Kind+" "+e.Name)
+		}
+	}
+	for _, s := range strays {
+		// s.Ref is the operational stray subject ("stray:<metric>"); object-metadata strays are
+		// already filtered out by unmappedStrayObservations.
+		add("stray", s.Ref, s.Detail)
+	}
+	return fresh
+}
+
+// gapRefPrefixes are the observation Refs the agent EXPLORES (vs reasons WITH): each is a
+// "gap" scheduled by gap_state's deterministic backoff (doc 21 §3). An association (assoc:)
+// or a valid-entity ref is a FACT the agent reasons with, never a gap to back off.
+var gapRefPrefixes = []string{"stray:", "silence:", "unexplained:", "event:", "logtmpl:", "trace:"}
+
+func isGapRef(ref string) bool {
+	for _, p := range gapRefPrefixes {
+		if strings.HasPrefix(ref, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// gapObservationIDs returns the distinct gap Refs among the observations (deterministic order).
+func gapObservationIDs(obs []dgx.Observation) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, o := range obs {
+		if isGapRef(o.Ref) && !seen[o.Ref] {
+			seen[o.Ref] = true
+			out = append(out, o.Ref)
+		}
+	}
+	return out
+}
+
+// filterDueObservations keeps every non-gap observation plus the gaps that are DUE this sweep;
+// the backed-off gaps are dropped (they return once overdue). Order-preserving.
+func filterDueObservations(obs []dgx.Observation, due map[string]bool) []dgx.Observation {
+	out := make([]dgx.Observation, 0, len(obs))
+	for _, o := range obs {
+		if !isGapRef(o.Ref) || due[o.Ref] {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// gapIDForCandidate returns the exploration gap a candidate addresses — its subject if that is
+// a gap ref, else its first gap-prefixed evidence ref — or "" if none. Feeds the Recurrence
+// support count (slice 1) and the human-rejection backoff (decideGovernance).
+func gapIDForCandidate(c candidate.Candidate) string {
+	if isGapRef(c.Subject) {
+		return c.Subject
+	}
+	for _, e := range c.Evidence {
+		if isGapRef(e.Ref) {
+			return e.Ref
+		}
+	}
+	return ""
+}
+
+// gapAttemptsMap snapshots the gap-state attempt counts (gap_id → attempts) so the governance
+// surface can fold each candidate's recurrence into its deterministic Support. Best-effort:
+// a read error yields an empty map (recurrence simply shows 0).
+func gapAttemptsMap(cs *candidate.Store) map[string]int {
+	states, err := cs.ListGapStates()
+	if err != nil {
+		return nil
+	}
+	m := make(map[string]int, len(states))
+	for _, g := range states {
+		m[g.GapID] = g.AttemptCount
+	}
+	return m
+}
+
+// dgxPhenomenonInterval is the cadence the deterministic phenomenon-candidate producer
+// re-reads the unexplained curation reports. The reports change slowly (recurrence
+// aggregation), so a relaxed cadence is plenty; re-Put is idempotent (content-id dedup).
+const dgxPhenomenonInterval = 60 * time.Second
+
+// phenomenonCandidateLoop is the anomaly→phenomenon producer (doc 21 Phase 4): each interval it
+// reads the unexplained channel's RECURRING-anomaly curation reports (a DETERMINISTIC recurrence
+// aggregation, doc 08 §3.6 — never a model invention) and stages each as a phenomenon_candidate
+// in the firewalled candidate store, so a NAMED HUMAN can curate a recurring anomaly into a real
+// phenomenon via governance. Off the deterministic path; the system proposes, it never authors.
+func phenomenonCandidateLoop(ctx context.Context, logger *slog.Logger, cs *candidate.Store,
+	unexpView *atomic.Pointer[vapi.UnexplainedView], graphVersion string, every time.Duration) {
 	if every <= 0 {
-		every = 5 * time.Minute
+		every = dgxPhenomenonInterval
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			uv := unexpView.Load()
+			if uv == nil || len(uv.Candidates) == 0 {
+				continue
+			}
+			now := time.Now().UTC()
+			// DEDUP BY SIGNATURE (subject): a recurring anomaly is ONE decision. The recurrence
+			// `windows` count grows every eval tick, which would otherwise change the content id and
+			// stage a NEW row each cycle. Skip any signature already present (any status) so the
+			// queue holds exactly one candidate per recurring anomaly — and a rejected/promoted one
+			// is never re-proposed.
+			seen := map[string]bool{}
+			if rows, err := cs.List(candidate.Filter{Kind: candidate.KindPhenomenonCandidate}); err == nil {
+				for _, r := range rows {
+					seen[r.Subject] = true
+				}
+			}
+			staged := 0
+			for _, rep := range uv.Candidates {
+				subj := candidate.PhenomenonCandidateSubject(phenomenonSignature(rep))
+				if seen[subj] {
+					continue
+				}
+				if err := stagePhenomenonCandidate(cs, now, rep, graphVersion); err != nil {
+					logger.Warn("dgx phenomenon-candidate: stage failed (non-gating)", "err", err)
+					continue
+				}
+				seen[subj] = true
+				staged++
+			}
+			if staged > 0 {
+				logger.Info("dgx phenomenon-candidate producer (doc 21 Phase 4)", "staged", staged,
+					"note", "recurring unexplained anomalies proposed for human curation")
+			}
+		}
+	}
+}
+
+// stagePhenomenonCandidate converts ONE deterministic recurrence report into a staged
+// phenomenon_candidate. The signature (entity kind + sorted metric set) mirrors the unexplained
+// channel's recurrence key, so re-staging the same recurrence updates the row in place. Evidence
+// = the recurrence fact + each distinct entity that exhibited it (so the support chip reflects
+// the cross-entity reach). The report's Rationale is the recurrence fact, never a causal claim.
+// phenomenonSignature is the stable recurrence key (entity kind + sorted metric set) — mirrors
+// the unexplained channel's signatureKey, and is the dedup subject for a recurring anomaly.
+func phenomenonSignature(rep unexplained.CandidateReport) string {
+	metrics := append([]string(nil), rep.Metrics...)
+	sort.Strings(metrics)
+	return rep.EntityKind + "\x1f" + strings.Join(metrics, ",")
+}
+
+func stagePhenomenonCandidate(cs *candidate.Store, now time.Time, rep unexplained.CandidateReport, graphVersion string) error {
+	metrics := append([]string(nil), rep.Metrics...)
+	sort.Strings(metrics)
+	sig := phenomenonSignature(rep)
+	prop := candidate.PhenomenonCandidateProposal{
+		Signature: sig, EntityKind: rep.EntityKind, Metrics: metrics,
+		Windows: rep.Windows, Entities: rep.Entities,
+	}
+	if err := candidate.ValidatePhenomenonCandidateProposal(prop); err != nil {
+		return err // a malformed report (no metrics / no recurrence) is skipped, never staged
+	}
+	payload := candidate.PhenomenonCandidatePayload(prop)
+	payload["rationale"] = rep.Rationale // the deterministic recurrence fact (no causal vocabulary)
+	ev := []candidate.EvidenceRef{{
+		Kind: "context:unexplained", Ref: "unexplained:" + sig,
+		Detail: fmt.Sprintf("recurring unexplained loudness across %d evaluation windows", rep.Windows),
+	}}
+	for _, e := range rep.Entities {
+		ev = append(ev, candidate.EvidenceRef{Kind: "context:entity", Ref: "entity:" + e, Detail: "exhibited the recurring loudness"})
+	}
+	c := candidate.Candidate{
+		Kind:     candidate.KindPhenomenonCandidate,
+		Subject:  candidate.PhenomenonCandidateSubject(sig),
+		Evidence: ev,
+		Lineage:  candidate.Lineage{Source: "unexplained-curation", Method: "recurrence-aggregation", GraphVersion: graphVersion},
+		Payload:  payload,
+	}
+	_, err := cs.Put(now, c)
+	return err
+}
+
+// dgxEnrichmentInterval / dgxEnrichmentPerCycle bound the agent-enrichment pass: a relaxed
+// cadence, a few LLM calls per cycle, so the PROJECTED hints accrue without burning the provider.
+const (
+	dgxEnrichmentInterval = 90 * time.Second
+	dgxEnrichmentPerCycle = 5
+)
+
+// phenomenonEnrichmentLoop is the agent-enrichment pass (doc 21 Phase 4 §C). For each PENDING
+// phenomenon candidate that has no model hint yet, it asks the agent for a human-readable label +
+// a non-causal description and attaches it as a PROJECTED Suggestion — a reviewer aid that is
+// DISCARDED at promotion (the named human authors the real label + detection). It NEVER touches
+// the deterministic candidate's identity/evidence (SetSuggestion is content-id-stable) and NEVER
+// authors detection. Gated on the agent being enabled (it needs the LLM); off the deterministic
+// path; honours the provider rate-limit; bounded calls per cycle.
+func phenomenonEnrichmentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, every time.Duration) {
+	if every <= 0 {
+		every = dgxEnrichmentInterval
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -1782,6 +2120,71 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 		case <-t.C:
 			now := time.Now().UTC()
 			if now.Before(rateLimitedUntil) {
+				continue
+			}
+			rows, err := cs.List(candidate.Filter{Kind: candidate.KindPhenomenonCandidate, Status: candidate.StatusCandidate})
+			if err != nil {
+				logger.Warn("dgx phenomenon enrichment: list failed (non-gating)", "err", err)
+				continue
+			}
+			enriched := 0
+			for _, c := range rows {
+				if enriched >= dgxEnrichmentPerCycle {
+					break
+				}
+				if c.Suggestion != nil {
+					continue // already enriched — one hint per candidate
+				}
+				prop, perr := candidate.ParsePhenomenonCandidatePayload(c.Payload)
+				if perr != nil || len(prop.Metrics) == 0 {
+					continue
+				}
+				sg, serr := agent.SuggestPhenomenon(ctx, prop.Metrics, prop.EntityKind)
+				if serr != nil {
+					if isRateLimited(serr) {
+						rateLimitedUntil = now.Add(dgxAgentRateLimitCooldown)
+						logger.Warn("dgx phenomenon enrichment rate-limited; backing off (non-gating)",
+							"cooldown", dgxAgentRateLimitCooldown.String(), "err", truncStr(serr.Error(), 200))
+						break
+					}
+					logger.Warn("dgx phenomenon enrichment failed (non-gating)", "subject", c.Subject, "err", truncStr(serr.Error(), 200))
+					continue
+				}
+				if err := cs.SetSuggestion(now, c.ID, &sg); err != nil {
+					logger.Warn("dgx phenomenon enrichment: set suggestion failed (non-gating)", "err", err)
+					continue
+				}
+				enriched++
+			}
+			if enriched > 0 {
+				logger.Info("dgx phenomenon enrichment (doc 21 Phase 4 §C)", "enriched", enriched,
+					"note", "PROJECTED label/description hints — discarded at promotion")
+			}
+		}
+	}
+}
+
+// dgxAgentLoop runs the LLM proposer over read-only context each interval and stages
+// the gated survivors (doc 20 P3). Off the deterministic path; the agent authors
+// nothing — it proposes, the gates filter, a human promotes later.
+func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, store *identity.Store, graphVersion string, knownGroups map[string]string,
+	depView *atomic.Pointer[vapi.DependencyView], silenceView *atomic.Pointer[vapi.SilenceLedgerView],
+	logsView *atomic.Pointer[vapi.LogTemplatesView], traceView *atomic.Pointer[vapi.TraceGraphView], eventsView *atomic.Pointer[vapi.EventsView],
+	explore <-chan dgx.ExplorationEvent, every time.Duration) {
+	if every <= 0 {
+		every = 5 * time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	var rateLimitedUntil time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			// SCHEDULED SWEEP: read every surface, skip backed-off gaps (slice 3), explore the rest.
+			now := time.Now().UTC()
+			if now.Before(rateLimitedUntil) {
 				continue // backing off after a provider rate-limit; no per-tick log spam
 			}
 			c := buildAgentContext(graphVersion, knownGroups, depView.Load(), silenceView.Load(), buildEntityRefs(store), unmappedStrayObservations(cs, dgxAgentStrayCap))
@@ -1789,30 +2192,91 @@ func dgxAgentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs
 			if len(c.Observations) == 0 {
 				continue
 			}
-			// doc 21 §2.2c: the agent reads its OWN prior proposals (promoted/rejected/pending)
-			// as memory so it does not re-propose what was already decided.
-			led := buildLedger(cs)
-			rep, err := agent.RunOnce(ctx, cs, now, c, led)
-			if err != nil {
-				if isRateLimited(err) {
-					// Provider quota exhausted (e.g. Groq tokens-per-day). Back off so we do
-					// NOT re-fire every tick for the whole quota window; log ONCE at WARN.
-					// Non-gating: detection, forecasting, and every other lane are unaffected,
-					// and the candidates already staged remain. Swap providers (DGX_BASE_URL /
-					// a paid tier / a local model) to remove the ceiling.
-					rateLimitedUntil = now.Add(dgxAgentRateLimitCooldown)
-					logger.Warn("dgx agent rate-limited; backing off (non-gating — detection/forecast unaffected)",
-						"cooldown", dgxAgentRateLimitCooldown.String(), "err", truncStr(err.Error(), 200))
-					continue
+			// doc 21 §3 Phase 3 slice 3: skip exploration gaps still inside their backoff window —
+			// re-examine a gap (an unmapped stray, a silence row, a modality lane) only once it is
+			// OVERDUE. A new gap (no gap_state row) is always due; an examined gap backs off
+			// base·2^(attempts-1). This bounds repeated LLM spend on gaps that keep yielding
+			// nothing, deterministically (no learned interval). Non-gap facts (associations) stay.
+			if gapIDs := gapObservationIDs(c.Observations); len(gapIDs) > 0 {
+				if due, derr := cs.DueGaps(now, gapIDs); derr != nil {
+					logger.Warn("dgx gap-state: due check failed (examining all gaps this sweep)", "err", derr)
+				} else {
+					c.Observations = filterDueObservations(c.Observations, due)
 				}
-				logger.Error("dgx agent run failed (non-gating)", "err", err)
+			}
+			dueGaps := gapObservationIDs(c.Observations)
+			if len(dueGaps) == 0 {
+				continue // every exploration gap is backing off — nothing new to examine this sweep
+			}
+			runAgentOnce(ctx, logger, agent, cs, now, c, dueGaps, every, &rateLimitedUntil, "sweep")
+		case ev := <-explore:
+			// EVENT TRIGGER (slice 4): a newly-seen unexplained card / k8s event / operational stray
+			// asks the agent to explore NOW — BYPASSING gap_state backoff (a genuinely new thing is
+			// worth a look even if its gap recently backed off). We still honour the provider
+			// rate-limit, and record a gap attempt after, so future SWEEPS back the gap off normally.
+			now := time.Now().UTC()
+			if now.Before(rateLimitedUntil) {
+				// Provider still in cooldown: drop this event (it is NOT re-queued — already
+				// dequeued). Non-gating: the underlying observation persists in the read-only
+				// surfaces and the next scheduled sweep re-examines it. Logged so the drop is never
+				// silent (honest partial coverage).
+				logger.Debug("dgx exploration: event dropped (provider rate-limited; the next sweep is the net)",
+					"kind", ev.Kind, "ref", ev.Ref, "cooldownUntil", rateLimitedUntil.UTC().Format(time.RFC3339))
 				continue
 			}
-			logger.Info("dgx agent run (doc 20 P3 + doc 21 Phase 2)", "provider", rep.Provider,
-				"proposed", rep.Proposed, "accepted", rep.Accepted, "rejected", len(rep.Rejected),
-				"toolCalls", rep.ToolCalls, "iterations", rep.Iterations, "note", rep.Note)
+			c := buildEventContext(graphVersion, knownGroups, buildEntityRefs(store), ev)
+			runAgentOnce(ctx, logger, agent, cs, now, c, []string{ev.Ref}, every, &rateLimitedUntil, "event:"+ev.Kind)
 		}
 	}
+}
+
+// runAgentOnce runs ONE agent pass over context c (a scheduled sweep or an event trigger),
+// handling provider rate-limits (extending *rateLimitedUntil) and advancing the gap_state
+// backoff for the examined gaps (slice 3). `trigger` labels the structured log. Non-gating:
+// any failure is logged and swallowed — detection/forecast never wait on the agent.
+func runAgentOnce(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, now time.Time, c dgx.Context, examinedGaps []string, every time.Duration, rateLimitedUntil *time.Time, trigger string) {
+	// doc 21 §2.2c: the agent reads its OWN prior proposals (promoted/rejected/pending) as memory
+	// so it does not re-propose what was already decided.
+	led := buildLedger(cs)
+	rep, err := agent.RunOnce(ctx, cs, now, c, led)
+	if err != nil {
+		if isRateLimited(err) {
+			// Provider quota exhausted (e.g. Groq tokens-per-day). Back off so we do NOT re-fire
+			// every tick for the whole quota window; log ONCE at WARN. Non-gating: detection,
+			// forecasting, and every other lane are unaffected, and the staged candidates remain.
+			*rateLimitedUntil = now.Add(dgxAgentRateLimitCooldown)
+			logger.Warn("dgx agent rate-limited; backing off (non-gating — detection/forecast unaffected)",
+				"cooldown", dgxAgentRateLimitCooldown.String(), "trigger", trigger, "err", truncStr(err.Error(), 200))
+			return
+		}
+		logger.Error("dgx agent run failed (non-gating)", "trigger", trigger, "err", err)
+		return
+	}
+	// slice 3: advance each examined gap's backoff (deterministic; injected `now`). The Recurrence
+	// count this builds surfaces in candidate Support (the review ranking).
+	for _, id := range examinedGaps {
+		if id == "" || !isGapRef(id) {
+			continue
+		}
+		if _, e := cs.RecordGapAttempt(now, id, "", every, candidate.GapBackoffCap); e != nil {
+			logger.Warn("dgx gap-state: record attempt failed (non-gating)", "gap", id, "err", e)
+		}
+	}
+	logger.Info("dgx agent run (doc 20 P3 + doc 21 Phase 2-3)", "provider", rep.Provider, "trigger", trigger,
+		"proposed", rep.Proposed, "accepted", rep.Accepted, "rejected", len(rep.Rejected), "thresholdGated", rep.ThresholdGated,
+		"toolCalls", rep.ToolCalls, "iterations", rep.Iterations, "gapsExamined", len(examinedGaps), "note", rep.Note)
+}
+
+// buildEventContext seeds a minimal agent context from one exploration event: the event as a
+// single observation plus the valid entity keys + the equivalence-group catalog. The agent's
+// read-only tools (Phase 2) gather any further evidence on demand, so the seed stays small.
+func buildEventContext(graphVersion string, knownGroups map[string]string, entities []candidate.EntityRef, ev dgx.ExplorationEvent) dgx.Context {
+	c := dgx.Context{GraphVersion: graphVersion, ValidEntities: make(map[string]bool, len(entities)), KnownGroups: knownGroups}
+	for _, e := range entities {
+		c.ValidEntities[e.Key] = true
+	}
+	c.Observations = []dgx.Observation{{Ref: ev.Ref, Kind: ev.Kind, Detail: ev.Detail}}
+	return c
 }
 
 // dgxAgentRateLimitCooldown pauses the LLM proposer after a provider rate-limit so it does
@@ -2354,7 +2818,7 @@ func dgxResolveLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingest
 // doc 12 §3.3) — the full provenance a human needs to decide, including the cited evidence
 // and (when decided) who decided + their authored note. main maps so api never imports
 // internal/candidate.
-func mapGovernanceItems(cs []candidate.Candidate) []vapi.GovernanceItem {
+func mapGovernanceItems(cs []candidate.Candidate, gapAttempts map[string]int) []vapi.GovernanceItem {
 	out := make([]vapi.GovernanceItem, 0, len(cs))
 	for _, c := range cs {
 		ev := make([]vapi.GovernanceEvidence, 0, len(c.Evidence))
@@ -2362,10 +2826,18 @@ func mapGovernanceItems(cs []candidate.Candidate) []vapi.GovernanceItem {
 			ev = append(ev, vapi.GovernanceEvidence{Kind: e.Kind, Ref: e.Ref, Detail: e.Detail})
 		}
 		rationale, _ := c.Payload["rationale"].(string)
+		// Deterministic MEASURED support (doc 21 §4): a struct of counts, computed in main
+		// (api never imports candidate). Recurrence = how many times the agent re-examined this
+		// candidate's exploration gap (gap_state attempts, slice 3) — a count, never a confidence.
+		sup := candidate.Score(c, gapAttempts[gapIDForCandidate(c)])
 		it := vapi.GovernanceItem{
 			ID: c.ID, Kind: string(c.Kind), Status: string(c.Status), Subject: c.Subject,
 			Relation: c.Relation, Source: c.Lineage.Source, Method: c.Lineage.Method,
 			GraphVersion: c.Lineage.GraphVersion, Rationale: rationale, Evidence: ev,
+			Support: vapi.GovernanceSupport{
+				EvidenceCount: sup.EvidenceCount, CaptureSample: sup.CaptureSample,
+				Recurrence: sup.Recurrence, DistinctEntities: sup.DistinctEntities, AgeSeconds: sup.AgeSeconds,
+			},
 			DecidedBy: c.DecidedBy, Note: c.Note, CreatedAt: c.CreatedAt,
 			// A pure k8s object-metadata stray is non-actionable: counted, but kept out of the
 			// human review queue (the deterministic classifier owns this; api never imports us).
@@ -2375,6 +2847,14 @@ func mapGovernanceItems(cs []candidate.Candidate) []vapi.GovernanceItem {
 			t := c.DecidedAt
 			it.DecidedAt = &t
 		}
+		// PROJECTED agent enrichment (doc 21 Phase 4 §C): surface the model's suggested label +
+		// description as a HINT. It is discarded at promotion (never AUTHORED) — the UI labels it.
+		if c.Suggestion != nil {
+			it.SuggestedLabel = c.Suggestion.Label
+			it.SuggestedDescription = c.Suggestion.Description
+			it.SuggestedSeverity = c.Suggestion.Severity
+			it.SuggestedBy = c.Suggestion.Model
+		}
 		out = append(out, it)
 	}
 	return out
@@ -2383,7 +2863,7 @@ func mapGovernanceItems(cs []candidate.Candidate) []vapi.GovernanceItem {
 // decideGovernance records a NAMED HUMAN's promote/reject decision and, on a promotion,
 // renders the committable AUTHORED overlay artifact (doc 12 §3.3 — the human owns the call;
 // the system never approves). It never mutates the released graph (the firewall holds).
-func decideGovernance(cs *candidate.Store, graphVersion string, logger *slog.Logger, req vapi.GovernanceDecisionRequest) vapi.GovernanceDecisionResult {
+func decideGovernance(cs *candidate.Store, graphVersion string, logger *slog.Logger, gapBase time.Duration, req vapi.GovernanceDecisionRequest) vapi.GovernanceDecisionResult {
 	var st candidate.Status
 	switch req.Decision {
 	case "promote":
@@ -2407,8 +2887,111 @@ func decideGovernance(cs *candidate.Store, graphVersion string, logger *slog.Log
 		res.Message = "promoted by " + req.DecidedBy + " — commit the overlay artifact through the release governance gate (it does not auto-load)"
 		logger.Info("governance: candidate promoted (doc 12 §3.3 — named human owns the call)", "id", req.CandidateID, "by", req.DecidedBy)
 	} else {
+		// slice 3: a named human's rejection lengthens this candidate's exploration-gap backoff,
+		// so the agent does not re-surface the same rejected gap every sweep. Best-effort + non-gating.
+		if gapBase > 0 {
+			if c, found, gerr := cs.Get(req.CandidateID); gerr == nil && found {
+				if gap := gapIDForCandidate(*c); gap != "" {
+					if e := cs.RecordGapRejection(now, gap, "human rejected: "+truncStr(req.Note, 80), gapBase, candidate.GapBackoffCap); e != nil {
+						logger.Warn("dgx gap-state: record rejection failed (non-gating)", "gap", gap, "err", e)
+					}
+				}
+			}
+		}
 		res.Message = "rejected by " + req.DecidedBy
 		logger.Info("governance: candidate rejected", "id", req.CandidateID, "by", req.DecidedBy)
+	}
+	return res
+}
+
+// previewAuthorPlaceholder / previewNotePlaceholder stand in for the named human's
+// attribution while PREVIEWING a still-pending candidate's overlay. They are clearly
+// non-authoritative: the real author + rationale are supplied only at promotion (the human
+// authors the note; the model's rationale is discarded). They exist only so the overlay
+// renderer — which rightly REQUIRES an author + note on a real promotion — can render the
+// structure for a read-only look.
+const (
+	previewAuthorPlaceholder = "‹you — the named human authors this at promotion›"
+	previewNotePlaceholder   = "‹you author the rationale at promotion (the model's is discarded)›"
+)
+
+// previewGovernance renders a READ-ONLY preview of what promoting a candidate would author
+// (doc 21 §4, Phase 3 slice 2): the exact overlay artifact, and — for an equivalence-group
+// candidate — the deterministic stray→group RESOLUTION delta computed on a scratch graph. It
+// NEVER mutates the candidate store or the live graph (it works on a COPY of the candidate
+// and a scratch copy of the graph's equivalence groups). The api never imports candidate, so
+// main does the parsing and hands governance plain inputs.
+func previewGovernance(cs *candidate.Store, g *graph.Graph, graphVersion, candidateID string) *vapi.GovernancePreviewResult {
+	c, found, err := cs.Get(candidateID)
+	if err != nil {
+		return &vapi.GovernancePreviewResult{OK: false, CandidateID: candidateID, Message: "lookup failed: " + err.Error()}
+	}
+	if !found {
+		return &vapi.GovernancePreviewResult{OK: false, CandidateID: candidateID, Message: "no such candidate"}
+	}
+	res := &vapi.GovernancePreviewResult{OK: true, CandidateID: candidateID, Kind: string(c.Kind)}
+
+	// Render the EXACT overlay a promotion would author, on a COPY (the store row is untouched).
+	// Author + note are PLACEHOLDERS the named human fills at promotion — the overlay renderer
+	// rightly requires them, but a preview is not an authored act.
+	preview := *c
+	preview.Status = candidate.StatusPromoted
+	if preview.DecidedBy == "" {
+		preview.DecidedBy = previewAuthorPlaceholder
+	}
+	if strings.TrimSpace(preview.Note) == "" {
+		preview.Note = previewNotePlaceholder
+	}
+	if y, yerr := candidate.PromotedOverlayYAML(preview, graphVersion); yerr == nil {
+		res.OverlayYAML = y
+	} else {
+		res.Message = "overlay preview unavailable: " + yerr.Error()
+	}
+
+	if c.Kind == candidate.KindEquivGroup {
+		res.MovesCoverage = true
+		res.Caveat = "Promoting authors a dialect regex into the equivalence group — the metric (and the others the " +
+			"pattern captures) stop being strays and resolve to the canonical variable. This is the one promotion that " +
+			"moves MEASURED coverage (doc 21 §5). Full per-phenomenon observability impact appears in the binding diff after you commit + reload."
+		if prop, perr := candidate.ParseEquivGroupPayload(c.Payload); perr == nil {
+			in := governance.EquivGroupPreviewInput{Pattern: prop.Pattern}
+			if prop.GroupID != "" {
+				in.TargetGroupID = prop.GroupID
+			} else if prop.NewGroup != nil {
+				in.NewGroupID = prop.NewGroup.ID
+				in.NewCanonical = prop.NewGroup.CanonicalOTel
+				in.NewLabel = prop.NewGroup.Label
+			}
+			// Scope = the focal metric + the strays the pattern captured at proposal time.
+			in.ScopeMetrics = append([]string{prop.Metric}, prop.CaptureSample...)
+			if pv, gerr := governance.PreviewEquivGroupPromotion(g, in); gerr == nil {
+				res.Equiv = &vapi.GovernanceEquivPreview{
+					GroupID: pv.GroupID, DefinesNewGroup: pv.DefinesNewGroup, Canonical: in.NewCanonical,
+					Pattern: pv.Pattern, NewlyResolved: pv.NewlyResolved,
+					AlreadyResolved: pv.AlreadyResolved, StillUnresolved: pv.StillUnresolved,
+				}
+			} else {
+				// Honest partial coverage: APPEND, never overwrite — if the overlay render also
+				// failed (res.Message already set), surface BOTH so no failure is masked.
+				if res.Message == "" {
+					res.Message = "coverage preview unavailable: " + gerr.Error()
+				} else {
+					res.Message += "; also coverage preview unavailable: " + gerr.Error()
+				}
+			}
+		}
+	} else if c.Kind == candidate.KindPhenomenonCandidate {
+		// A phenomenon candidate authors a CorrelationGroup NODE (a starting skeleton). No detection
+		// condition is implied — the human authors the member roles + a check + a DECLARED bar before
+		// it can ever fire, so promotion alone moves NO MEASURED coverage.
+		res.Caveat = "Promoting authors a candidate phenomenon NODE (a CorrelationGroup skeleton) from this recurring " +
+			"anomaly. It implies NO detection: you author the member roles, a detection check, and a DECLARED bar before it " +
+			"can fire. On its own it moves no MEASURED coverage — it opens a phenomenon for you to curate. The system proposes; it never authors detection."
+	} else {
+		// Every other promotion authors a graph RELATIONSHIP (identity/topology/co-occurrence);
+		// it never binds a metric to a bar, so it does not move MEASURED coverage on its own.
+		res.Caveat = "Promoting authors a graph relationship (identity / topology / co-occurrence). It does NOT bind any " +
+			"metric to a bar, so on its own it does not move MEASURED coverage or make any metric watched — that needs a separate authored detection rule."
 	}
 	return res
 }

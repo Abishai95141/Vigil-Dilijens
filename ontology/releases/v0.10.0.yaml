@@ -1,0 +1,51 @@
+# Graph release v0.10.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.10.0
+graph_version: "sha256:1caf5586bebb63360dec914c53dcdb04b1e724ef890f1b139a552b21f7e5881e"
+created: "2026-06-20"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - disk-filling-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Authors a `severity` field on every phenomenon (doc 21 Phase 5) — the
+  prioritisation input governance and the agent use to rank the dark-but-dangerous
+  set by HARM rather than by ease-of-wiring. Severity is AUTHORED (borrowed
+  normativity — the curator declares how severe a phenomenon is when it fires),
+  never learned and never model-assigned, from a closed vocabulary
+  critical > high > medium > low ("" = undeclared, honest partial coverage). All
+  38 phenomena are curated here: critical (8) = the cluster-wide / control-plane /
+  cert / node-down / data-loss family (APISERVER_OVERLOAD_APF, CERT_EXPIRY,
+  CNI_FAILURE, DNS_FAILURE, ETCD_SLOW_PATH, NODE_NOT_READY, OOM_KILL_SYSTEM,
+  SCHEDULING_FAILURE); high (19) = workload-down / cascading / data-at-risk / node
+  resource exhaustion; medium (10) = single-workload degradation + instability;
+  low (1) = housekeeping (IMAGE_GC_EVENTS). RANKING ONLY, never a detection gate:
+  detection ignores severity, so the per-tick replay digest is byte-identical and
+  every cluster behaves exactly as under v0.9.0 — this is a pure metadata /
+  prioritisation release. The BASE KG stays immutable (as it has across every
+  release): severity is authored in a new OVERLAY, phenomenon-severity-v1.yaml — a
+  phenomenon-id → level map applied to the existing phenomena exactly like the span
+  declarations in spans-v1.yaml. The graph hash bumps v0.9.0→v0.10.0 because the
+  overlay set changed; every prior release stays loadable. graph.Phenomenon gains
+  the Severity field (graph/graph.go) with the closed-vocabulary helpers
+  IsValidSeverity + SeverityRank; the overlay loader (graph/overlay.go) applies the
+  phenomenon_severity block and rejects an unknown level / a missing phenomenon /
+  a conflicting re-declaration loudly (an authoring defect is never silently accepted).

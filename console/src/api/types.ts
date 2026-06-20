@@ -68,6 +68,7 @@ export interface CoverageSummary {
 export interface PhenomenonRow {
   id: string;
   label: string;
+  severity?: string;         // AUTHORED harm level (doc 21 Phase 5): critical|high|medium|low; absent = undeclared
   observability: string;     // "full" | "partial" | "none"
   requiredTotal: number;
   requiredObservable: number; // NOTE: Go field RequiredOk, json tag "requiredObservable"
@@ -1146,6 +1147,17 @@ export interface GovernanceEvidence {
   detail?: string;
 }
 
+// A candidate's DETERMINISTIC support (doc 21 §4): integer COUNTS of agreed MEASURED facts —
+// NEVER a model confidence, a weighted sum, or a 0-1 score. Render the counts verbatim and
+// rank by the lexicographic tuple; never show a percentage or a synthesized score.
+export interface GovernanceSupport {
+  evidenceCount: number;
+  captureSample: number;
+  recurrence: number;
+  distinctEntities: number;
+  ageSeconds: number;
+}
+
 // One candidate as the review surface presents it — full provenance to decide.
 export interface GovernanceItem {
   id: string;
@@ -1158,6 +1170,14 @@ export interface GovernanceItem {
   graphVersion?: string;
   rationale?: string;           // the MODEL's proposed note (PROPOSED context; discarded at promotion)
   evidence: GovernanceEvidence[];
+  support: GovernanceSupport;   // deterministic MEASURED support — counts, never a confidence
+  // PROJECTED agent enrichment (doc 21 Phase 4 §C): a model-suggested human-readable label +
+  // non-causal description for a recurring-anomaly phenomenon candidate. A HINT, discarded at
+  // promotion (the human authors the real label); asserts no cause, drives no detection.
+  suggestedLabel?: string;
+  suggestedDescription?: string;
+  suggestedSeverity?: string;   // a SUGGESTED harm level (hint, discarded at promotion)
+  suggestedBy?: string;         // the model that produced the hint
   decidedBy?: string;           // the named human (when decided)
   note?: string;                // the human's AUTHORED note
   decidedAt?: string;           // RFC3339
@@ -1188,4 +1208,31 @@ export interface GovernanceDecisionResult {
   status?: string;              // promoted | rejected
   overlayYaml?: string;
   message: string;
+}
+
+// The deterministic stray→group RESOLUTION delta an equivalence-group promotion would
+// produce (doc 21 §4-5) — each list is a set of MEASURED metric names, a count of facts,
+// never a confidence. Computed read-only on a scratch graph.
+export interface GovernanceEquivPreview {
+  groupId: string;
+  definesNewGroup: boolean;
+  canonical?: string;
+  pattern: string;
+  newlyResolved: string[];      // strays UNRESOLVED now → RESOLVED after promotion (the coverage move)
+  alreadyResolved: string[];    // scope metrics that already resolve (pattern redundant for them)
+  stillUnresolved: string[];    // scope metrics the pattern still would not match (honest residue)
+}
+
+// GET /api/governance/preview?candidateId=… — a READ-ONLY look at what promoting a
+// candidate would author. Never mutates the store or the graph. The overlay's author/note
+// are placeholders the named human fills at promotion.
+export interface GovernancePreviewResult {
+  ok: boolean;
+  candidateId: string;
+  kind?: string;
+  movesCoverage: boolean;       // true ONLY for equiv_group — the one promotion that moves MEASURED coverage
+  overlayYaml?: string;
+  equiv?: GovernanceEquivPreview;
+  caveat?: string;
+  message?: string;
 }

@@ -116,9 +116,9 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	}
 	// The production overlay glob (experimental/ excluded): cross-service-v0, spans-v1,
 	// threshold-rules-v1..v6, detect-conditions-v1..v7 = 15; + disk-filling-v1 (v0.9.0,
-	// the hanging-signal wire) = 16.
-	if len(ovls) != 16 {
-		t.Fatalf("overlays = %d, want 16", len(ovls))
+	// the hanging-signal wire) = 16; + phenomenon-severity-v1 (v0.10.0, Phase 5) = 17.
+	if len(ovls) != 17 {
+		t.Fatalf("overlays = %d, want 17", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {

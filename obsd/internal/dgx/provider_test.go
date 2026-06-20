@@ -49,6 +49,39 @@ func TestChatProviderRequestAndParse(t *testing.T) {
 	}
 }
 
+// SetMaxTokens + SetExtraBody reach the wire: the request carries the bumped max_tokens and
+// the merged provider-specific field (e.g. DeepSeek's thinking-off toggle).
+func TestChatProviderMaxTokensAndExtraBody(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"{\"proposals\":[]}"}}]}`)
+	}))
+	defer srv.Close()
+	p := dgx.NewOpenAICompatibleProvider("test", srv.URL, "k", "m")
+	p.SetMaxTokens(4000)
+	p.SetExtraBody(map[string]any{"thinking": map[string]any{"type": "disabled"}})
+	if _, err := p.Complete(context.Background(), "s", "u"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"max_tokens":4000`, `"thinking":{"type":"disabled"}`} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("request body missing %q\nbody: %s", want, gotBody)
+		}
+	}
+	// A zero/nil override is ignored (keeps the default budget) — no panic, no field set.
+	p.SetMaxTokens(0)
+	p.SetExtraBody(nil)
+	if _, err := p.Complete(context.Background(), "s", "u"); err != nil {
+		t.Fatalf("zero/nil overrides must be harmless: %v", err)
+	}
+	if !strings.Contains(gotBody, `"max_tokens":4000`) {
+		t.Error("SetMaxTokens(0) should NOT reset the prior 4000 override")
+	}
+}
+
 func TestChatProviderStatusError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)

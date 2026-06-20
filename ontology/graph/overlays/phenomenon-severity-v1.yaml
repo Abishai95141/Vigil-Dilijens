@@ -1,0 +1,64 @@
+# Phenomenon severity declarations — authored overlay v1 (doc 21 Phase 5).
+#
+# AUTHORED-class content. The base KG (k8s_signal_kg.json) is a clean vendored
+# mirror; authored deltas — like the span declarations in spans-v1.yaml — live in
+# overlays and merge deterministically at load (obsd/internal/graph) and at lint
+# (tools/graphlint). The base stays IMMUTABLE; this file adds the severity field.
+#
+# Severity is the harm-prioritisation input governance and the agent use to rank
+# the dark-but-dangerous set by HARM, not by ease-of-wiring (doc 21 §1.2). It is
+# BORROWED NORMATIVITY: the curator declares how severe a phenomenon is when it
+# fires — never learned, never model-assigned. Closed vocabulary, ordered by harm:
+# critical > high > medium > low. RANKING ONLY — detection ignores severity, so the
+# per-tick replay digest is byte-identical; this is a pure prioritisation delta.
+#
+#   critical (8): cluster-wide / control-plane / cert / node-down / data-loss
+#   high (19):    workload-down / cascading / data-at-risk / node resource exhaustion
+#   medium (10):  single-workload degradation + instability
+#   low (1):      housekeeping
+overlay: phenomenon-severity
+version: 1
+author: vigil-engineering
+phenomenon_severity:
+  # critical
+  PHEN_APISERVER_OVERLOAD_APF: critical
+  PHEN_CERT_EXPIRY: critical
+  PHEN_CNI_FAILURE: critical
+  PHEN_DNS_FAILURE: critical
+  PHEN_ETCD_SLOW_PATH: critical
+  PHEN_NODE_NOT_READY: critical
+  PHEN_OOM_KILL_SYSTEM: critical
+  PHEN_SCHEDULING_FAILURE: critical
+  # high
+  PHEN_CONNTRACK_EXHAUSTION: high
+  PHEN_CRI_ERRORS: high
+  PHEN_DISK_PID_INODE_PRESSURE: high
+  PHEN_ETCD_COMPACTION_LAG: high
+  PHEN_EVICTION_MEMORY: high
+  PHEN_IMAGE_PULL_FAILURE: high
+  PHEN_INIT_CONTAINER_FAILURE: high
+  PHEN_KUBELET_API_CONNECTION: high
+  PHEN_MEMORY_LEAK: high
+  PHEN_NETWORK_IMPAIRMENT: high
+  PHEN_OOM_KILL_CGROUP: high
+  PHEN_PLEG_HANGS: high
+  PHEN_POD_STUCK_TERMINATING: high
+  PHEN_PROBE_CASCADE_META: high
+  PHEN_PROBE_FAILURE_RESTART: high
+  PHEN_RUNTIME_IO_STALL: high
+  PHEN_STORAGE_SATURATION: high
+  PHEN_THROTTLING_CASCADE: high
+  PHEN_VOLUME_MOUNT_FAILURE: high
+  # medium
+  PHEN_ARP_NEIGHBOR: medium
+  PHEN_DNS_CACHE_THRASH: medium
+  PHEN_HPA_FLAPPING: medium
+  PHEN_KUBE_PROXY_SYNC_SLOW: medium
+  PHEN_MEMORY_HIGH_THROTTLE: medium
+  PHEN_MESH_CIRCUIT_BREAKER: medium
+  PHEN_NETWORK_POLICY_DROPS: medium
+  PHEN_PDB_VIOLATION: medium
+  PHEN_POD_OVERHEAD_SANDBOX: medium
+  PHEN_WEBHOOK_LATENCY: medium
+  # low
+  PHEN_IMAGE_GC_EVENTS: low

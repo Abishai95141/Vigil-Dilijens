@@ -13,6 +13,7 @@ import type {
   EventsView,
   FindingsResponse,
   GovernanceDecisionResult,
+  GovernancePreviewResult,
   GovernanceView,
   IncidentsView,
   InsightsView,
@@ -99,6 +100,13 @@ export const decideGovernance = (
     decidedBy,
     note,
   });
+// A READ-ONLY preview (doc 21 §4) of what promoting a candidate would author — the overlay,
+// plus (for an equiv_group candidate) the deterministic stray→group resolution delta. On
+// demand (per candidate), never polled; never mutates anything.
+export const previewGovernance = (candidateId: string) =>
+  getJson<GovernancePreviewResult>(
+    `/api/governance/preview?candidateId=${encodeURIComponent(candidateId)}`,
+  );
 export const askChat = (question: string) => postJson<ChatResponse>("/api/chat", { question });
 
 // ── MCP JSON-RPC client ──────────────────────────────────────────────────────

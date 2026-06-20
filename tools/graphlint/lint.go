@@ -36,6 +36,7 @@ type kgNode struct {
 	Span     string `json:"span" yaml:"span"`
 	Modality string `json:"modality" yaml:"modality"`
 	DataType string `json:"data_type" yaml:"data_type"`
+	Severity string `json:"severity" yaml:"severity"` // AUTHORED phenomenon prioritisation (doc 21 Phase 5)
 }
 
 type kgEdge struct {
@@ -51,6 +52,16 @@ type kgEdge struct {
 type kgDoc struct {
 	Nodes []kgNode `json:"nodes" yaml:"nodes"`
 	Edges []kgEdge `json:"edges" yaml:"edges"`
+}
+
+// validSeverity mirrors graph.IsValidSeverity (graphlint cannot import obsd/internal/graph —
+// the internal-package rule). The closed AUTHORED severity vocabulary (doc 21 Phase 5).
+func validSeverity(s string) bool {
+	switch s {
+	case "", "critical", "high", "medium", "low":
+		return true
+	}
+	return false
 }
 
 // RefError is a referential-integrity violation (a dangling or mistyped endpoint).
@@ -210,6 +221,14 @@ func lintFile(sch *jsonschema.Schema, path string, ovls []overlayDoc) (fileResul
 	res := fileResult{path: path}
 	if err := sch.Validate(inst); err != nil {
 		res.schemaErrors = append(res.schemaErrors, err.Error())
+	}
+	// doc 21 Phase 5: a phenomenon's AUTHORED severity must be a declared level or empty. An
+	// unknown value is a curator typo — a hard error (a defective authored prioritisation).
+	for _, n := range doc.Nodes {
+		if n.Type == "CorrelationGroup" && !validSeverity(n.Severity) {
+			res.schemaErrors = append(res.schemaErrors,
+				fmt.Sprintf("phenomenon %q: severity %q is not critical|high|medium|low (or empty) (doc 21 Phase 5)", n.ID, n.Severity))
+		}
 	}
 	res.refErrors, res.refWarnings, res.refErrTotal, res.refWarnTotal = referentialIntegrity(doc)
 	res.overlayErrors = validateOverlays(doc, ovls)

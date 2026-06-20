@@ -29,6 +29,19 @@ type GovernanceEvidence struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// GovernanceSupport is a candidate's DETERMINISTIC support (doc 21 §4): a struct of integer
+// COUNTS of agreed MEASURED facts, NEVER a model confidence, a weighted sum, or a 0-1 score.
+// The review UI ranks by the lexicographic tuple of these counts and renders them verbatim
+// ("3 evidence · captures 7 strays · seen 2×") — it must never display a percentage or a
+// synthesized score. main computes it via candidate.Score (api never imports internal/candidate).
+type GovernanceSupport struct {
+	EvidenceCount    int   `json:"evidenceCount"`
+	CaptureSample    int   `json:"captureSample"`
+	Recurrence       int   `json:"recurrence"`
+	DistinctEntities int   `json:"distinctEntities"`
+	AgeSeconds       int64 `json:"ageSeconds"`
+}
+
 // GovernanceItem is one candidate as the review surface presents it — the full provenance
 // the human needs to decide: what is proposed, by which producer, on what evidence, and (if
 // decided) who decided + their authored note.
@@ -43,10 +56,19 @@ type GovernanceItem struct {
 	GraphVersion string               `json:"graphVersion,omitempty"`
 	Rationale    string               `json:"rationale,omitempty"` // the MODEL's proposed note (PROPOSED, for context; discarded at promotion)
 	Evidence     []GovernanceEvidence `json:"evidence"`
-	DecidedBy    string               `json:"decidedBy,omitempty"`
-	Note         string               `json:"note,omitempty"`
-	DecidedAt    *time.Time           `json:"decidedAt,omitempty"`
-	CreatedAt    time.Time            `json:"createdAt"`
+	Support      GovernanceSupport    `json:"support"` // deterministic MEASURED support (doc 21 §4) — counts, never a confidence
+	// PROJECTED agent enrichment (doc 21 Phase 4 §C): a human-readable label + non-causal
+	// description the model SUGGESTS for a recurring-anomaly phenomenon candidate, to help the
+	// reviewer. It is a HINT — discarded at promotion (the human authors the real label), it
+	// asserts no cause and drives no detection. Empty when there is no suggestion.
+	SuggestedLabel       string     `json:"suggestedLabel,omitempty"`
+	SuggestedDescription string     `json:"suggestedDescription,omitempty"`
+	SuggestedSeverity    string     `json:"suggestedSeverity,omitempty"` // a SUGGESTED harm level (hint, discarded at promotion)
+	SuggestedBy          string     `json:"suggestedBy,omitempty"`       // the model that produced the hint (provenance)
+	DecidedBy            string     `json:"decidedBy,omitempty"`
+	Note                 string     `json:"note,omitempty"`
+	DecidedAt            *time.Time `json:"decidedAt,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
 	// Actionable reports whether this candidate is worth a human mapping decision. A pending
 	// candidate that is NOT actionable (a pure k8s object-metadata stray) is kept out of the
 	// review queue but still counted — see GovernanceView.SuppressedMetadata. main sets this
@@ -131,4 +153,34 @@ type GovernanceDecisionResult struct {
 	Status      string `json:"status,omitempty"` // promoted | rejected
 	OverlayYAML string `json:"overlayYaml,omitempty"`
 	Message     string `json:"message"`
+}
+
+// GovernanceEquivPreview is the deterministic stray→group RESOLUTION delta a (still pending)
+// equivalence-group promotion WOULD produce — computed read-only on a scratch graph (doc 21
+// §4-5, Phase 3 slice 2). Every list is a set of MEASURED metric names: a COUNT of facts,
+// never a confidence. The equiv_group promotion is the one that moves MEASURED coverage, so
+// the operator sees the move (which strays the pattern absorbs) BEFORE committing.
+type GovernanceEquivPreview struct {
+	GroupID         string   `json:"groupId"`             // the group the pattern lands in (existing or new)
+	DefinesNewGroup bool     `json:"definesNewGroup"`     // true ⇒ a brand-new group is defined
+	Canonical       string   `json:"canonical,omitempty"` // canonical OTel variable (for a new group)
+	Pattern         string   `json:"pattern"`             // the proposed dialect regex
+	NewlyResolved   []string `json:"newlyResolved"`       // strays UNRESOLVED now → RESOLVED after (the coverage move)
+	AlreadyResolved []string `json:"alreadyResolved"`     // scope metrics that already resolve (pattern redundant for them)
+	StillUnresolved []string `json:"stillUnresolved"`     // scope metrics the pattern still would not match (honest residue)
+}
+
+// GovernancePreviewResult is the GET /api/governance/preview response: a READ-ONLY look at
+// what promoting a candidate would author (the overlay) and, for an equivalence-group
+// candidate, the stray→group resolution delta. It NEVER mutates the candidate store or the
+// graph. The overlay's author/note are PLACEHOLDERS the named human fills at promotion.
+type GovernancePreviewResult struct {
+	OK            bool                    `json:"ok"`
+	CandidateID   string                  `json:"candidateId"`
+	Kind          string                  `json:"kind,omitempty"`
+	MovesCoverage bool                    `json:"movesCoverage"`         // true ONLY for equiv_group — the one promotion that moves MEASURED coverage
+	OverlayYAML   string                  `json:"overlayYaml,omitempty"` // the exact overlay a promotion would author (author/note are placeholders)
+	Equiv         *GovernanceEquivPreview `json:"equiv,omitempty"`       // the resolution delta (equiv_group only)
+	Caveat        string                  `json:"caveat,omitempty"`      // honest note on what this promotion does NOT do
+	Message       string                  `json:"message,omitempty"`
 }

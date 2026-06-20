@@ -18,12 +18,13 @@ import (
 type Kind string
 
 const (
-	KindNode             Kind = "node"              // a proposed node (e.g. a stray-metric provisional entity)
-	KindEdge             Kind = "edge"              // a proposed STRUCTURAL edge (never causal)
-	KindMember           Kind = "member"            // a proposed phenomenon member binding
-	KindBarSource        Kind = "bar_source"        // a proposed declared-config bar pointer
-	KindCausalHypothesis Kind = "causal_hypothesis" // a direction-free co-occurrence hypothesis (never a cause)
-	KindEquivGroup       Kind = "equiv_group"       // a proposed stray→equivalence-group mapping (doc 21 §5); promotion authors a regex the resolver absorbs
+	KindNode                Kind = "node"                 // a proposed node (e.g. a stray-metric provisional entity)
+	KindEdge                Kind = "edge"                 // a proposed STRUCTURAL edge (never causal)
+	KindMember              Kind = "member"               // a proposed phenomenon member binding
+	KindBarSource           Kind = "bar_source"           // a proposed declared-config bar pointer
+	KindCausalHypothesis    Kind = "causal_hypothesis"    // a direction-free co-occurrence hypothesis (never a cause)
+	KindEquivGroup          Kind = "equiv_group"          // a proposed stray→equivalence-group mapping (doc 21 §5); promotion authors a regex the resolver absorbs
+	KindPhenomenonCandidate Kind = "phenomenon_candidate" // a recurring unexplained anomaly proposed as a phenomenon for human curation (doc 21 Phase 4); promotion authors a phenomenon skeleton
 )
 
 // Status is the lifecycle position of a candidate. It is ORTHOGONAL to the three
@@ -66,6 +67,19 @@ type Lineage struct {
 	Inputs       []string `json:"inputs,omitempty"` // identifiers of the inputs consulted
 }
 
+// Suggestion is a PROJECTED model annotation on a candidate (doc 21 Phase 4 §C — agent
+// enrichment). It is NEVER part of the content identity (contentID ignores it) and is
+// DISCARDED at promotion — the named human authors the authoritative label/note/detection.
+// Currently it carries the agent's human-readable label + non-causal description for a
+// recurring-anomaly phenomenon candidate, to help the reviewer understand it. It never
+// becomes AUTHORED and never drives detection.
+type Suggestion struct {
+	Label       string `json:"label,omitempty"`       // a concise human-readable name (model's, not authoritative)
+	Description string `json:"description,omitempty"` // one line, non-causal — what the recurring pattern may represent
+	Severity    string `json:"severity,omitempty"`    // a SUGGESTED harm level (critical|high|medium|low); a hint, the human authors the real one
+	Model       string `json:"model,omitempty"`       // which provider produced it (provenance)
+}
+
 // Candidate is one staged proposal. ID is content-derived (deterministic, dedup-
 // stable): re-proposing the same content updates the row in place without losing its
 // lifecycle position.
@@ -84,8 +98,11 @@ type Candidate struct {
 	DecidedBy string    `json:"decidedBy,omitempty"` // the named human who promoted/rejected
 	Note      string    `json:"note,omitempty"`      // the human's AUTHORED note (the model's rationale is discarded at promotion)
 	DecidedAt time.Time `json:"decidedAt,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	// Suggestion is a PROJECTED model annotation (agent enrichment), set via SetSuggestion. It is
+	// OUTSIDE the content identity (contentID ignores it) and discarded at promotion. nil = none.
+	Suggestion *Suggestion `json:"suggestion,omitempty"`
+	CreatedAt  time.Time   `json:"createdAt"`
+	UpdatedAt  time.Time   `json:"updatedAt"`
 }
 
 // Filter selects candidates by lifecycle status and/or kind (empty fields match any).
@@ -112,11 +129,30 @@ CREATE TABLE IF NOT EXISTS candidates (
   decided_by    TEXT,
   note          TEXT,
   decided_at    TEXT,
+  suggestion_json TEXT,
   created_at    TEXT NOT NULL,
   updated_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS candidates_status ON candidates(status);
 CREATE INDEX IF NOT EXISTS candidates_kind   ON candidates(kind);
+
+-- gap_state (doc 21 §3, Phase 3 slice 3): the agent's deterministic revisit scheduler for
+-- exploration GAPS (an unmapped stray, a silence row, an unexplained card, an event). It holds
+-- only COUNTS + injected timestamps — no learned interval. The agent re-examines a gap only
+-- when next_revisit_at <= now; each look pushes next_revisit out by base * 2^min(attempts, cap)
+-- (pure arithmetic), so unproductive gaps back off exponentially instead of burning tokens
+-- every sweep. OFF the deterministic path (this whole store is firewalled).
+CREATE TABLE IF NOT EXISTS gap_state (
+  gap_id          TEXT PRIMARY KEY,
+  kind            TEXT NOT NULL,
+  attempt_count   INTEGER NOT NULL DEFAULT 0,
+  rejection_count INTEGER NOT NULL DEFAULT 0,
+  last_reason     TEXT,
+  first_seen_at   TEXT NOT NULL,
+  last_attempt_at TEXT NOT NULL,
+  next_revisit_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS gap_state_revisit ON gap_state(next_revisit_at);
 `
 
 // migrations bring an older candidates.db up to the current schema. ADD COLUMN is
@@ -126,6 +162,7 @@ var migrations = []string{
 	`ALTER TABLE candidates ADD COLUMN decided_by TEXT`,
 	`ALTER TABLE candidates ADD COLUMN note TEXT`,
 	`ALTER TABLE candidates ADD COLUMN decided_at TEXT`,
+	`ALTER TABLE candidates ADD COLUMN suggestion_json TEXT`,
 }
 
 // Store is the SQLite-backed candidate staging store. It is OUTSIDE the graph
@@ -210,7 +247,7 @@ ON CONFLICT(id) DO UPDATE SET
 // candidate and nil error) when no such row exists.
 func (s *Store) Get(id string) (*Candidate, bool, error) {
 	row := s.db.QueryRow(`
-SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, decided_by, note, decided_at, created_at, updated_at
+SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, decided_by, note, decided_at, suggestion_json, created_at, updated_at
 FROM candidates WHERE id = ?`, id)
 	c, err := scan(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -225,7 +262,7 @@ FROM candidates WHERE id = ?`, id)
 // List returns candidates matching the filter, ordered deterministically by
 // (created_at, id).
 func (s *Store) List(f Filter) ([]Candidate, error) {
-	q := `SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, decided_by, note, decided_at, created_at, updated_at FROM candidates`
+	q := `SELECT id, kind, status, subject, relation, payload_json, evidence_json, lineage_json, reason, decided_by, note, decided_at, suggestion_json, created_at, updated_at FROM candidates`
 	var conds []string
 	var args []any
 	if f.Status != "" {
@@ -311,6 +348,36 @@ func (s *Store) Decide(now time.Time, id string, st Status, decidedBy, note stri
 	return nil
 }
 
+// SetSuggestion attaches a PROJECTED model annotation (agent enrichment, doc 21 Phase 4 §C) to
+// an existing candidate WITHOUT changing its content identity, status, evidence, or lifecycle —
+// it is a reviewer hint, discarded at promotion. `now` is injected (advances updated_at). A nil
+// suggestion clears it. It is an error to annotate a missing id. The suggestion column is NOT in
+// contentID, so a later re-Put of the same content preserves it (the deterministic candidate is
+// untouched by the model annotation).
+func (s *Store) SetSuggestion(now time.Time, id string, sg *Suggestion) error {
+	var js any // SQL NULL when sg is nil
+	if sg != nil {
+		b, err := marshalJSON(*sg)
+		if err != nil {
+			return fmt.Errorf("candidate: marshal suggestion: %w", err)
+		}
+		js = b
+	}
+	res, err := s.db.Exec(`UPDATE candidates SET suggestion_json = ?, updated_at = ? WHERE id = ?`,
+		js, now.UTC().Format(sqlTime), id)
+	if err != nil {
+		return fmt.Errorf("candidate: set suggestion: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("candidate: set suggestion: no candidate %q", id)
+	}
+	return nil
+}
+
 // --- internals ---
 
 type scanner interface {
@@ -322,10 +389,10 @@ func scan(r scanner) (*Candidate, error) {
 		c                                              Candidate
 		kind, status, relation, payload, evi, lin, rsn string
 		decidedBy, note                                sql.NullString
-		decidedAt                                      sql.NullString
+		decidedAt, suggestion                          sql.NullString
 		created, updated                               string
 	)
-	if err := r.Scan(&c.ID, &kind, &status, &c.Subject, &relation, &payload, &evi, &lin, &rsn, &decidedBy, &note, &decidedAt, &created, &updated); err != nil {
+	if err := r.Scan(&c.ID, &kind, &status, &c.Subject, &relation, &payload, &evi, &lin, &rsn, &decidedBy, &note, &decidedAt, &suggestion, &created, &updated); err != nil {
 		return nil, err
 	}
 	c.Kind = Kind(kind)
@@ -334,6 +401,13 @@ func scan(r scanner) (*Candidate, error) {
 	c.Reason = rsn
 	c.DecidedBy = decidedBy.String
 	c.Note = note.String
+	if suggestion.Valid && suggestion.String != "" && suggestion.String != "null" {
+		var s Suggestion
+		if err := unmarshalJSON(suggestion.String, &s); err != nil {
+			return nil, fmt.Errorf("candidate: scan suggestion: %w", err)
+		}
+		c.Suggestion = &s
+	}
 	if err := unmarshalJSON(payload, &c.Payload); err != nil {
 		return nil, fmt.Errorf("candidate: scan payload: %w", err)
 	}
@@ -399,7 +473,7 @@ func validate(c Candidate) error {
 
 func knownKind(k Kind) bool {
 	switch k {
-	case KindNode, KindEdge, KindMember, KindBarSource, KindCausalHypothesis, KindEquivGroup:
+	case KindNode, KindEdge, KindMember, KindBarSource, KindCausalHypothesis, KindEquivGroup, KindPhenomenonCandidate:
 		return true
 	}
 	return false
