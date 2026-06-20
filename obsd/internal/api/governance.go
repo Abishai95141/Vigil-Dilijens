@@ -146,3 +146,33 @@ type GovernanceDecisionResult struct {
 	OverlayYAML string `json:"overlayYaml,omitempty"`
 	Message     string `json:"message"`
 }
+
+// GovernanceEquivPreview is the deterministic stray→group RESOLUTION delta a (still pending)
+// equivalence-group promotion WOULD produce — computed read-only on a scratch graph (doc 21
+// §4-5, Phase 3 slice 2). Every list is a set of MEASURED metric names: a COUNT of facts,
+// never a confidence. The equiv_group promotion is the one that moves MEASURED coverage, so
+// the operator sees the move (which strays the pattern absorbs) BEFORE committing.
+type GovernanceEquivPreview struct {
+	GroupID         string   `json:"groupId"`             // the group the pattern lands in (existing or new)
+	DefinesNewGroup bool     `json:"definesNewGroup"`     // true ⇒ a brand-new group is defined
+	Canonical       string   `json:"canonical,omitempty"` // canonical OTel variable (for a new group)
+	Pattern         string   `json:"pattern"`             // the proposed dialect regex
+	NewlyResolved   []string `json:"newlyResolved"`       // strays UNRESOLVED now → RESOLVED after (the coverage move)
+	AlreadyResolved []string `json:"alreadyResolved"`     // scope metrics that already resolve (pattern redundant for them)
+	StillUnresolved []string `json:"stillUnresolved"`     // scope metrics the pattern still would not match (honest residue)
+}
+
+// GovernancePreviewResult is the GET /api/governance/preview response: a READ-ONLY look at
+// what promoting a candidate would author (the overlay) and, for an equivalence-group
+// candidate, the stray→group resolution delta. It NEVER mutates the candidate store or the
+// graph. The overlay's author/note are PLACEHOLDERS the named human fills at promotion.
+type GovernancePreviewResult struct {
+	OK            bool                    `json:"ok"`
+	CandidateID   string                  `json:"candidateId"`
+	Kind          string                  `json:"kind,omitempty"`
+	MovesCoverage bool                    `json:"movesCoverage"`         // true ONLY for equiv_group — the one promotion that moves MEASURED coverage
+	OverlayYAML   string                  `json:"overlayYaml,omitempty"` // the exact overlay a promotion would author (author/note are placeholders)
+	Equiv         *GovernanceEquivPreview `json:"equiv,omitempty"`       // the resolution delta (equiv_group only)
+	Caveat        string                  `json:"caveat,omitempty"`      // honest note on what this promotion does NOT do
+	Message       string                  `json:"message,omitempty"`
+}

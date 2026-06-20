@@ -63,12 +63,23 @@ type Params struct {
 	// MaxToolResultChars caps one tool result rendered into the prompt (keeps the running
 	// context under the model's TPM limit across turns). 0 ⇒ the default.
 	MaxToolResultChars int
+	// MinSupport is the DECLARED support floor (doc 21 §3 Phase 3 slice 5): a proposal whose
+	// deterministic agreed-evidence support count is below this is rejected BEFORE staging — a
+	// stronger bar than MinEvidence for operators who want only well-corroborated proposals to
+	// reach a human. 0 ⇒ OFF (no regression: MinEvidence still applies). NEVER a learned
+	// threshold — a count of agreed MEASURED facts compared to a declared integer.
+	MinSupport int
+	// MinCaptureSample is the equiv_group-specific floor: a stray→group mapping whose proposed
+	// pattern absorbs fewer than this many seen strays is rejected (it would author a one-off
+	// pattern, not a real dialect bridge). 0 ⇒ OFF.
+	MinCaptureSample int
 }
 
 // DefaultParams: cite ≥1 grounded fact; at most 20 accepted per run; ~6k-char context
 // budget; ≤4 tool turns with ≤1500-char tool results (the Phase-2 retrieval loop stays
-// bounded under typical model TPM limits, surfaced live against the boutique).
-var DefaultParams = Params{MinEvidence: 1, MaxProposals: 20, MaxContextChars: 6000, MaxToolIterations: 4, MaxToolResultChars: 1500}
+// bounded under typical model TPM limits, surfaced live against the boutique). The threshold
+// floors (MinSupport, MinCaptureSample) ship OFF (0) — opt-in, so there is no regression.
+var DefaultParams = Params{MinEvidence: 1, MaxProposals: 20, MaxContextChars: 6000, MaxToolIterations: 4, MaxToolResultChars: 1500, MinSupport: 0, MinCaptureSample: 0}
 
 // Rejection records why a proposal was discarded (auditable, never silent).
 type Rejection struct {
@@ -78,13 +89,14 @@ type Rejection struct {
 
 // Report is the outcome of one agent run.
 type Report struct {
-	Provider   string
-	Proposed   int
-	Accepted   int
-	Rejected   []Rejection
-	ToolCalls  int    // tool calls dispatched this run (Phase 2)
-	Iterations int    // tool-loop turns taken (Phase 2)
-	Note       string // a non-fatal note (e.g. "tools-unsupported: single-shot fallback")
+	Provider       string
+	Proposed       int
+	Accepted       int
+	Rejected       []Rejection
+	ToolCalls      int    // tool calls dispatched this run (Phase 2)
+	Iterations     int    // tool-loop turns taken (Phase 2)
+	ThresholdGated int    // proposals rejected by a DECLARED support/capture floor (slice 5 telemetry)
+	Note           string // a non-fatal note (e.g. "tools-unsupported: single-shot fallback")
 }
 
 // Agent is the propose→verify harness. It holds a provider + the declared gate params,
@@ -267,6 +279,9 @@ func (a *Agent) verifyProposals(doc proposalDoc, c Context, index map[string]Obs
 		}
 		cand, reason := a.buildCandidate(rp, c, index)
 		if reason != "" {
+			if strings.Contains(reason, "below floor") {
+				rep.ThresholdGated++ // a DECLARED threshold (slice 5) blocked it — telemetry, never silent
+			}
 			rep.Rejected = append(rep.Rejected, Rejection{subj, reason})
 			continue
 		}
@@ -308,6 +323,12 @@ func (a *Agent) buildCandidate(rp rawProposal, c Context, index map[string]Obser
 	// EVIDENCE FLOOR (declared).
 	if len(ev) < a.params.MinEvidence {
 		return candidate.Candidate{}, fmt.Sprintf("evidence below floor (%d < %d)", len(ev), a.params.MinEvidence)
+	}
+	// SUPPORT FLOOR (declared threshold, slice 5): an opt-in stronger bar than MinEvidence — a
+	// proposal whose agreed-evidence support is below the declared minimum is rejected before a
+	// human ever sees it. OFF by default (0). A count compared to a declared integer, never learned.
+	if a.params.MinSupport > 0 && len(ev) < a.params.MinSupport {
+		return candidate.Candidate{}, fmt.Sprintf("support below floor (%d < %d)", len(ev), a.params.MinSupport)
 	}
 	if candidate.Kind(rp.Kind) == candidate.KindEquivGroup {
 		return a.buildEquivGroupCandidate(rp, ev, c, index)
@@ -387,6 +408,12 @@ func (a *Agent) buildEquivGroupCandidate(rp rawProposal, ev []candidate.Evidence
 	sample, err := candidate.EquivGroupSupport(prop.Pattern, strayPoolFromIndex(index))
 	if err != nil {
 		return candidate.Candidate{}, "structural: " + err.Error()
+	}
+	// CAPTURE-SAMPLE FLOOR (declared threshold, slice 5): require the proposed pattern to absorb
+	// at least the declared number of SEEN strays, so a new equivalence group is a real dialect
+	// bridge — not a one-off pattern matching only its own metric. OFF by default (0).
+	if a.params.MinCaptureSample > 0 && len(sample) < a.params.MinCaptureSample {
+		return candidate.Candidate{}, fmt.Sprintf("equiv_group capture-sample below floor (%d < %d)", len(sample), a.params.MinCaptureSample)
 	}
 	prop.CaptureSample = sample
 	payload := candidate.EquivGroupPayload(prop)

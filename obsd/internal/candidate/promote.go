@@ -47,6 +47,11 @@ func PromotedOverlayYAML(c Candidate, graphVersion string) (string, error) {
 	if c.Kind == KindEquivGroup {
 		return PromotedEquivGroupOverlayYAML(c, graphVersion)
 	}
+	// A phenomenon candidate promotes into a phenomenon SKELETON overlay block (doc 21 Phase 4)
+	// — a CorrelationGroup the human authors detection on, not the generic record.
+	if c.Kind == KindPhenomenonCandidate {
+		return PromotedPhenomenonOverlayYAML(c, graphVersion)
+	}
 	if c.Status != StatusPromoted {
 		return "", fmt.Errorf("candidate %s is not promoted (status %q) — only a promoted candidate has an authored overlay", c.ID, c.Status)
 	}

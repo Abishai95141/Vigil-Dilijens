@@ -1201,3 +1201,30 @@ export interface GovernanceDecisionResult {
   overlayYaml?: string;
   message: string;
 }
+
+// The deterministic stray→group RESOLUTION delta an equivalence-group promotion would
+// produce (doc 21 §4-5) — each list is a set of MEASURED metric names, a count of facts,
+// never a confidence. Computed read-only on a scratch graph.
+export interface GovernanceEquivPreview {
+  groupId: string;
+  definesNewGroup: boolean;
+  canonical?: string;
+  pattern: string;
+  newlyResolved: string[];      // strays UNRESOLVED now → RESOLVED after promotion (the coverage move)
+  alreadyResolved: string[];    // scope metrics that already resolve (pattern redundant for them)
+  stillUnresolved: string[];    // scope metrics the pattern still would not match (honest residue)
+}
+
+// GET /api/governance/preview?candidateId=… — a READ-ONLY look at what promoting a
+// candidate would author. Never mutates the store or the graph. The overlay's author/note
+// are placeholders the named human fills at promotion.
+export interface GovernancePreviewResult {
+  ok: boolean;
+  candidateId: string;
+  kind?: string;
+  movesCoverage: boolean;       // true ONLY for equiv_group — the one promotion that moves MEASURED coverage
+  overlayYaml?: string;
+  equiv?: GovernanceEquivPreview;
+  caveat?: string;
+  message?: string;
+}

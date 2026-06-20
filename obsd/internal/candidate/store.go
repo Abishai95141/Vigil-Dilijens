@@ -18,12 +18,13 @@ import (
 type Kind string
 
 const (
-	KindNode             Kind = "node"              // a proposed node (e.g. a stray-metric provisional entity)
-	KindEdge             Kind = "edge"              // a proposed STRUCTURAL edge (never causal)
-	KindMember           Kind = "member"            // a proposed phenomenon member binding
-	KindBarSource        Kind = "bar_source"        // a proposed declared-config bar pointer
-	KindCausalHypothesis Kind = "causal_hypothesis" // a direction-free co-occurrence hypothesis (never a cause)
-	KindEquivGroup       Kind = "equiv_group"       // a proposed stray→equivalence-group mapping (doc 21 §5); promotion authors a regex the resolver absorbs
+	KindNode                Kind = "node"                 // a proposed node (e.g. a stray-metric provisional entity)
+	KindEdge                Kind = "edge"                 // a proposed STRUCTURAL edge (never causal)
+	KindMember              Kind = "member"               // a proposed phenomenon member binding
+	KindBarSource           Kind = "bar_source"           // a proposed declared-config bar pointer
+	KindCausalHypothesis    Kind = "causal_hypothesis"    // a direction-free co-occurrence hypothesis (never a cause)
+	KindEquivGroup          Kind = "equiv_group"          // a proposed stray→equivalence-group mapping (doc 21 §5); promotion authors a regex the resolver absorbs
+	KindPhenomenonCandidate Kind = "phenomenon_candidate" // a recurring unexplained anomaly proposed as a phenomenon for human curation (doc 21 Phase 4); promotion authors a phenomenon skeleton
 )
 
 // Status is the lifecycle position of a candidate. It is ORTHOGONAL to the three
@@ -117,6 +118,24 @@ CREATE TABLE IF NOT EXISTS candidates (
 );
 CREATE INDEX IF NOT EXISTS candidates_status ON candidates(status);
 CREATE INDEX IF NOT EXISTS candidates_kind   ON candidates(kind);
+
+-- gap_state (doc 21 §3, Phase 3 slice 3): the agent's deterministic revisit scheduler for
+-- exploration GAPS (an unmapped stray, a silence row, an unexplained card, an event). It holds
+-- only COUNTS + injected timestamps — no learned interval. The agent re-examines a gap only
+-- when next_revisit_at <= now; each look pushes next_revisit out by base * 2^min(attempts, cap)
+-- (pure arithmetic), so unproductive gaps back off exponentially instead of burning tokens
+-- every sweep. OFF the deterministic path (this whole store is firewalled).
+CREATE TABLE IF NOT EXISTS gap_state (
+  gap_id          TEXT PRIMARY KEY,
+  kind            TEXT NOT NULL,
+  attempt_count   INTEGER NOT NULL DEFAULT 0,
+  rejection_count INTEGER NOT NULL DEFAULT 0,
+  last_reason     TEXT,
+  first_seen_at   TEXT NOT NULL,
+  last_attempt_at TEXT NOT NULL,
+  next_revisit_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS gap_state_revisit ON gap_state(next_revisit_at);
 `
 
 // migrations bring an older candidates.db up to the current schema. ADD COLUMN is
@@ -399,7 +418,7 @@ func validate(c Candidate) error {
 
 func knownKind(k Kind) bool {
 	switch k {
-	case KindNode, KindEdge, KindMember, KindBarSource, KindCausalHypothesis, KindEquivGroup:
+	case KindNode, KindEdge, KindMember, KindBarSource, KindCausalHypothesis, KindEquivGroup, KindPhenomenonCandidate:
 		return true
 	}
 	return false

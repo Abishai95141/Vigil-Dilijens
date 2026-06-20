@@ -89,6 +89,11 @@ type Providers struct {
 	// ONE place a candidate becomes authoritative — and only by a human. nil ⇒ the route
 	// reports the lane is not enabled. Promotion returns a committable authored overlay.
 	GovernanceDecide func(GovernanceDecisionRequest) GovernanceDecisionResult
+	// GovernancePreview renders a READ-ONLY preview (doc 21 §4, Phase 3 slice 2) of what
+	// promoting a candidate would author — the overlay, plus (for an equivalence-group
+	// candidate) the deterministic stray→group resolution delta computed on a scratch graph.
+	// It NEVER mutates the store or the graph. nil ⇒ the lane is not enabled.
+	GovernancePreview func(candidateID string) *GovernancePreviewResult
 	// Dependency returns the MEASURED metric-dependency graph (doc 20 P2): observed
 	// series that move together, as undirected associations (never causal). nil ⇒ the
 	// lane is not enabled (--assoc-enabled); the route serves the honest OFF state.
@@ -236,6 +241,23 @@ func Register(mux *http.ServeMux, p Providers) {
 			return
 		}
 		writeJSON(w, res)
+	})
+
+	mux.HandleFunc("/api/governance/preview", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed (GET ?candidateId=...)", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.GovernancePreview == nil {
+			writeJSON(w, &GovernancePreviewResult{OK: false, Message: "the governance lane is not enabled (--dgx-enabled)"})
+			return
+		}
+		id := r.URL.Query().Get("candidateId")
+		if id == "" {
+			http.Error(w, "candidateId query param required", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, p.GovernancePreview(id))
 	})
 
 	mux.HandleFunc("/api/dependency", func(w http.ResponseWriter, r *http.Request) {

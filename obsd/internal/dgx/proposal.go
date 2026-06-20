@@ -24,20 +24,20 @@ type proposalDoc struct {
 	Proposals []rawProposal `json:"proposals"`
 }
 
-// parseProposals extracts the proposals array from the model's text. It tolerates a
-// model that wraps the JSON in prose or a ```json fence by locating the outermost JSON
-// object, but it never tolerates malformed JSON — a parse failure is an error, not a
-// silent empty result.
+// parseProposals extracts the proposals object from the model's text. It tolerates a model
+// that wraps the JSON in a ```json fence / leading prose (it scans to the first '{') AND a model
+// that appends trailing prose after the JSON — a reasoning model routinely writes "{...} With
+// these proposals…". A json.Decoder reads exactly ONE value and stops, so trailing text (even
+// text containing braces) never corrupts the parse; only genuinely malformed JSON is an error,
+// never a silent empty result.
 func parseProposals(raw string) (proposalDoc, error) {
 	s := strings.TrimSpace(raw)
 	if i := strings.Index(s, "{"); i > 0 {
 		s = s[i:]
 	}
-	if j := strings.LastIndex(s, "}"); j >= 0 && j < len(s)-1 {
-		s = s[:j+1]
-	}
+	dec := json.NewDecoder(strings.NewReader(s))
 	var doc proposalDoc
-	if err := json.Unmarshal([]byte(s), &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil {
 		return proposalDoc{}, fmt.Errorf("malformed proposal JSON: %w", err)
 	}
 	return doc, nil
