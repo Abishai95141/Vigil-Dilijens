@@ -1170,6 +1170,12 @@ export interface GovernanceItem {
   rationale?: string;           // the MODEL's proposed note (PROPOSED context; discarded at promotion)
   evidence: GovernanceEvidence[];
   support: GovernanceSupport;   // deterministic MEASURED support — counts, never a confidence
+  // PROJECTED agent enrichment (doc 21 Phase 4 §C): a model-suggested human-readable label +
+  // non-causal description for a recurring-anomaly phenomenon candidate. A HINT, discarded at
+  // promotion (the human authors the real label); asserts no cause, drives no detection.
+  suggestedLabel?: string;
+  suggestedDescription?: string;
+  suggestedBy?: string;         // the model that produced the hint
   decidedBy?: string;           // the named human (when decided)
   note?: string;                // the human's AUTHORED note
   decidedAt?: string;           // RFC3339

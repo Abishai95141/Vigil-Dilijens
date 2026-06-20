@@ -642,6 +642,13 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	if candStore != nil {
 		go phenomenonCandidateLoop(ctx, logger, candStore, &unexpView, graphVersion,
 			envDuration("DGX_PHENOMENON_INTERVAL", dgxPhenomenonInterval))
+		// doc 21 Phase 4 §C: the agent enriches each phenomenon candidate with a PROJECTED
+		// human-readable label + non-causal description (a reviewer hint, discarded at promotion).
+		// Gated on the agent being enabled (it needs the LLM); DGX_ENRICH=off is the rollback.
+		if dgxAgent != nil && os.Getenv("DGX_ENRICH") != "off" {
+			go phenomenonEnrichmentLoop(ctx, logger, dgxAgent, candStore,
+				envDuration("DGX_ENRICHMENT_INTERVAL", dgxEnrichmentInterval))
+		}
 	}
 	var eventsConds []events.Corroboration
 	var eventsDets []events.Detection // graph-robustness #2 G1: event-driven detection conditions (validated referential)
@@ -2070,6 +2077,78 @@ func stagePhenomenonCandidate(cs *candidate.Store, now time.Time, rep unexplaine
 	return err
 }
 
+// dgxEnrichmentInterval / dgxEnrichmentPerCycle bound the agent-enrichment pass: a relaxed
+// cadence, a few LLM calls per cycle, so the PROJECTED hints accrue without burning the provider.
+const (
+	dgxEnrichmentInterval = 90 * time.Second
+	dgxEnrichmentPerCycle = 5
+)
+
+// phenomenonEnrichmentLoop is the agent-enrichment pass (doc 21 Phase 4 §C). For each PENDING
+// phenomenon candidate that has no model hint yet, it asks the agent for a human-readable label +
+// a non-causal description and attaches it as a PROJECTED Suggestion — a reviewer aid that is
+// DISCARDED at promotion (the named human authors the real label + detection). It NEVER touches
+// the deterministic candidate's identity/evidence (SetSuggestion is content-id-stable) and NEVER
+// authors detection. Gated on the agent being enabled (it needs the LLM); off the deterministic
+// path; honours the provider rate-limit; bounded calls per cycle.
+func phenomenonEnrichmentLoop(ctx context.Context, logger *slog.Logger, agent *dgx.Agent, cs *candidate.Store, every time.Duration) {
+	if every <= 0 {
+		every = dgxEnrichmentInterval
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	var rateLimitedUntil time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			if now.Before(rateLimitedUntil) {
+				continue
+			}
+			rows, err := cs.List(candidate.Filter{Kind: candidate.KindPhenomenonCandidate, Status: candidate.StatusCandidate})
+			if err != nil {
+				logger.Warn("dgx phenomenon enrichment: list failed (non-gating)", "err", err)
+				continue
+			}
+			enriched := 0
+			for _, c := range rows {
+				if enriched >= dgxEnrichmentPerCycle {
+					break
+				}
+				if c.Suggestion != nil {
+					continue // already enriched — one hint per candidate
+				}
+				prop, perr := candidate.ParsePhenomenonCandidatePayload(c.Payload)
+				if perr != nil || len(prop.Metrics) == 0 {
+					continue
+				}
+				sg, serr := agent.SuggestPhenomenon(ctx, prop.Metrics, prop.EntityKind)
+				if serr != nil {
+					if isRateLimited(serr) {
+						rateLimitedUntil = now.Add(dgxAgentRateLimitCooldown)
+						logger.Warn("dgx phenomenon enrichment rate-limited; backing off (non-gating)",
+							"cooldown", dgxAgentRateLimitCooldown.String(), "err", truncStr(serr.Error(), 200))
+						break
+					}
+					logger.Warn("dgx phenomenon enrichment failed (non-gating)", "subject", c.Subject, "err", truncStr(serr.Error(), 200))
+					continue
+				}
+				if err := cs.SetSuggestion(now, c.ID, &sg); err != nil {
+					logger.Warn("dgx phenomenon enrichment: set suggestion failed (non-gating)", "err", err)
+					continue
+				}
+				enriched++
+			}
+			if enriched > 0 {
+				logger.Info("dgx phenomenon enrichment (doc 21 Phase 4 §C)", "enriched", enriched,
+					"note", "PROJECTED label/description hints — discarded at promotion")
+			}
+		}
+	}
+}
+
 // dgxAgentLoop runs the LLM proposer over read-only context each interval and stages
 // the gated survivors (doc 20 P3). Off the deterministic path; the agent authors
 // nothing — it proposes, the gates filter, a human promotes later.
@@ -2752,6 +2831,13 @@ func mapGovernanceItems(cs []candidate.Candidate, gapAttempts map[string]int) []
 		if !c.DecidedAt.IsZero() {
 			t := c.DecidedAt
 			it.DecidedAt = &t
+		}
+		// PROJECTED agent enrichment (doc 21 Phase 4 §C): surface the model's suggested label +
+		// description as a HINT. It is discarded at promotion (never AUTHORED) — the UI labels it.
+		if c.Suggestion != nil {
+			it.SuggestedLabel = c.Suggestion.Label
+			it.SuggestedDescription = c.Suggestion.Description
+			it.SuggestedBy = c.Suggestion.Model
 		}
 		out = append(out, it)
 	}

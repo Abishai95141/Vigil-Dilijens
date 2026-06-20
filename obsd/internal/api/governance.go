@@ -57,10 +57,17 @@ type GovernanceItem struct {
 	Rationale    string               `json:"rationale,omitempty"` // the MODEL's proposed note (PROPOSED, for context; discarded at promotion)
 	Evidence     []GovernanceEvidence `json:"evidence"`
 	Support      GovernanceSupport    `json:"support"` // deterministic MEASURED support (doc 21 §4) — counts, never a confidence
-	DecidedBy    string               `json:"decidedBy,omitempty"`
-	Note         string               `json:"note,omitempty"`
-	DecidedAt    *time.Time           `json:"decidedAt,omitempty"`
-	CreatedAt    time.Time            `json:"createdAt"`
+	// PROJECTED agent enrichment (doc 21 Phase 4 §C): a human-readable label + non-causal
+	// description the model SUGGESTS for a recurring-anomaly phenomenon candidate, to help the
+	// reviewer. It is a HINT — discarded at promotion (the human authors the real label), it
+	// asserts no cause and drives no detection. Empty when there is no suggestion.
+	SuggestedLabel       string     `json:"suggestedLabel,omitempty"`
+	SuggestedDescription string     `json:"suggestedDescription,omitempty"`
+	SuggestedBy          string     `json:"suggestedBy,omitempty"` // the model that produced the hint (provenance)
+	DecidedBy            string     `json:"decidedBy,omitempty"`
+	Note                 string     `json:"note,omitempty"`
+	DecidedAt            *time.Time `json:"decidedAt,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
 	// Actionable reports whether this candidate is worth a human mapping decision. A pending
 	// candidate that is NOT actionable (a pure k8s object-metadata stray) is kept out of the
 	// review queue but still counted — see GovernanceView.SuppressedMetadata. main sets this

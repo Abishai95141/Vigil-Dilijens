@@ -588,6 +588,37 @@ export function GovernancePage() {
                                       <Mono>{it.subject}</Mono>
                                     </div>
 
+                                    {/* PROJECTED agent enrichment (doc 21 Phase 4 §C) — a model-suggested
+                                        human-readable label + non-causal description. A HINT, discarded at
+                                        promotion (you author the real label); asserts no cause. */}
+                                    {it.suggestedLabel && (
+                                      <div className="mb-2.5 rounded-[6px] border border-rule bg-surface-hi px-3 py-2">
+                                        <div className="mb-1 flex items-center gap-2">
+                                          <ProvChip
+                                            kind="PROJECTED"
+                                            title="suggested by the model — discarded at promotion"
+                                          />
+                                          <span className="v-eyebrow text-[9.5px] text-ink-low">
+                                            model suggests
+                                          </span>
+                                        </div>
+                                        <div className="text-[13px] font-medium text-ink">
+                                          {it.suggestedLabel}
+                                        </div>
+                                        {it.suggestedDescription && (
+                                          <div className="mt-0.5 text-[11.5px] leading-relaxed text-ink-mid">
+                                            {it.suggestedDescription}
+                                          </div>
+                                        )}
+                                        <div className="mt-1 text-[10.5px] text-ink-low">
+                                          a naming hint
+                                          {it.suggestedBy ? ` from ${it.suggestedBy}` : ""} —
+                                          discarded at promotion; you author the real label +
+                                          detection
+                                        </div>
+                                      </div>
+                                    )}
+
                                     {/* the model's rationale — PROPOSED context, discarded at promotion */}
                                     {it.rationale && (
                                       <div className="mb-2.5 flex items-start gap-2">
