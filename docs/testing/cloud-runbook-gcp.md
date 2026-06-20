@@ -22,6 +22,12 @@ gcloud compute instances create vigil-edge \
 gcloud compute ssh vigil-edge --zone=asia-south1-a
 ```
 
+> **One command for §2–§5.** After the VM exists and you've `git clone`d the repo,
+> `MAX_PODS=300 RUN_TIERS=1 ./deploy/cloud/bootstrap-vigil-edge.sh` does k3s (raised
+> cap) + toolchain + obsd build + node-exporter/KSM/ABB-digital-twin deploy + the
+> e2e/scale/bench tiers, idempotently. The manual steps below are what it automates —
+> read them to understand the rig, or run the script to skip ahead.
+
 ## 2. Install k3s (single node) with a raised pod cap
 
 k3s defaults to `--max-pods=110`; raise it so the scale tier can pack hundreds of pods —
