@@ -218,9 +218,14 @@ type overlayFile struct {
 	Members     map[string][]overlayMember `yaml:"members"`
 	Relations   []overlayRelation          `yaml:"relations"`
 	Spans       map[string]spanDecl        `yaml:"spans"`
-	Rules       []ThresholdRule            `yaml:"rules"`
-	Checks      map[string][]MemberCheck   `yaml:"checks"`
-	Anchors     map[string]string          `yaml:"anchors"`
+	// Severities authors the AUTHORED prioritisation level on EXISTING phenomena (doc 21 Phase 5)
+	// — a phenomenon-id → severity map, applied exactly like Spans (the base KG stays immutable;
+	// the authored delta lives here). Setting a previously-absent attribute is additive, never a
+	// member redefine.
+	Severities map[string]string        `yaml:"phenomenon_severity"`
+	Rules      []ThresholdRule          `yaml:"rules"`
+	Checks     map[string][]MemberCheck `yaml:"checks"`
+	Anchors    map[string]string        `yaml:"anchors"`
 }
 
 // overlayEquivGroup is an authored equivalence-group delta (doc 21 §5.3): the
@@ -272,10 +277,11 @@ type overlayMember struct {
 // tuples [pattern, role, temporal_tag, note] (schema-required). Carries no
 // detection condition by itself — a check/rule (if any) is authored separately.
 type overlayPhenomenon struct {
-	ID      string     `yaml:"id"`
-	Label   string     `yaml:"label"`
-	Signals [][]string `yaml:"signals"`
-	Notes   string     `yaml:"notes"`
+	ID       string     `yaml:"id"`
+	Label    string     `yaml:"label"`
+	Signals  [][]string `yaml:"signals"`
+	Notes    string     `yaml:"notes"`
+	Severity string     `yaml:"severity"` // AUTHORED prioritisation level (doc 21 Phase 5); "" = undeclared
 }
 
 // overlayRelation is an authored phenomenon_relation edge added by an overlay
@@ -539,7 +545,10 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 		if len(op.Signals) == 0 {
 			return fmt.Errorf("overlay phenomenon %q: at least one member signal is required (schema)", op.ID)
 		}
-		p := &Phenomenon{ID: op.ID, Label: op.Label, RawSignals: op.Signals}
+		if !IsValidSeverity(op.Severity) {
+			return fmt.Errorf("overlay phenomenon %q: severity %q is not one of critical|high|medium|low (or empty) (doc 21 Phase 5)", op.ID, op.Severity)
+		}
+		p := &Phenomenon{ID: op.ID, Label: op.Label, RawSignals: op.Signals, Severity: op.Severity}
 		for _, tup := range op.Signals {
 			if len(tup) != 4 {
 				return fmt.Errorf("overlay phenomenon %q: signal tuple must be [pattern, role, temporal, note]", op.ID)
@@ -652,6 +661,29 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 		}
 		p.Span = d.Span
 		p.TraversalEdgeTypes = append([]string(nil), d.TraversalEdgeTypes...)
+	}
+
+	// Phenomenon severities (doc 21 Phase 5): author the AUTHORED prioritisation level on existing
+	// phenomena. Deterministic (sorted ids); the phenomenon must exist, the level must be a declared
+	// value, and a conflicting re-declaration is loud — the base stays immutable, the delta is here.
+	sevIDs := make([]string, 0, len(f.Severities))
+	for id := range f.Severities {
+		sevIDs = append(sevIDs, id)
+	}
+	sort.Strings(sevIDs)
+	for _, id := range sevIDs {
+		sev := f.Severities[id]
+		p, ok := g.Phenomena[id]
+		if !ok {
+			return fmt.Errorf("phenomenon_severity for unknown phenomenon %q", id)
+		}
+		if !IsValidSeverity(sev) || sev == "" {
+			return fmt.Errorf("phenomenon %s: severity %q is not one of critical|high|medium|low (doc 21 Phase 5)", id, sev)
+		}
+		if p.Severity != "" && p.Severity != sev {
+			return fmt.Errorf("phenomenon %s: severity conflict (%q already declared, overlay says %q)", id, p.Severity, sev)
+		}
+		p.Severity = sev
 	}
 
 	// Threshold rules: validate coherence and attach.

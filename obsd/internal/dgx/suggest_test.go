@@ -9,7 +9,7 @@ import (
 
 func TestSuggestPhenomenon(t *testing.T) {
 	// Valid JSON followed by trailing prose (the json.Decoder reads one value, ignores the rest).
-	resp := `{"label":"Node CPU scheduling pressure","description":"tasks repeatedly waiting for CPU time"}
+	resp := `{"label":"Node CPU scheduling pressure","description":"tasks repeatedly waiting for CPU time","severity":"HIGH"}
 
 That is my suggestion!`
 	ag := dgx.New(dgx.NewStaticProvider("fake", resp), dgx.DefaultParams)
@@ -24,8 +24,24 @@ That is my suggestion!`
 	if sg.Description == "" {
 		t.Fatal("description must not be empty")
 	}
+	if sg.Severity != "high" { // normalised to the closed vocabulary (lower-cased)
+		t.Fatalf("severity = %q, want high", sg.Severity)
+	}
 	if sg.Model != "fake" {
 		t.Fatalf("model provenance = %q, want fake", sg.Model)
+	}
+}
+
+func TestSuggestPhenomenonBadSeverityDrops(t *testing.T) {
+	// An out-of-vocabulary severity is dropped to "" (the hint is best-effort; the human authors).
+	resp := `{"label":"X","description":"d","severity":"apocalyptic"}`
+	ag := dgx.New(dgx.NewStaticProvider("fake", resp), dgx.DefaultParams)
+	sg, err := ag.SuggestPhenomenon(context.Background(), []string{"m"}, "Node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sg.Severity != "" {
+		t.Fatalf("bad severity should drop to empty, got %q", sg.Severity)
 	}
 }
 

@@ -63,7 +63,8 @@ type GovernanceItem struct {
 	// asserts no cause and drives no detection. Empty when there is no suggestion.
 	SuggestedLabel       string     `json:"suggestedLabel,omitempty"`
 	SuggestedDescription string     `json:"suggestedDescription,omitempty"`
-	SuggestedBy          string     `json:"suggestedBy,omitempty"` // the model that produced the hint (provenance)
+	SuggestedSeverity    string     `json:"suggestedSeverity,omitempty"` // a SUGGESTED harm level (hint, discarded at promotion)
+	SuggestedBy          string     `json:"suggestedBy,omitempty"`       // the model that produced the hint (provenance)
 	DecidedBy            string     `json:"decidedBy,omitempty"`
 	Note                 string     `json:"note,omitempty"`
 	DecidedAt            *time.Time `json:"decidedAt,omitempty"`

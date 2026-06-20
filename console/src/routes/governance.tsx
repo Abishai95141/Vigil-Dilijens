@@ -601,6 +601,11 @@ export function GovernancePage() {
                                           <span className="v-eyebrow text-[9.5px] text-ink-low">
                                             model suggests
                                           </span>
+                                          {it.suggestedSeverity && (
+                                            <span className="v-mono rounded-[4px] border border-rule bg-plane px-1.5 py-0.5 text-[10px] text-ink-soft">
+                                              severity: {it.suggestedSeverity}
+                                            </span>
+                                          )}
                                         </div>
                                         <div className="text-[13px] font-medium text-ink">
                                           {it.suggestedLabel}

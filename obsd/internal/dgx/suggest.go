@@ -19,14 +19,16 @@ import (
 
 const suggestSystemPrompt = `You name recurring infrastructure anomalies for a human operator.
 Given a recurring set of loud metric names on a Kubernetes entity kind, output a CONCISE
-human-readable LABEL (at most 6 words) and a ONE-LINE description of what the recurring pattern
-most likely REPRESENTS — strictly descriptive. Do NOT assert a cause, do NOT propose a
-remediation or a threshold, and do NOT invent metrics that were not given. Output ONLY a JSON
-object: {"label": "...", "description": "..."}.`
+human-readable LABEL (at most 6 words), a ONE-LINE description of what the recurring pattern most
+likely REPRESENTS — strictly descriptive — and a SUGGESTED harm severity from exactly
+{critical, high, medium, low} reflecting how much harm it would represent if confirmed. Do NOT
+assert a cause, do NOT propose a remediation or a threshold, and do NOT invent metrics that were
+not given. The severity is a HINT for the human curator, never authoritative. Output ONLY a JSON
+object: {"label": "...", "description": "...", "severity": "..."}.`
 
 func suggestUserPrompt(metrics []string, entityKind string) string {
 	return "Recurring loud signal(s) on a " + entityKind + ": " + strings.Join(metrics, ", ") +
-		". Suggest a short label + a one-line non-causal description of what this pattern represents."
+		". Suggest a short label, a one-line non-causal description of what this pattern represents, and a harm severity (critical|high|medium|low)."
 }
 
 // SuggestPhenomenon performs the single enrichment call and returns a PROJECTED suggestion tagged
@@ -41,13 +43,14 @@ func (a *Agent) SuggestPhenomenon(ctx context.Context, metrics []string, entityK
 	if err != nil {
 		return candidate.Suggestion{}, fmt.Errorf("dgx: suggest provider: %w", err)
 	}
-	label, desc, err := parseSuggestion(raw)
+	label, desc, sev, err := parseSuggestion(raw)
 	if err != nil {
 		return candidate.Suggestion{}, err
 	}
 	return candidate.Suggestion{
 		Label:       truncate(label, 80),
 		Description: truncate(desc, 240),
+		Severity:    sev, // already validated to the closed vocabulary (or "" if the model gave a bad/absent value)
 		Model:       a.provider.Name(),
 	}, nil
 }
@@ -55,13 +58,25 @@ func (a *Agent) SuggestPhenomenon(ctx context.Context, metrics []string, entityK
 type suggestionDoc struct {
 	Label       string `json:"label"`
 	Description string `json:"description"`
+	Severity    string `json:"severity"`
 }
 
-// parseSuggestion extracts {label, description} from the model's text, tolerating a ```json fence
-// / leading prose (scans to the first '{') and trailing prose (json.Decoder reads one value and
-// stops). A label is required; a missing label or malformed JSON is an error, never a silent
-// empty hint.
-func parseSuggestion(raw string) (string, string, error) {
+// validSuggestedSeverity keeps the suggested severity to the closed vocabulary (it mirrors
+// graph.IsValidSeverity; dgx does not import the graph loader). A bad/absent value drops to ""
+// rather than propagating a junk level — the hint is best-effort, the human authors the real one.
+func validSuggestedSeverity(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "critical", "high", "medium", "low":
+		return strings.ToLower(strings.TrimSpace(s))
+	}
+	return ""
+}
+
+// parseSuggestion extracts {label, description, severity} from the model's text, tolerating a
+// ```json fence / leading prose (scans to the first '{') and trailing prose (json.Decoder reads
+// one value and stops). A label is required; a missing label or malformed JSON is an error, never
+// a silent empty hint. The severity is normalised to the closed vocabulary (bad/absent -> "").
+func parseSuggestion(raw string) (string, string, string, error) {
 	s := strings.TrimSpace(raw)
 	if i := strings.Index(s, "{"); i > 0 {
 		s = s[i:]
@@ -69,10 +84,10 @@ func parseSuggestion(raw string) (string, string, error) {
 	dec := json.NewDecoder(strings.NewReader(s))
 	var d suggestionDoc
 	if err := dec.Decode(&d); err != nil {
-		return "", "", fmt.Errorf("dgx: malformed suggestion JSON: %w", err)
+		return "", "", "", fmt.Errorf("dgx: malformed suggestion JSON: %w", err)
 	}
 	if strings.TrimSpace(d.Label) == "" {
-		return "", "", fmt.Errorf("dgx: suggestion has no label")
+		return "", "", "", fmt.Errorf("dgx: suggestion has no label")
 	}
-	return strings.TrimSpace(d.Label), strings.TrimSpace(d.Description), nil
+	return strings.TrimSpace(d.Label), strings.TrimSpace(d.Description), validSuggestedSeverity(d.Severity), nil
 }

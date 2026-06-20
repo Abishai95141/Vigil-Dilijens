@@ -42,12 +42,30 @@ type CoverageSummary struct {
 	QAFailed         int     `json:"qaFailed"`
 }
 
+// severityRank mirrors graph.SeverityRank (the api surfaces the value but does not import the
+// graph loader). Higher = more harm; undeclared sorts last. doc 21 Phase 5.
+func severityRank(s string) int {
+	switch s {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
 // PhenomenonRow is one phenomenon's observability on this cluster (doc 04 M5 /
 // 05 M4). Observability is MEASURED about the system's own coverage.
 type PhenomenonRow struct {
 	ID             string   `json:"id"`
 	Label          string   `json:"label"`
-	Observability  string   `json:"observability"` // full | partial | none
+	Severity       string   `json:"severity,omitempty"` // AUTHORED harm prioritisation (doc 21 Phase 5); "" = undeclared
+	Observability  string   `json:"observability"`      // full | partial | none
 	RequiredTotal  int      `json:"requiredTotal"`
 	RequiredOk     int      `json:"requiredObservable"`
 	MissingReasons []string `json:"missingReasons"`
@@ -124,7 +142,7 @@ func BuildCoverage(clusterID, graphVersion, graphRelease string, now time.Time,
 		v.Summary.PhenomenaNone = obs.None
 		for _, pc := range obs.PerPhenomenon {
 			v.Phenomena = append(v.Phenomena, PhenomenonRow{
-				ID: pc.PhenomenonID, Label: pc.Label, Observability: pc.Observability,
+				ID: pc.PhenomenonID, Label: pc.Label, Severity: pc.Severity, Observability: pc.Observability,
 				RequiredTotal: pc.RequiredTotal, RequiredOk: pc.RequiredObtainable,
 				MissingReasons: append([]string(nil), pc.MissingReasons...),
 			})
@@ -134,6 +152,12 @@ func BuildCoverage(clusterID, graphVersion, graphRelease string, now time.Time,
 			ri, rj := obsRank(v.Phenomena[i].Observability), obsRank(v.Phenomena[j].Observability)
 			if ri != rj {
 				return ri < rj
+			}
+			// Within an observability tier, the higher-HARM phenomenon first (doc 21 Phase 5):
+			// an unobservable CRITICAL phenomenon is the most urgent gap to close.
+			si, sj := severityRank(v.Phenomena[i].Severity), severityRank(v.Phenomena[j].Severity)
+			if si != sj {
+				return si > sj
 			}
 			return v.Phenomena[i].ID < v.Phenomena[j].ID
 		})

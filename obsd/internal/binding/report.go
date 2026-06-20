@@ -18,6 +18,7 @@ import (
 type PhenomenonCoverage struct {
 	PhenomenonID          string
 	Label                 string
+	Severity              string // AUTHORED prioritisation (doc 21 Phase 5): critical|high|medium|low|"" (undeclared)
 	Observability         string // full | partial | none
 	RequiredTotal         int
 	RequiredObtainable    int
@@ -48,7 +49,7 @@ func PhenomenonObservability(g *graph.Graph, avail *AvailabilityReport) *Observa
 	sort.Strings(ids)
 	for _, id := range ids {
 		p := g.Phenomena[id]
-		pc := PhenomenonCoverage{PhenomenonID: id, Label: p.Label}
+		pc := PhenomenonCoverage{PhenomenonID: id, Label: p.Label, Severity: p.Severity}
 		reasons := map[string]bool{}
 		for _, m := range p.Members {
 			if m.Role != "required" {

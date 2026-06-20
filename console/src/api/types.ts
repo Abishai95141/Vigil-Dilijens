@@ -68,6 +68,7 @@ export interface CoverageSummary {
 export interface PhenomenonRow {
   id: string;
   label: string;
+  severity?: string;         // AUTHORED harm level (doc 21 Phase 5): critical|high|medium|low; absent = undeclared
   observability: string;     // "full" | "partial" | "none"
   requiredTotal: number;
   requiredObservable: number; // NOTE: Go field RequiredOk, json tag "requiredObservable"
@@ -1175,6 +1176,7 @@ export interface GovernanceItem {
   // promotion (the human authors the real label); asserts no cause, drives no detection.
   suggestedLabel?: string;
   suggestedDescription?: string;
+  suggestedSeverity?: string;   // a SUGGESTED harm level (hint, discarded at promotion)
   suggestedBy?: string;         // the model that produced the hint
   decidedBy?: string;           // the named human (when decided)
   note?: string;                // the human's AUTHORED note

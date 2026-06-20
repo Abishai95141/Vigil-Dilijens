@@ -2837,6 +2837,7 @@ func mapGovernanceItems(cs []candidate.Candidate, gapAttempts map[string]int) []
 		if c.Suggestion != nil {
 			it.SuggestedLabel = c.Suggestion.Label
 			it.SuggestedDescription = c.Suggestion.Description
+			it.SuggestedSeverity = c.Suggestion.Severity
 			it.SuggestedBy = c.Suggestion.Model
 		}
 		out = append(out, it)

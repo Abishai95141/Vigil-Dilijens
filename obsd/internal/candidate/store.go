@@ -76,6 +76,7 @@ type Lineage struct {
 type Suggestion struct {
 	Label       string `json:"label,omitempty"`       // a concise human-readable name (model's, not authoritative)
 	Description string `json:"description,omitempty"` // one line, non-causal — what the recurring pattern may represent
+	Severity    string `json:"severity,omitempty"`    // a SUGGESTED harm level (critical|high|medium|low); a hint, the human authors the real one
 	Model       string `json:"model,omitempty"`       // which provider produced it (provenance)
 }
 

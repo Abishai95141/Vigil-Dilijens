@@ -130,10 +130,11 @@ type phenomenonOverlayDoc struct {
 // [pattern, role, temporal, note], and notes. The signal tuples are the recurring metrics as
 // CANDIDATE members — the human refines their role/temporal + authors a detection check + a bar.
 type phenomenonOverlayEntry struct {
-	ID      string     `yaml:"id"`
-	Label   string     `yaml:"label"`
-	Signals [][]string `yaml:"signals"`
-	Notes   string     `yaml:"notes"`
+	ID       string     `yaml:"id"`
+	Label    string     `yaml:"label"`
+	Severity string     `yaml:"severity"` // AUTHORED harm level (doc 21 Phase 5) — the human fills this in
+	Signals  [][]string `yaml:"signals"`
+	Notes    string     `yaml:"notes"`
 }
 
 const phenomenonOverlayHeader = "# Promoted phenomenon CANDIDATE — AUTHORED starting skeleton (doc 21 Phase 4 / doc 08 §3.6).\n" +
@@ -181,10 +182,12 @@ func PromotedPhenomenonOverlayYAML(c Candidate, graphVersion string) (string, er
 		})
 	}
 	entry := phenomenonOverlayEntry{
-		ID:      PhenomenonCandidateID(p),
-		Label:   label,
-		Signals: signals,
-		Notes: fmt.Sprintf("CANDIDATE from recurring unexplained loudness on %s (%d evaluation windows, %d distinct %s entity/entities). %s",
+		ID:       PhenomenonCandidateID(p),
+		Label:    label,
+		Severity: "", // the human authors the harm level (critical|high|medium|low) — a placeholder, never the model's
+		Signals:  signals,
+		Notes: fmt.Sprintf("CANDIDATE from recurring unexplained loudness on %s (%d evaluation windows, %d distinct %s entity/entities). "+
+			"Author the severity (critical|high|medium|low) for harm-prioritisation. %s",
 			strings.Join(p.Metrics, ", "), p.Windows, len(p.Entities), p.EntityKind, c.Note),
 	}
 	doc := phenomenonOverlayDoc{

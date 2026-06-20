@@ -124,8 +124,9 @@ func TestOverlayVersionPinning(t *testing.T) {
 	// threshold-rules-v5 + detect-conditions-v6 (the KSM node-condition disk-pressure
 	// member of DISK_PID_INODE_PRESSURE). v0.8.0 (PVC): + threshold-rules-v6 +
 	// detect-conditions-v7 (the KSM stuck-Pending member of VOLUME_MOUNT_FAILURE), so 15.
-	if len(merged.Overlays) != 16 {
-		t.Fatalf("overlay provenance records = %d, want 16 (spans, rules v1-v6, conditions v1-v7, cross-service-v0, disk-filling-v1)", len(merged.Overlays))
+	// v0.10.0 (Phase 5): + phenomenon-severity-v1 (the authored severity field), so 17.
+	if len(merged.Overlays) != 17 {
+		t.Fatalf("overlay provenance records = %d, want 17 (spans, rules v1-v6, conditions v1-v7, cross-service-v0, disk-filling-v1, phenomenon-severity-v1)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

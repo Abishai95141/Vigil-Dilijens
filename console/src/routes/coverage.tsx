@@ -15,6 +15,17 @@ import { useState } from "react";
 const obsSev = (o: string): Severity =>
   o === "full" ? "ok" : o === "partial" ? "degraded" : "neutral";
 
+// AUTHORED phenomenon severity → a harm-tinted chip class (doc 21 Phase 5). Colour by FORM/hue
+// follows the kit's state signals; this is a curated prioritisation label, not a live state.
+const sevClass = (s: string): string =>
+  s === "critical"
+    ? "border-error/50 text-error"
+    : s === "high"
+      ? "border-warning/50 text-warning"
+      : s === "medium"
+        ? "border-info/50 text-info"
+        : "border-rule text-ink-low";
+
 export function CoveragePage() {
   const q = useCoverage();
   const [obsFilter, setObsFilter] = useState<"all" | "full" | "partial" | "none">("all");
@@ -221,7 +232,17 @@ export function CoveragePage() {
                     .map((p) => (
                       <Tr key={p.id}>
                         <Td>
-                          <span className="text-ink">{p.label}</span>
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-ink">{p.label}</span>
+                            {p.severity && (
+                              <span
+                                className={`v-mono rounded-[4px] border px-1.5 py-0.5 text-[9.5px] uppercase ${sevClass(p.severity)}`}
+                                title="authored harm prioritisation (doc 21 Phase 5)"
+                              >
+                                {p.severity}
+                              </span>
+                            )}
+                          </span>
                           <div className="v-mono text-[10px] text-ink-low">{p.id}</div>
                         </Td>
                         <Td>

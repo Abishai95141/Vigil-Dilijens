@@ -122,6 +122,14 @@ type Phenomenon struct {
 	Notes      string     `json:"notes"`
 	RawSignals [][]string `json:"signals"`
 
+	// Severity is an AUTHORED prioritisation level (doc 21 Phase 5): how much HARM this
+	// phenomenon represents when it fires, declared by the curator (borrowed normativity — never
+	// learned, never model-assigned). It is a RANKING input for governance + the agent, NEVER a
+	// detection gate (detection ignores it, so it does not perturb the replay digest). The closed
+	// vocabulary is critical > high > medium > low; "" means UNDECLARED — honest partial coverage,
+	// not every phenomenon has a curated severity yet.
+	Severity string `json:"severity"`
+
 	// span/traversal: present in the schema for forward-compat; absent in today's KG.
 	Span               string   `json:"span"`
 	TraversalEdgeTypes []string `json:"traversal_edge_types"`
@@ -140,6 +148,42 @@ type Phenomenon struct {
 
 // HasSpan reports whether the phenomenon declares a topological span (doc 02 §3.6).
 func (p *Phenomenon) HasSpan() bool { return strings.TrimSpace(p.Span) != "" }
+
+// The closed AUTHORED severity vocabulary (doc 21 Phase 5). Ordered by harm.
+const (
+	SeverityCritical = "critical"
+	SeverityHigh     = "high"
+	SeverityMedium   = "medium"
+	SeverityLow      = "low"
+)
+
+// IsValidSeverity reports whether s is a declared level or "" (undeclared). An unknown value is
+// an authoring defect (a curator typo) — caught loudly by graphlint and the overlay loader.
+func IsValidSeverity(s string) bool {
+	switch s {
+	case "", SeverityCritical, SeverityHigh, SeverityMedium, SeverityLow:
+		return true
+	}
+	return false
+}
+
+// SeverityRank orders severities for prioritisation (higher = more harm); "" (undeclared) sorts
+// LAST so a curated phenomenon always ranks above an unranked one. Pure: a deterministic map of
+// an authored label to an integer, never a learned weight.
+func SeverityRank(s string) int {
+	switch s {
+	case SeverityCritical:
+		return 4
+	case SeverityHigh:
+		return 3
+	case SeverityMedium:
+		return 2
+	case SeverityLow:
+		return 1
+	default:
+		return 0 // undeclared
+	}
+}
 
 // EquivalenceGroup bridges customer naming dialects to one canonical variable
 // (doc 02 §3.1): a set of regex patterns plus a canonical name.
