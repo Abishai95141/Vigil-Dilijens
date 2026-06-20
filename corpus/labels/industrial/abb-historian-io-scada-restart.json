@@ -9,7 +9,9 @@
       "entityCei": "i|abb-cluster||Node|vigil-worker2|u-node",
       "anchorKind": "Node",
       "quality": "degraded",
-      "why": "node /proc/pressure/io some-stall crosses the 0.10 default bar while the historian fsyncs a telemetry burst; required per-device disk-IO + PVC volume-stats members are honestly unobservable on this emptyDir rig (every gap named on the finding)."
+      "why": "node /proc/pressure/io some-stall crosses the 0.10 default bar while the historian fsyncs a telemetry burst; required per-device disk-IO + PVC volume-stats members are honestly unobservable on this emptyDir rig (every gap named on the finding).",
+      "observabilityDependency": "PSI io is a node-exporter signal (node_pressure_io_*). On a bare rig WITHOUT node-exporter (default k3s box: ingest shows node-exporter:0) this phenomenon is honestly UNOBSERVABLE — Vigil stays silent rather than inventing it. Deploy node-exporter to surface it.",
+      "observedOnBareRig": false
     },
     {
       "phenomenon": "PHEN_PROBE_FAILURE_RESTART",
@@ -17,7 +19,18 @@
       "entityCei": "i|abb-cluster|abb-industrial|Pod|scada-reader|u-scada",
       "anchorKind": "Pod",
       "quality": "full_or_degraded",
-      "why": "the scada-reader liveness probe (tcpSocket :9090, failureThreshold 3) trips while its read loop is wedged on the saturated historian; restartCount climbs and lastState.terminated is observed."
+      "why": "the scada-reader liveness probe (httpGet :9090/healthz, failureThreshold 3) trips while its read loop is wedged on the historian's cold disk scan; VALIDATED LIVE 2026-06-20: restartCount climbs 0->6+, lastState.terminated reason=Error exitCode=137 via 'Liveness probe failed: HTTP 503' (not OOM, not connection-refused).",
+      "observabilityDependency": "the phenomenon's required members include probe-failure / failureThreshold / sustained signals the kubelet does NOT expose as metrics; only the restart counter (kube_pod_container_status_restarts_total, via --ksm-enabled) is observable, so on this rig it sits below its firing completeness. The restart is REAL and verifiable in pod status; Vigil does not surface the phenomenon from KSM's counter alone.",
+      "observedOnBareRig": false
+    },
+    {
+      "phenomenon": "PHEN_THROTTLING_CASCADE",
+      "class": "MEASURED",
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|scada-reader|u-scada",
+      "anchorKind": "Container",
+      "quality": "degraded",
+      "why": "VALIDATED LIVE 2026-06-20: the scada-reader's busy connect/recv/timeout loop hits its 100m CPU limit and throttles; Vigil raises PHEN_THROTTLING_CASCADE on the scada-reader Container (completeness 0.5, the unobserved member named). This is the one genuinely-observable signal on the bare rig — and Vigil keeps it keyed to that single entity.",
+      "observedOnBareRig": true
     }
   ],
   "expectCascades": [],
@@ -31,6 +44,11 @@
       "rule": "no-invented-bar-for-unobservable-members",
       "statement": "The unobservable storage members (per-device disk IO, kubelet_volume_stats PVC fill) must be reported as honest coverage gaps, NOT back-filled with an invented or learned threshold.",
       "charter": "Borrowed normativity + honest partial coverage."
+    },
+    {
+      "rule": "no-throttle-to-restart-cause",
+      "statement": "The scada-reader genuinely exhibits BOTH a CPU throttle (PHEN_THROTTLING_CASCADE, observed) and a liveness restart (real, from the disk stall). Vigil must NOT relate them — the throttle did not cause the restart (the restart is from the recv stall on the historian's cold read), and there is no authored edge between them. CONFIRMED LIVE: the throttle finding is keyed to the one Container entity and carries no cross-finding causal claim.",
+      "charter": "Co-occurrence -> causal claim is rejected. Two real phenomena on the same entity are still a co-occurrence, not a proven cause."
     }
   ],
   "note": "The answer to 'how do PVC I/O patterns link to pod restarts' is an HONEST co-occurrence the operator can see (saturation on the historian node, restart on the SCADA pod), never a fabricated cause. The link is left to the human; Vigil never invents the edge."

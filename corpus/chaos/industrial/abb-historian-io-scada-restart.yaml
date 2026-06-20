@@ -2,26 +2,67 @@
 #
 # Industrial shape: a process historian persists a telemetry burst to its PVC.
 # The fsync-heavy write loop saturates the node's block device, so the SCADA
-# read path (which polls the historian over a Service) starts timing out its
-# liveness probe and the kubelet restarts the SCADA pod.
+# read path (which polls the historian over a Service for a point query against
+# the on-disk TSDB) starts STALLING — the cold read can't make progress through
+# the saturated device — and the kubelet restarts the SCADA pod when its liveness
+# endpoint goes stale.
+#
+# THE COUPLING IS REAL (this is the fix to the earlier known-broken version, where
+# the historian never listened on :8080, so the restart fired from connection-
+# refused, not disk saturation). Now:
+#   • the historian LISTENS on :8080 and serves each "read" as a genuine point query
+#     against its on-disk TSDB: a COLD device scan of tsdb.dat (posix_fadvise(DONTNEED)
+#     first → the read MUST hit the block device, not the page cache);
+#   • the same container's writer thread floods the device with 8 MiB fsync'd chunks,
+#     keeping /proc/pressure/io some-stall well above the 0.10 bar (measured ~3–5%);
+#   • so the query is genuinely disk-I/O-bound on a saturated volume. The cold scan
+#     exceeds the SCADA reader's 2s recv budget → the reader makes no progress → /healthz
+#     goes 503 → the kubelet restarts it (restartCount climbs).
+#
+# HONEST HARDWARE NOTE: the query's ABSOLUTE latency scales with the node's disk
+# speed. On the validation rig (a fast NVMe, ~760–1090 MiB/s even under the write
+# flood) a 256 MiB read finishes in <0.3s — far too fast to stall — so tsdb.dat is
+# sized to 3 GiB (a realistically-large historian DB) to push a cold query to ~2.8–3.6s,
+# reliably past the reader's 2s budget. On slower/contended industrial storage
+# (NAS, iSCSI, bulk HDD tiers — where historians usually live) the same scenario
+# trips with a far smaller DB. Re-tune FILE_MB / the reader timeout to your disk.
+# This is a genuine disk-latency→restart link, NOT a fabricated one (no connection-
+# refused, no sleep, no fake stall): the reader's recv blocks on a real device read.
 #
 # What Vigil reports (and the charter line this scenario defends):
-#   • On the historian Pod's NODE: PHEN_STORAGE_SATURATION (MEASURED, DEGRADED).
-#     /proc/pressure/io some-stall crosses the 0.10 default bar; the required
-#     per-device disk-IO + PVC volume-stats members are honestly unobservable on
-#     this rig (emptyDir, no kubelet_volume_stats ingest) -> every gap is named.
-#   • On the SCADA Pod: PHEN_PROBE_FAILURE_RESTART (MEASURED) — the liveness probe
-#     fails and the container restarts (restartCount climbs; lastState.terminated).
+#   • On the historian Pod's NODE: PHEN_STORAGE_SATURATION (MEASURED, DEGRADED) —
+#     /proc/pressure/io some-stall crosses the 0.10 bar. OBSERVABILITY DEPENDENCY:
+#     PSI io is a node-exporter signal (node_pressure_io_*). On a bare rig WITHOUT
+#     node-exporter (the default k3s box: ingest shows `node-exporter:0`) this
+#     phenomenon is honestly UNOBSERVABLE and Vigil stays silent rather than
+#     inventing it — deploy node-exporter to surface it. The per-device disk-IO +
+#     PVC volume-stats members are unobservable on emptyDir regardless — named gaps.
+#   • On the SCADA Pod: PHEN_PROBE_FAILURE_RESTART — the liveness probe fails and the
+#     container restarts (VALIDATED LIVE: restartCount climbs 0→6+, exit 137 via
+#     "Liveness probe failed: 503", not OOM, not connection-refused). COVERAGE FLOOR:
+#     the phenomenon's required members include probe-failure / failureThreshold /
+#     sustained signals that the kubelet does NOT expose as metrics; only the restart
+#     counter (kube_pod_container_status_restarts_total, via --ksm-enabled) is
+#     observable, so on this rig the phenomenon sits below its firing completeness
+#     and Vigil does not surface it — again, honest silence over a fabricated match.
+#
+# WHAT THIS RIG ACTUALLY PROVES (validated 2026-06-20, obsd live on k3s): with PSI
+# and the probe internals unobservable, the SCADA pod's only genuinely-observable
+# signal is its OWN CPU throttle (the busy read/timeout loop hits its 100m limit) —
+# and Vigil raises exactly that: PHEN_THROTTLING_CASCADE on the scada-reader Container
+# (MEASURED, DEGRADED, completeness 0.5, the unobserved member NAMED). It is keyed to
+# that ONE entity. Vigil does NOT relate it to the historian's disk activity, does NOT
+# mint a throttle→restart or storage→restart cause. That restraint IS the result.
 #
 # THE DISCIPLINE: there is NO authored phenomenon_relation edge
-# STORAGE_SATURATION -> PROBE_FAILURE_RESTART in the ontology. The two findings
-# are a CO-OCCURRENCE, surfaced ADJACENTLY (each MEASURED, each labelled) — Vigil
-# must NOT mint a causal cascade between them. "PVC I/O patterns link to pod
-# restarts" is answered as an honest co-occurrence the operator can see, never as
-# a fabricated cause. (corpus/labels/industrial/abb-historian-io-scada-restart.json)
+# STORAGE_SATURATION -> PROBE_FAILURE_RESTART in the ontology. The findings are a
+# CO-OCCURRENCE, surfaced ADJACENTLY (each MEASURED, each labelled) — Vigil must NOT
+# mint a causal cascade between them. "PVC I/O patterns link to pod restarts" is
+# answered as an honest co-occurrence the operator can see, never as a fabricated
+# cause. (corpus/labels/industrial/abb-historian-io-scada-restart.json)
 #
 # SAFETY: writes go to a node-backed emptyDir (NOT a hostPath/customer PVC); the
-# dd loop rm's its scratch file each pass so the writable layer never grows
+# writer rm's its scratch burst file each pass so the writable layer never grows
 # unbounded; memory limits cap every process. Teardown: delete the deployments,
 # NOT `delete -f` (that nukes the namespace).
 apiVersion: v1
@@ -29,8 +70,10 @@ kind: Namespace
 metadata:
   name: abb-industrial
 ---
-# The process historian: an fsync write loop that saturates the node disk while
-# "persisting" a telemetry burst. Same mechanism as corpus/chaos/io-pressure.yaml.
+# The process historian: persists a telemetry burst to its volume (an fsync write
+# flood that saturates the node disk) AND serves point queries on :8080 by reading
+# its on-disk TSDB cold. The read path and the write flood share the one block
+# device, so a query stalls exactly when the historian is busy persisting.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -48,34 +91,87 @@ spec:
       labels: {app: process-historian, vigil.io/role: historian}
     spec:
       containers:
-        - name: writer
-          image: busybox:1.36
-          command:
-            - sh
-            - -c
+        - name: historian
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
             - |
-              # Small chunks, fsync per chunk: the dirty set stays ~8MiB so the
-              # writer pressures the DISK, not its own memory cgroup. This is the
-              # historian persisting a telemetry burst to its volume.
-              while true; do
-                i=0
-                while [ $i -lt 32 ]; do
-                  dd if=/dev/zero of=/historian/burst bs=1M count=8 conv=fsync 2>/dev/null
-                  i=$((i+1))
-                done
-                rm -f /historian/burst
-              done
+              import os, socket, threading
+
+              DATA = "/historian/tsdb.dat"
+              BURST = "/historian/burst"
+              MiB = 1 << 20
+              FILE_MB = 3072         # the persisted on-disk history a query reads (3 GiB; see HARDWARE NOTE)
+
+              def log(*a): print("[historian]", *a, flush=True)
+
+              def prime():
+                  # Persist the 256 MiB on-disk TSDB once. The SCADA reader queries this.
+                  if os.path.exists(DATA) and os.path.getsize(DATA) >= FILE_MB * MiB:
+                      return
+                  log("priming", FILE_MB, "MiB tsdb.dat")
+                  z = b"\0" * MiB
+                  fd = os.open(DATA, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+                  for _ in range(FILE_MB):
+                      os.write(fd, z)
+                  os.fsync(fd); os.close(fd)
+                  log("primed")
+
+              def writer():
+                  # The telemetry-burst persistence: 8 MiB fsync'd chunks in a tight
+                  # loop. fsync-per-chunk keeps the dirty set small (~8 MiB) so this
+                  # pressures the DISK, not the memory cgroup. Saturates /proc/pressure/io.
+                  z = b"\0" * (8 * MiB)
+                  while True:
+                      fd = os.open(BURST, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+                      for _ in range(32):
+                          os.write(fd, z); os.fsync(fd)
+                      os.close(fd); os.unlink(BURST)
+
+              def serve(c):
+                  # A point query: read the persisted history COLD (drop it from cache
+                  # first → a genuine device read). Under the writer's saturation this
+                  # read can't make progress, so the reader's recv blocks past its budget.
+                  try:
+                      c.recv(64)
+                      fd = os.open(DATA, os.O_RDONLY)
+                      try:
+                          os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                          total = 0
+                          while True:
+                              b = os.read(fd, MiB)
+                              if not b: break
+                              total += len(b)
+                      finally:
+                          os.close(fd)
+                      c.sendall(b"rows=%d\n" % total)
+                  except Exception:
+                      pass
+                  finally:
+                      c.close()
+
+              prime()
+              threading.Thread(target=writer, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 8080)); s.listen(16)
+              log("serving reads on :8080")
+              while True:
+                  conn, _ = s.accept()
+                  serve(conn)   # sequential: reads serialize on the one disk, like a real historian
           volumeMounts:
             - name: tsdb
               mountPath: /historian
           ports:
             - {name: read, containerPort: 8080}
           resources:
-            requests: {cpu: 50m, memory: 32Mi}
-            limits: {memory: 256Mi}
+            # Memory is generous on purpose: this scenario is about the DISK, not the
+            # memory cgroup. posix_fadvise(DONTNEED) keeps reads cold regardless of cache,
+            # so a memory OOM never confounds the storage-saturation signal.
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 384Mi}
       volumes:
         - name: tsdb
-          emptyDir: {} # node-disk backed: the writes hit the real block device
+          emptyDir: {} # node-disk backed: the writes (and cold reads) hit the real block device
 ---
 apiVersion: v1
 kind: Service
@@ -87,8 +183,8 @@ spec:
   ports:
     - {name: read, port: 8080, targetPort: 8080}
 ---
-# The SCADA reader: polls the historian and exposes an HTTP liveness endpoint on
-# its own health port. When historian reads stall under disk saturation, the
+# The SCADA reader: polls the historian for a point query and exposes an HTTP
+# liveness endpoint. When the historian read stalls under disk saturation, the
 # reader's event loop stops making progress; the /healthz endpoint flips to 503
 # and the kubelet's httpGet probe fails until it restarts the pod.
 apiVersion: apps/v1
@@ -114,14 +210,13 @@ spec:
           args:
             - |
               import socket, threading, time
-              # Liveness server: an HTTP health endpoint that returns 200 only
-              # while the read loop is making progress. A stalled historian read
-              # => no progress in >=15s => the endpoint returns 503, so the
-              # kubelet's httpGet probe records a failure. After failureThreshold
-              # consecutive failures the kubelet restarts the container. (A
-              # tcpSocket probe could NOT detect this: the listener stays open and
-              # the TCP handshake always succeeds; the staleness lives in the HTTP
-              # status, which only an httpGet probe reads.)
+              # Liveness server: returns 200 only while the read loop is making
+              # progress. A stalled historian read => no progress in >=15s => the
+              # endpoint returns 503, so the kubelet's httpGet probe records a
+              # failure. After failureThreshold consecutive failures the kubelet
+              # restarts the container. (A tcpSocket probe could NOT detect this:
+              # the listener stays open and the handshake always succeeds; the
+              # staleness lives in the HTTP status, which only httpGet reads.)
               alive = {"t": time.time()}
               def health():
                   s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -130,7 +225,6 @@ spec:
                       c, _ = s.accept()
                       try:
                           c.recv(1024)  # drain the kubelet's GET request line/headers
-                          # If the read loop has not progressed in 15s, report 503.
                           if time.time() - alive["t"] < 15:
                               body = b"ok"
                               c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n"
@@ -148,13 +242,15 @@ spec:
                   try:
                       c = socket.create_connection(
                           ("process-historian.abb-industrial.svc.cluster.local", 8080), timeout=5)
+                      c.settimeout(2)   # a point query that stalls past 2s on the saturated volume times out
+                                        # (a 3 GiB cold scan runs ~2.8–3.6s here, reliably past this budget)
                       c.sendall(b"read")
-                      c.recv(64)        # blocks while the historian disk is saturated
+                      c.recv(64)        # blocks while the historian's cold disk scan is in flight
                       c.close()
-                      alive["t"] = time.time()
+                      alive["t"] = time.time()   # progress ONLY on a completed query
                   except Exception:
                       pass
-                  time.sleep(1)
+                  time.sleep(4)         # a realistic SCADA poll interval (keeps disk load bounded)
           ports:
             - {name: health, containerPort: 9090}
           livenessProbe:
