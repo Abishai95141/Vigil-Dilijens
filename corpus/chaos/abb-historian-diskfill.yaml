@@ -1,0 +1,46 @@
+# ABB Genix chaos rig — plant historian disk filling (PHEN_DISK_FILLING).
+#
+# Story: telemetry retention is mis-configured / ingest is underestimated and the Genix
+# historian's volume fills toward capacity; once full, writes fail and data is lost.
+#
+# ⚠ GATE-PENDING ON KIND (honest partial coverage). kind's local-path provisioner does
+# not reliably emit per-volume kubelet_volume_stats_{used,capacity}_bytes, so the
+# VOLUME lane cannot see a PVC filling here. This rig is provided for completeness and
+# for a real cluster (k3s-on-VMs staging, doc 14 §3.1) where volume stats ARE emitted.
+# On kind it is labeled gate-pending — NOT claimed working. See corpus/labels/abb-genix-scenarios.md.
+#
+# What this rig DOES do on kind: sustain a high historian write rate (the upstream cause),
+# so the historian's own working-set/CPU and write counters move. To actually fill the
+# 10Gi PVC for a real-cluster demo, also run (manual, deliberate):
+#   kubectl -n abb-genix exec genix-historian-0 -- \
+#     sh -c 'dd if=/dev/zero of=/var/lib/influxdb2/_ballast bs=1M count=9000'
+# and remove /var/lib/influxdb2/_ballast to heal.
+#
+# Apply (high ingest): kubectl apply -f corpus/chaos/abb-historian-diskfill.yaml
+# Heal (subside):      kubectl -n abb-genix run heal --rm -it --image=curlimages/curl:8.10.1 \
+#                        --restart=Never -- curl -fsS 'http://opcua-gateway:8080/ctl?rate=5'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: abb-historian-diskfill
+  namespace: abb-genix
+  labels: { app: abb-chaos, scenario: historian-diskfill }
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 180
+  template:
+    metadata:
+      labels: { app: abb-chaos, scenario: historian-diskfill }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trigger
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            # rate=30 (30 x 5 assets = 150 samples/s) stays UNDER the gateway's 200/s
+            # LOAD_SURGE bar so this rig demonstrates elevated ingest WITHOUT also tripping
+            # an unrelated surge phenomenon. On a real cluster you would push far higher to
+            # actually fill the PVC (which would also, correctly, raise LOAD_SURGE).
+            - "curl -fsS --retry 30 --retry-all-errors --retry-connrefused 'http://opcua-gateway:8080/ctl?rate=30' && echo ' <- elevated ingest; DISK_FILLING detection is gate-pending on kind (see header)'"

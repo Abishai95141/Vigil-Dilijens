@@ -436,6 +436,105 @@ boutique:
     kubectl wait --for=condition=Available deployment --all -n "${ns}" --timeout=420s
     kubectl get pods -n "${ns}" -o wide
 
+# --- ABB Ability Genix predictive-maintenance simulation --------------------
+# The ABB-aligned reference workload (deploy/workloads/abb-genix): an ABB Ability
+# Genix-style PdM pipeline for a water/wastewater plant. See its README.md.
+
+# Create / delete the DEDICATED single-node cluster (full isolation from `vigil`).
+abb-up:
+    kind create cluster --config deploy/kind/abb-cluster.yaml --name vigil-abb
+abb-down:
+    kind delete cluster --name vigil-abb
+
+# Build the role-parameterized simulator image and load it into a kind cluster
+# (default `vigil`; pass `vigil-abb` for the dedicated single-node cluster).
+abb-sim-build cluster="vigil":
+    docker build -t vigil-abb-sim:0.1 deploy/workloads/abb-genix/sim
+    kind load docker-image vigil-abb-sim:0.1 --name {{cluster}}
+
+# Deploy the ABB Genix simulation into the `abb-genix` namespace on the CURRENT context.
+# Auto-labels a schedulable node (vigil.io/sim-node=abb-genix) so the same manifests run
+# on a `vigil` worker OR the single-node `vigil-abb` cluster, no edits. Applies the
+# doc 14 §3.3 customizations and waits for the backbone + every Deployment to be Available.
+abb-genix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ns=abb-genix
+    # Pin the sim to one node: first non-control-plane node, else the only node.
+    node=$(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    if [ -z "${node}" ]; then
+      node=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+    fi
+    echo "pinning abb-genix to node: ${node}"
+    kubectl label node "${node}" vigil.io/sim-node=abb-genix --overwrite
+    # On a single-node cluster the only node is the control-plane: make sure it is
+    # schedulable (idempotent no-op on the multi-node `vigil` cluster, where the sim
+    # lands on an already-untainted worker).
+    kubectl taint node "${node}" node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
+    kubectl apply -f deploy/workloads/abb-genix/00-namespace-config.yaml
+    kubectl apply -f deploy/workloads/abb-genix/10-backbone.yaml
+    kubectl apply -f deploy/workloads/abb-genix/20-sims.yaml
+    # doc 14 §3.3: strip limits from one service (opcua-gateway) -> unbounded resolvability-hole.
+    kubectl patch deployment opcua-gateway -n "${ns}" --type=json \
+      -p '[{"op":"remove","path":"/spec/template/spec/containers/0/resources/limits"}]'
+    # doc 14 §3.3: tune one service (smart-sensors) near-threshold: 96Mi -> 64Mi
+    # (measured working set ~14Mi — an honest declared bar well above the live RSS).
+    kubectl patch deployment smart-sensors -n "${ns}" --type=json \
+      -p '[{"op":"replace","path":"/spec/template/spec/containers/0/resources/limits/memory","value":"64Mi"}]'
+    echo "waiting for the stateful backbone (image pulls can take a few minutes)..."
+    for ss in edgenius-broker genix-historian genix-datalake asset-registry; do
+      kubectl rollout status "statefulset/${ss}" -n "${ns}" --timeout=420s
+    done
+    kubectl wait --for=condition=Available deployment --all -n "${ns}" --timeout=420s
+    kubectl get pods,pvc -n "${ns}" -o wide
+
+# Tear down the ABB Genix simulation namespace (PVCs included).
+abb-genix-down:
+    kubectl delete namespace abb-genix --ignore-not-found
+
+# Live smoke gate (run AFTER `just abb-genix`): assert the pipeline is wired and flowing —
+# all pods Ready, 4 PVCs Bound, the historian is receiving writes, asset-api serves assets.
+# Uses python3 in-pod (present in the sim image) so it needs no curl/wget. Linux/kind box.
+abb-genix-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ns=abb-genix
+    echo "== pods =="; kubectl get pods -n "${ns}"
+    # workload pods only (exclude completed chaos-Job pods, which never become Ready)
+    kubectl wait --for=condition=Ready pod -l 'app notin (abb-chaos)' -n "${ns}" --timeout=300s
+    bound=$(kubectl get pvc -n "${ns}" -o jsonpath='{.items[*].status.phase}' | tr ' ' '\n' | grep -c Bound || true)
+    echo "PVCs Bound: ${bound}/4"; [ "${bound}" -ge 4 ] || { echo "FAIL: <4 PVCs Bound"; exit 1; }
+    echo "letting the pipeline flow for 30s..."; sleep 30
+    metrics=$(kubectl exec -n "${ns}" deploy/stream-processor -- \
+      python3 -c "import urllib.request as u;print(u.urlopen('http://localhost:8080/metrics').read().decode())")
+    writes=$(printf '%s' "${metrics}" | awk '/^abb_historian_writes_total/{print $2}')
+    lake=$(printf '%s' "${metrics}" | awk '/^abb_datalake_objects_total/{print $2}')
+    echo "historian writes: ${writes:-0}   datalake objects: ${lake:-0}"
+    awk "BEGIN{exit !(${writes:-0} > 0)}" || { echo "FAIL: no historian writes (data not flowing)"; exit 1; }
+    served=$(kubectl exec -n "${ns}" deploy/asset-api -- \
+      python3 -c "import urllib.request as u;print(u.urlopen('http://localhost:8080/assets').read().decode()[:200])")
+    echo "asset-api /assets -> ${served}"
+    # Vigil-contract DRIFT CHECK: the SLO bars bind only if three bare strings agree —
+    # the sim's emitted metric name, the vigil.io/slo.* annotation, and the overlay rule.
+    # Any rename breaks binding SILENTLY in obsd; this turns that into a loud gate failure.
+    echo "== Vigil contract drift check (metric <-> vigil.io/slo key <-> overlay rule) =="
+    overlay=ontology/graph/overlays/experimental/app-conditions-v1.yaml
+    ann=$(kubectl get deploy -n "${ns}" -o yaml)
+    fail=0
+    chk() {  # $1 = metric name, $2 = slo config path
+      local ok=1
+      printf '%s' "${metrics}" | grep -q "^$1 " || { echo "  DRIFT: metric '$1' not emitted by the sim (sim.py renamed?)"; ok=0; }
+      printf '%s' "${ann}" | grep -q "vigil.io/$2" || { echo "  DRIFT: annotation 'vigil.io/$2' missing from the deploy"; ok=0; }
+      { grep -q "metric: $1" "${overlay}" && grep -q "config_path: $2" "${overlay}"; } || { echo "  DRIFT: overlay missing 'metric: $1' or 'config_path: $2'"; ok=0; }
+      [ "${ok}" -eq 1 ] && echo "  OK  $1  <->  vigil.io/$2  <->  overlay" || fail=1
+    }
+    chk app_requests_total       slo.requests.max_rate
+    chk app_queue_depth          slo.queue.max_depth
+    chk app_last_update_seconds  slo.freshness.max_age
+    [ "${fail}" -eq 0 ] || { echo "FAIL: Vigil contract DRIFT — the three legs disagree (binding would break silently)"; exit 1; }
+    echo "ABB Genix gate PASSED"
+
 # --- Aggregates -------------------------------------------------------------
 
 # The full Go gate, mirroring CI: format check, vet, generated-code freshness, tests.

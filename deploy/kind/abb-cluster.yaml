@@ -1,0 +1,22 @@
+# Dedicated SINGLE-NODE kind cluster for the ABB Genix simulation
+# (deploy/workloads/abb-genix). Use this when you want the sim FULLY ISOLATED from the
+# 3-node `vigil` cluster — true single-node, matching the workload's single-node design.
+#
+# Pods schedule on the lone control-plane node (kind leaves it schedulable). The
+# `abb-genix` recipe labels whichever node it finds (vigil.io/sim-node=abb-genix), so the
+# same manifests deploy here OR onto a worker of the `vigil` cluster with no edits.
+#
+# The 2-worker `vigil` cluster (deploy/kind/cluster.yaml) remains authoritative for
+# node-pressure / 2-hop noisy-neighbour phenomena (doc 14 §3.1). This single-node cluster
+# is scoped to the container- / app- / cascade-level scenarios the ABB sim exercises.
+#
+#   just abb-up                       # create this cluster (context -> kind-vigil-abb)
+#   just rbac                         # read-only RBAC
+#   just abb-sim-build vigil-abb      # build + load the sim image into THIS cluster
+#   just abb-genix                    # deploy (auto-labels the node)
+#   just abb-down                     # delete this cluster
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: vigil-abb
+nodes:
+  - role: control-plane

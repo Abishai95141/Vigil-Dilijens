@@ -1,0 +1,44 @@
+# ABB Genix chaos rig — edge broker backpressure / stream-processor queue saturation.
+#
+# Story: a sensor burst combined with a slow normalization stage backs up the Edgenius
+# broker; the Genix Integrate stream-processor's queue builds faster than it can drain.
+#
+# Mechanism (three injections):
+#   1. opcua-gateway /ctl?rate=20 -> the gateway FORWARDS faster (ingress burst). The
+#      gateway owns the forward rate (the sensors expose telemetry on demand), so the
+#      burst must be applied here, not at smart-sensors.
+#   2. stream-processor /ctl?slow=300 -> 300ms injected per-message processing latency
+#      (the drainers fall behind) -> the pending-message queue grows past the 500 bar
+#      -> PHEN_APP_QUEUE_SATURATION (L4) on stream-processor.
+#   3. stream-processor /ctl?cpuburn=1 -> busy CPU spin exceeding the 250m CPU limit ->
+#      CFS throttling -> THROTTLING_CASCADE. (PROBE_FAILURE_RESTART may follow only if
+#      sustained throttle starves /healthz past the readiness timeout — not guaranteed.)
+#
+# Apply to load:   kubectl apply -f corpus/chaos/abb-broker-backpressure.yaml
+# Heal (relieve):  kubectl -n abb-genix run heal --rm -it --image=curlimages/curl:8.10.1 --restart=Never -- \
+#                    sh -c "curl -fsS 'http://stream-processor:8080/ctl?slow=0&cpuburn=0'; curl -fsS 'http://opcua-gateway:8080/ctl?rate=5'"
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: abb-broker-backpressure
+  namespace: abb-genix
+  labels: { app: abb-chaos, scenario: broker-backpressure }
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 180
+  template:
+    metadata:
+      labels: { app: abb-chaos, scenario: broker-backpressure }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trigger
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              curl -fsS --retry 30 --retry-all-errors --retry-connrefused 'http://opcua-gateway:8080/ctl?rate=20'
+              curl -fsS --retry 30 --retry-all-errors --retry-connrefused 'http://stream-processor:8080/ctl?slow=300&cpuburn=1'
+              echo ' <- ingress burst + slow drain + cpu burn armed; expect APP_QUEUE_SATURATION (+ THROTTLING_CASCADE) on stream-processor'

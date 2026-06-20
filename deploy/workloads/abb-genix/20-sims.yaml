@@ -1,0 +1,311 @@
+# ABB Ability Genix simulation — the custom simulator layer (vigil-abb-sim:0.1).
+# Part 3 of 3. Five role-parameterized sims forming the ABB-specific layers of the data path.
+#
+# ═══ VIGIL COMPATIBILITY CONTRACT — what obsd READS in this file (do NOT "clean up") ═══
+#  1. prometheus.io/scrape:"true"  -> opt-in app-metrics scrape (needs obsd --app-metrics-enabled).
+#     Value must be the literal "true". prometheus.io/port MUST equal the containerPort below
+#     AND the sim's PORT (8080); a mismatch silently disables scraping (pod stays Ready, no error).
+#  2. vigil.io/slo.<path>:"<n>"  -> a borrowed-normativity SLO bar. The key minus "vigil.io/" IS
+#     the obsd config path and must match a config_path in the experimental overlay
+#     ontology/graph/overlays/experimental/app-conditions-v1.yaml, which binds it to a phenomenon
+#     over a LABEL-FREE metric name emitted by sim.py build_metrics(). The THREE must agree:
+#        sim.py metric        |  vigil.io/slo key        |  phenomenon
+#        app_requests_total   |  slo.requests.max_rate   |  PHEN_APP_LOAD_SURGE
+#        app_queue_depth      |  slo.queue.max_depth     |  PHEN_APP_QUEUE_SATURATION
+#        app_last_update_seconds | slo.freshness.max_age |  PHEN_APP_DATA_STALENESS
+#     Renaming any one of the three breaks binding with NO error — change them together. Metrics
+#     are LABEL-FREE on purpose (exactly one stream per (pod,metric) or Materialize won't bind).
+#     Canonical map: README.md "Vigil compatibility contract" + corpus/labels/abb-genix-scenarios.md.
+#  3. resources.limits.{memory,cpu}  -> the cgroup DETECTION BARS (OOM / throttle), marked
+#     [VIGIL BAR] below. An ABSENT limit is intentional (unbounded -> Tier-B-ineligible, listed).
+#     ⚠ `just abb-genix` PATCHES two limits AFTER apply (doc 14 §3.3): opcua-gateway -> unbounded,
+#     smart-sensors 96Mi -> 64Mi. For those two the COMMITTED value is NOT the live bar.
+#  4. Service.selector == pod label `app:<name>`  -> selects (svc->pod) edges.
+#  NOT read by obsd: nodeSelector `vigil.io/sim-node` is a scheduling pin only (despite the prefix).
+# ═══════════════════════════════════════════════════════════════════════════════════════════
+#
+# imagePullPolicy: IfNotPresent — the image is `kind load`-ed, never pulled.
+
+# ── smart-sensors — ABB Ability Smart Sensor fleet (L1 field) ────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: smart-sensors
+  namespace: abb-genix
+  labels: { app: smart-sensors }
+spec:
+  selector: { app: smart-sensors }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smart-sensors
+  namespace: abb-genix
+  labels: { app: smart-sensors }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: smart-sensors } }
+  template:
+    metadata:
+      labels: { app: smart-sensors }
+      annotations:
+        prometheus.io/scrape: "true"           # [VIGIL] literal "true" opts into the --app-metrics-enabled scrape
+        prometheus.io/port: "8080"             # [VIGIL] MUST equal the containerPort below AND the sim PORT (8080)
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: sim
+          image: vigil-abb-sim:0.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env: [{ name: ROLE, value: sensors }]
+          envFrom:
+            - configMapRef: { name: plant-topology }
+            - secretRef: { name: genix-credentials }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 30m, memory: 48Mi }
+            # [VIGIL BAR] mem = OOM bar. ⚠ `just abb-genix` PATCHES this to 64Mi at install
+            # (doc 14 §3.3 near-threshold) — the COMMITTED 96Mi is NOT the live bar.
+            limits:   { cpu: 150m, memory: 96Mi }
+---
+# ── opcua-gateway — System 800xA connectivity / OPC-UA->MQTT bridge (L2) ─────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: opcua-gateway
+  namespace: abb-genix
+  labels: { app: opcua-gateway }
+spec:
+  selector: { app: opcua-gateway }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opcua-gateway
+  namespace: abb-genix
+  labels: { app: opcua-gateway }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: opcua-gateway } }
+  template:
+    metadata:
+      labels: { app: opcua-gateway }
+      annotations:
+        prometheus.io/scrape: "true"           # [VIGIL] literal "true" opts into the --app-metrics-enabled scrape
+        prometheus.io/port: "8080"             # [VIGIL] MUST equal the containerPort below AND the sim PORT (8080)
+        prometheus.io/path: "/metrics"
+        # L1 LOAD_SURGE bar: rate(app_requests_total) > 200 samples/s => PHEN_APP_LOAD_SURGE
+        vigil.io/slo.requests.max_rate: "200"
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: sim
+          image: vigil-abb-sim:0.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: ROLE, value: gateway }
+            - { name: SENSORS_URL, value: "http://smart-sensors:8080" }
+            - { name: BROKER_HOST, value: "edgenius-broker" }
+          envFrom:
+            - configMapRef: { name: plant-topology }
+            - secretRef: { name: genix-credentials }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 30m, memory: 48Mi }
+            # [VIGIL BAR] ⚠ `just abb-genix` STRIPS this limit at install (doc 14 §3.3) — the
+            # live bar is UNBOUNDED (resolvability-hole -> Tier-B-ineligible, listed). Committed 96Mi is moot.
+            limits:   { cpu: 150m, memory: 96Mi }
+---
+# ── stream-processor — Genix Integrate normalization (L3 ingest) ─────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: stream-processor
+  namespace: abb-genix
+  labels: { app: stream-processor }
+spec:
+  selector: { app: stream-processor }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-processor
+  namespace: abb-genix
+  labels: { app: stream-processor }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: stream-processor } }
+  template:
+    metadata:
+      labels: { app: stream-processor }
+      annotations:
+        prometheus.io/scrape: "true"           # [VIGIL] literal "true" opts into the --app-metrics-enabled scrape
+        prometheus.io/port: "8080"             # [VIGIL] MUST equal the containerPort below AND the sim PORT (8080)
+        prometheus.io/path: "/metrics"
+        # L4 QUEUE_SATURATION bar: app_queue_depth > 500 => PHEN_APP_QUEUE_SATURATION
+        vigil.io/slo.queue.max_depth: "500"
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: sim
+          image: vigil-abb-sim:0.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: ROLE, value: stream }
+            - { name: BROKER_HOST, value: "edgenius-broker" }
+            - { name: INFLUX_URL, value: "http://genix-historian:8086" }
+            - { name: DATALAKE_ENDPOINT, value: "genix-datalake:9000" }
+            - { name: DRAINERS, value: "2" }
+          envFrom:
+            - configMapRef: { name: plant-topology }
+            - secretRef: { name: genix-credentials }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            # [VIGIL BAR] mem 192Mi = OOM bar; cpu 250m = throttle bar (THROTTLING_CASCADE).
+            limits:   { cpu: 250m, memory: 192Mi }
+---
+# ── pdm-analyzer — Genix Model Fabric predictive maintenance (L3 analytics) ──────
+# The MEMORY_LEAK -> OOM_KILL_CGROUP flagship target. Bounded (256Mi) so the leak has
+# a bar to cross (0.95 x 256 = 243.2Mi); the kernel OOM-kills the cgroup at 256Mi.
+# corpus/chaos/abb-analyzer-leak.yaml flips /ctl?leak=on to start the ramp. The Service
+# below exposes the control/health surface (and a selects edge) only — no data flows in.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pdm-analyzer
+  namespace: abb-genix
+  labels: { app: pdm-analyzer }
+spec:
+  selector: { app: pdm-analyzer }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pdm-analyzer
+  namespace: abb-genix
+  labels: { app: pdm-analyzer }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pdm-analyzer } }
+  template:
+    metadata:
+      labels: { app: pdm-analyzer }
+      annotations:
+        prometheus.io/scrape: "true"           # [VIGIL] literal "true" opts into the --app-metrics-enabled scrape
+        prometheus.io/port: "8080"             # [VIGIL] MUST equal the containerPort below AND the sim PORT (8080)
+        prometheus.io/path: "/metrics"
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: sim
+          image: vigil-abb-sim:0.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: ROLE, value: analyzer }
+            - { name: BROKER_HOST, value: "edgenius-broker" }
+            - { name: INFLUX_URL, value: "http://genix-historian:8086" }
+            - { name: PG_HOST, value: "asset-registry" }
+            - { name: ANALYZE_INTERVAL, value: "10" }
+          envFrom:
+            - configMapRef: { name: plant-topology }
+            - secretRef: { name: genix-credentials }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            # [VIGIL BAR] mem 256Mi = OOM bar (the MEMORY_LEAK -> OOM_KILL_CGROUP flagship; 0.95x = 243Mi).
+            limits:   { cpu: 200m, memory: 256Mi }
+---
+# ── asset-api — Genix Asset Performance Management API (L3 serving) ───────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: asset-api
+  namespace: abb-genix
+  labels: { app: asset-api }
+spec:
+  selector: { app: asset-api }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: asset-api
+  namespace: abb-genix
+  labels: { app: asset-api }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: asset-api } }
+  template:
+    metadata:
+      labels: { app: asset-api }
+      annotations:
+        prometheus.io/scrape: "true"           # [VIGIL] literal "true" opts into the --app-metrics-enabled scrape
+        prometheus.io/port: "8080"             # [VIGIL] MUST equal the containerPort below AND the sim PORT (8080)
+        prometheus.io/path: "/metrics"
+        # L6 DATA_STALENESS bar (SECONDS): (evalNow - app_last_update_seconds) > 120
+        #   => PHEN_APP_DATA_STALENESS. Freezes when the pipeline upstream stalls.
+        vigil.io/slo.freshness.max_age: "120"
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: sim
+          image: vigil-abb-sim:0.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          env:
+            - { name: ROLE, value: assetapi }
+            - { name: INFLUX_URL, value: "http://genix-historian:8086" }
+            - { name: PG_HOST, value: "asset-registry" }
+          envFrom:
+            - configMapRef: { name: plant-topology }
+            - secretRef: { name: genix-credentials }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 30m, memory: 48Mi }
+            # [VIGIL BAR] mem 128Mi = OOM bar.
+            limits:   { cpu: 150m, memory: 128Mi }

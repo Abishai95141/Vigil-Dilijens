@@ -1,0 +1,36 @@
+# ABB Genix chaos rig — process upset -> telemetry load surge.
+#
+# Story: a process upset (e.g. a pump trips and the control loop reacts) makes the field
+# layer emit far more frequently; the gateway's publish rate spikes above its declared bar.
+#
+# Mechanism: opcua-gateway /ctl?rate=80 -> the gateway forwards up to 80 polls/s x 5
+# assets = ~400 samples/s nominal, well over the 200 samples/s bar even after the
+# synchronous poll loop erodes throughput -> rate(app_requests_total) > 200 ->
+# PHEN_APP_LOAD_SURGE (L1) on opcua-gateway. (A MEASURED rate crossing a declared bar —
+# not a learned anomaly. The counter is broker-independent: it counts readings forwarded,
+# so the surge fires even if the broker is briefly disconnected.)
+#
+# Apply to surge:  kubectl apply -f corpus/chaos/abb-load-surge.yaml
+# Heal (subside):  kubectl -n abb-genix run heal --rm -it --image=curlimages/curl:8.10.1 \
+#                    --restart=Never -- curl -fsS 'http://opcua-gateway:8080/ctl?rate=5'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: abb-load-surge
+  namespace: abb-genix
+  labels: { app: abb-chaos, scenario: load-surge }
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 180
+  template:
+    metadata:
+      labels: { app: abb-chaos, scenario: load-surge }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trigger
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - "curl -fsS --retry 30 --retry-all-errors --retry-connrefused 'http://opcua-gateway:8080/ctl?rate=80' && echo ' <- surge armed; expect APP_LOAD_SURGE on opcua-gateway'"

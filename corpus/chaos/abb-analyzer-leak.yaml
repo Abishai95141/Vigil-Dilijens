@@ -1,0 +1,40 @@
+# ABB Genix chaos rig — PdM analytics memory leak -> cgroup OOM (the flagship).
+#
+# Story: the Genix Model Fabric predictive-maintenance container develops a memory leak
+# and is OOM-killed, losing remaining-useful-life computation for the plant's assets.
+#
+# Mechanism (mirrors corpus/chaos/leak-oom.yaml's intent, runtime-injected via /ctl):
+#   1. /ctl?leak=on -> pdm-analyzer appends ~4MiB per analyze cycle; its working set
+#      rises through the at-threshold band of its 0.95 x 256Mi = 243.2Mi bar WHILE
+#      RISING -> PHEN_MEMORY_LEAK fires (entity-local, degraded) and is FORECASTABLE;
+#   2. the kernel OOM-kills the cgroup at 256Mi -> PHEN_OOM_KILL_CGROUP fires (Container
+#      anchor). NOTE on kind: cAdvisor's container_oom_events_total stays 0, so the OOM
+#      is detected through the EVENTS lane from the pod's containerStatuses
+#      lastState.terminated.reason == "OOMKilled" (exitCode 137) — run obsd with
+#      --events-enabled. (The MEMORY_LEAK half via cAdvisor working-set is unaffected.)
+#   3. the authored MEMORY_LEAK -> OOM_KILL_CGROUP relation is recognized as ONE story.
+#
+# Apply to arm:    kubectl apply -f corpus/chaos/abb-analyzer-leak.yaml
+# Heal (stop):     kubectl -n abb-genix run heal --rm -it --image=curlimages/curl:8.10.1 \
+#                    --restart=Never -- curl -fsS 'http://pdm-analyzer:8080/ctl?leak=off'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: abb-analyzer-leak
+  namespace: abb-genix
+  labels: { app: abb-chaos, scenario: analyzer-leak }
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 180
+  template:
+    metadata:
+      labels: { app: abb-chaos, scenario: analyzer-leak }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trigger
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - "curl -fsS --retry 30 --retry-all-errors --retry-connrefused 'http://pdm-analyzer:8080/ctl?leak=on' && echo ' <- leak armed; expect MEMORY_LEAK then OOM_KILL_CGROUP on pdm-analyzer'"

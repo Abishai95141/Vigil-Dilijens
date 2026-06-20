@@ -1,0 +1,297 @@
+# ABB Ability Genix simulation — stateful backbone (real off-the-shelf images).
+# Part 2 of 3. Four genuinely-stateful components, each on its own PVC:
+#   edgenius-broker  (Mosquitto)  -> queue/retained persistence
+#   genix-historian  (InfluxDB)   -> the time-series historian (the big data PVC)
+#   genix-datalake   (MinIO)      -> long-term object store
+#   asset-registry   (Postgres)   -> relational asset / RUL findings
+# plus operations-dashboard (Grafana, stateless, ConfigMap-provisioned).
+#
+# All pinned to one node via nodeSelector `vigil.io/sim-node` (a SCHEDULING pin only —
+# NOT read by obsd, despite the vigil.io/ prefix; the abb-genix recipe applies the label).
+#
+# ═══ VIGIL COMPATIBILITY CONTRACT — what obsd READS in this file ═══
+#   * resources.limits.{memory,cpu}  -> the DETECTION BARS Vigil borrows ([VIGIL BAR] below;
+#     doc 01 borrowed normativity). Changing one moves an OOM/throttle threshold.
+#   * volumeClaimTemplates storage requests -> mounts (pod->PVC) edges + the DISK_FILLING bar
+#     (gate-pending on kind — no per-volume kubelet_volume_stats).
+#   * Service.selector == pod label `app:<name>`  -> selects (svc->pod) edges. Headless
+#     Services (clusterIP: None) still emit EndpointSlices, so selects still binds.
+# ══════════════════════════════════════════════════════════════════
+
+# ── edgenius-broker — ABB Ability Edgenius edge MQTT broker (Mosquitto) ──────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgenius-broker
+  namespace: abb-genix
+  labels: { app: edgenius-broker }
+spec:
+  clusterIP: None
+  selector: { app: edgenius-broker }
+  ports: [{ name: mqtt, port: 1883, targetPort: 1883 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: edgenius-broker
+  namespace: abb-genix
+  labels: { app: edgenius-broker }
+spec:
+  serviceName: edgenius-broker
+  replicas: 1
+  selector: { matchLabels: { app: edgenius-broker } }
+  template:
+    metadata:
+      labels: { app: edgenius-broker }
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          ports: [{ containerPort: 1883 }]
+          volumeMounts:
+            - { name: conf, mountPath: /mosquitto/config/mosquitto.conf, subPath: mosquitto.conf }
+            - { name: data, mountPath: /mosquitto/data }
+          readinessProbe:
+            tcpSocket: { port: 1883 }
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 1883 }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+      volumes:
+        - name: conf
+          configMap: { name: mosquitto-config }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 1Gi } }
+---
+# ── genix-historian — Genix time-series historian (InfluxDB 2.x) ─────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: genix-historian
+  namespace: abb-genix
+  labels: { app: genix-historian }
+spec:
+  clusterIP: None
+  selector: { app: genix-historian }
+  ports: [{ name: http, port: 8086, targetPort: 8086 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: genix-historian
+  namespace: abb-genix
+  labels: { app: genix-historian }
+spec:
+  serviceName: genix-historian
+  replicas: 1
+  selector: { matchLabels: { app: genix-historian } }
+  template:
+    metadata:
+      labels: { app: genix-historian }
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: influxdb
+          image: influxdb:2.7
+          ports: [{ containerPort: 8086 }]
+          env:
+            - { name: DOCKER_INFLUXDB_INIT_MODE, value: setup }
+            - { name: DOCKER_INFLUXDB_INIT_ORG, valueFrom: { secretKeyRef: { name: genix-credentials, key: INFLUX_ORG } } }
+            - { name: DOCKER_INFLUXDB_INIT_BUCKET, valueFrom: { secretKeyRef: { name: genix-credentials, key: INFLUX_BUCKET } } }
+            - { name: DOCKER_INFLUXDB_INIT_USERNAME, valueFrom: { secretKeyRef: { name: genix-credentials, key: INFLUX_USERNAME } } }
+            - { name: DOCKER_INFLUXDB_INIT_PASSWORD, valueFrom: { secretKeyRef: { name: genix-credentials, key: INFLUX_PASSWORD } } }
+            - { name: DOCKER_INFLUXDB_INIT_ADMIN_TOKEN, valueFrom: { secretKeyRef: { name: genix-credentials, key: INFLUX_TOKEN } } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/influxdb2 }
+          readinessProbe:
+            httpGet: { path: /health, port: 8086 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits:   { cpu: 1000m, memory: 1Gi }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 10Gi } }
+---
+# ── genix-datalake — Genix long-term data fabric (MinIO object store) ────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: genix-datalake
+  namespace: abb-genix
+  labels: { app: genix-datalake }
+spec:
+  clusterIP: None
+  selector: { app: genix-datalake }
+  ports:
+    - { name: s3, port: 9000, targetPort: 9000 }
+    - { name: console, port: 9001, targetPort: 9001 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: genix-datalake
+  namespace: abb-genix
+  labels: { app: genix-datalake }
+spec:
+  serviceName: genix-datalake
+  replicas: 1
+  selector: { matchLabels: { app: genix-datalake } }
+  template:
+    metadata:
+      labels: { app: genix-datalake }
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: minio
+          image: minio/minio:RELEASE.2024-09-13T20-26-02Z
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - { containerPort: 9000 }
+            - { containerPort: 9001 }
+          env:
+            - { name: MINIO_ROOT_USER, valueFrom: { secretKeyRef: { name: genix-credentials, key: MINIO_ROOT_USER } } }
+            - { name: MINIO_ROOT_PASSWORD, valueFrom: { secretKeyRef: { name: genix-credentials, key: MINIO_ROOT_PASSWORD } } }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            httpGet: { path: /minio/health/ready, port: 9000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 10Gi } }
+---
+# ── asset-registry — Genix asset / APM metadata store (Postgres) ─────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: asset-registry
+  namespace: abb-genix
+  labels: { app: asset-registry }
+spec:
+  clusterIP: None
+  selector: { app: asset-registry }
+  ports: [{ name: pg, port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: asset-registry
+  namespace: abb-genix
+  labels: { app: asset-registry }
+spec:
+  serviceName: asset-registry
+  replicas: 1
+  selector: { matchLabels: { app: asset-registry } }
+  template:
+    metadata:
+      labels: { app: asset-registry }
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports: [{ containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_USER, valueFrom: { secretKeyRef: { name: genix-credentials, key: PG_USER } } }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: genix-credentials, key: PG_PASSWORD } } }
+            - { name: POSTGRES_DB, valueFrom: { secretKeyRef: { name: genix-credentials, key: PG_DB } } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "genix", "-d", "assets"] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 2Gi } }
+---
+# ── operations-dashboard — Genix operations dashboard (Grafana, stateless) ───────
+apiVersion: v1
+kind: Service
+metadata:
+  name: operations-dashboard
+  namespace: abb-genix
+  labels: { app: operations-dashboard }
+spec:
+  selector: { app: operations-dashboard }
+  ports: [{ name: http, port: 3000, targetPort: 3000 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: operations-dashboard
+  namespace: abb-genix
+  labels: { app: operations-dashboard }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: operations-dashboard } }
+  template:
+    metadata:
+      labels: { app: operations-dashboard }
+    spec:
+      nodeSelector: { vigil.io/sim-node: abb-genix }
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.0
+          ports: [{ containerPort: 3000 }]
+          env:
+            - { name: GF_SECURITY_ADMIN_PASSWORD, value: genix }
+            - { name: GF_AUTH_ANONYMOUS_ENABLED, value: "true" }
+            - { name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Viewer }
+            # Single-source the historian token from the Secret (Grafana expands $VAR in
+            # provisioning files), so the datasource never drifts from INFLUX_TOKEN.
+            - { name: INFLUX_TOKEN, valueFrom: { secretKeyRef: { name: genix-credentials, key: INFLUX_TOKEN } } }
+          volumeMounts:
+            - { name: provisioning, mountPath: /etc/grafana/provisioning/datasources }
+            - { name: dash-provider, mountPath: /etc/grafana/provisioning/dashboards }
+            - { name: dash-plant, mountPath: /var/lib/grafana/dashboards }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+        # Control-room "always-on display": a synthetic viewer that continuously polls the
+        # historian + asset-api, so operations-dashboard -> {genix-historian, asset-api}
+        # are STANDING observed-flow edges (a real control room keeps the wall display live),
+        # not edges that appear only while a human has a browser open.
+        - name: viewer
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - "while true; do curl -fsS http://genix-historian:8086/health >/dev/null 2>&1; curl -fsS http://asset-api:8080/assets >/dev/null 2>&1; sleep 15; done"
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 50m, memory: 32Mi }
+      volumes:
+        - name: provisioning
+          configMap: { name: grafana-provisioning }
+        - name: dash-provider
+          configMap: { name: grafana-dashboard-provider }
+        - name: dash-plant
+          configMap: { name: grafana-dashboard-plant }

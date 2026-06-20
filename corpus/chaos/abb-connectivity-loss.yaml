@@ -1,0 +1,37 @@
+# ABB Genix chaos rig — field connectivity loss -> stale plant view (the cascade).
+#
+# Story: the System 800xA / OPC-UA gateway loses its link to the field smart-sensors.
+# No new telemetry reaches the broker, the historian stops advancing, and the operations
+# view goes stale — without the gateway itself crashing (a silent partial failure).
+#
+# Mechanism: /ctl?disconnect=1 stops the gateway forwarding. Downstream effect:
+#   broker receives nothing -> stream-processor writes stop -> genix-historian's newest
+#   reading freezes -> asset-api's app_last_update_seconds freezes -> age = (evalNow -
+#   last_update) crosses the 120s freshness bar -> PHEN_APP_DATA_STALENESS on asset-api,
+#   visible ALONG the authored/observed dependency chain
+#   smart-sensors -> opcua-gateway -> edgenius-broker -> stream-processor -> genix-historian -> asset-api.
+#
+# Apply to break:  kubectl apply -f corpus/chaos/abb-connectivity-loss.yaml
+# Heal (restore):  kubectl -n abb-genix run heal --rm -it --image=curlimages/curl:8.10.1 \
+#                    --restart=Never -- curl -fsS 'http://opcua-gateway:8080/ctl?disconnect=0'
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: abb-connectivity-loss
+  namespace: abb-genix
+  labels: { app: abb-chaos, scenario: connectivity-loss }
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 180
+  template:
+    metadata:
+      labels: { app: abb-chaos, scenario: connectivity-loss }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: trigger
+          image: curlimages/curl:8.10.1
+          command:
+            - sh
+            - -c
+            - "curl -fsS --retry 30 --retry-all-errors --retry-connrefused 'http://opcua-gateway:8080/ctl?disconnect=1' && echo ' <- field link severed; expect DATA_STALENESS on asset-api ~120s later'"
