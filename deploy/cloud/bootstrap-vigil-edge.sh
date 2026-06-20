@@ -97,8 +97,10 @@ Brutal chaos (ABB-shaped) — apply against the live twin and watch Vigil's find
   bin/obsd --kubeconfig \$HOME/k3s.yaml --ksm-enabled --app-metrics-enabled --health-addr :9095 &
   # then SSH-tunnel :9095 home (runbook §6) — NEVER expose it publicly.
 
-Determinism dividend (runbook §7): capture here, replay byte-identical at home.
-Tear down when done (runbook §9): \033[1;33mgcloud compute instances delete vigil-edge --quiet\033[0m
+Determinism dividend: capture here, replay byte-identical at home (runbook §6/§7).
+Tear down when done (it costs money): \033[1;33mGCP\033[0m gcloud compute instances delete vigil-edge --quiet
+                                     \033[1;33mAWS\033[0m aws ec2 terminate-instances --instance-ids <id>
+                                     \033[1;33mAzure\033[0m az group delete -n vigil-edge-rg --yes
 EOF
 
 if [ "$RUN_TIERS" = "1" ]; then

@@ -81,3 +81,4 @@ verified**; forecasting moved from "unbacked" to "validated + reproducible (on-d
 - [security-and-auth.md](security-and-auth.md) — the auth threat model + what's deferred to the platform.
 - [db-migration.md](db-migration.md) — schema versioning + the upgrade guarantee.
 - [cloud-runbook-gcp.md](cloud-runbook-gcp.md) — stand up a single-node k3s on GCP and run the live tiers against it.
+- [cloud-runbook-aws-azure.md](cloud-runbook-aws-azure.md) — the same single-node rig on AWS (m6i.2xlarge) or Azure (D8s v5); both share `deploy/cloud/bootstrap-vigil-edge.sh`.
