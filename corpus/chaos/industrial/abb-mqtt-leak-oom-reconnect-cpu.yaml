@@ -1,0 +1,134 @@
+# ABB scenario 2 — "which cross-service influence turns a broker fault into a
+# downstream CPU spike?"
+#
+# Industrial shape: an MQTT broker accumulates retained messages, leaking
+# container_memory_working_set_bytes until it OOM-kills. Its consumer (an
+# ingestion pipeline) sees the broker drop and enters a reconnect storm, which
+# spikes the pipeline's own CPU.
+#
+# What Vigil reports (and the charter lines this scenario defends):
+#   • On the broker container: PHEN_MEMORY_LEAK (MEASURED, DEGRADED, rising
+#     through the 0.95xlimit bar) then PHEN_OOM_KILL_CGROUP (MEASURED). These two
+#     ARE joined by an AUTHORED edge: PHEN_MEMORY_LEAK --downstream-->
+#     PHEN_OOM_KILL_CGROUP (why "Eventual outcome"). Vigil surfaces that authored
+#     same-entity cascade verbatim with author+version provenance — it does not
+#     invent it.
+#   • On the pipeline consumer: a CPU rise during the reconnect storm. There is NO
+#     authored phenomenon_relation edge OOM_KILL_CGROUP -> (pipeline CPU). The
+#     broker->pipeline link is a MEASURED cross-service FLOW edge (doc 15): a
+#     directed callee->caller co-occurrence, surfaced ADJACENTLY. Vigil must NOT
+#     promote the flow co-occurrence into a causal claim that the OOM "caused" the
+#     pipeline spike, and must NOT bind a learned threshold for the pipeline CPU.
+#
+# SAFETY: the broker leak is bounded by its declared memory limit (the kernel
+# OOM-kills the cgroup at the limit, the cluster is never starved); the pipeline
+# CPU is bounded by its CPU limit; both are tiny. Teardown: delete the
+# deployments, NOT `delete -f`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: abb-industrial
+---
+# MQTT broker: leaks working-set via "retained messages" then OOMs at its limit.
+# Same leak mechanism as corpus/chaos/leak-oom.yaml (prefill + 1Mi/10s ramp under
+# a declared limit; bar = 0.95xlimit). It also exposes a TCP accept port that the
+# consumer connects to, so a broker restart is observable as a dropped connection.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mqtt-broker
+  namespace: abb-industrial
+  labels:
+    app: mqtt-broker
+    vigil.io/role: broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mqtt-broker}
+  template:
+    metadata:
+      labels: {app: mqtt-broker, vigil.io/role: broker}
+    spec:
+      containers:
+        - name: broker
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              # "retained messages" leak: prefill ~40Mi then +6Mi/min, rising =>
+              # PHEN_MEMORY_LEAK, crossing 0.95x96Mi=91.2Mi then OOM at 96Mi.
+              retained = [bytearray(1024*1024) for _ in range(40)]
+              def leak():
+                  while True:
+                      retained.append(bytearray(1024*1024)); time.sleep(10)
+              threading.Thread(target=leak, daemon=True).start()
+              s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind(("0.0.0.0", 1883)); s.listen(64)
+              held = []
+              while True:
+                  c, _ = s.accept(); held.append(c)   # broker holds subscriber conns
+          ports:
+            - {name: mqtt, containerPort: 1883}
+          resources:
+            requests: {cpu: 20m, memory: 48Mi}
+            # The declared memory limit IS the bar (borrowed normativity):
+            # leak bar resolves to 0.95 x 96Mi = 91.2Mi; OOM at 96Mi.
+            limits: {cpu: 200m, memory: 96Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mqtt-broker
+  namespace: abb-industrial
+spec:
+  selector: {app: mqtt-broker}
+  ports:
+    - {name: mqtt, port: 1883, targetPort: 1883}
+---
+# Ingestion pipeline: a consumer that holds a broker subscription. When the broker
+# OOM-drops, create_connection fails and the consumer enters a tight reconnect
+# loop, which burns CPU (the reconnect storm -> pipeline CPU spike). The flow edge
+# pipeline -> broker is the MEASURED cross-service link.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingest-pipeline
+  namespace: abb-industrial
+  labels:
+    app: ingest-pipeline
+    vigil.io/role: pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ingest-pipeline}
+  template:
+    metadata:
+      labels: {app: ingest-pipeline, vigil.io/role: pipeline}
+    spec:
+      containers:
+        - name: consumer
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, time
+              # Steady state: one durable subscription, idle.
+              # Reconnect storm: when the broker is gone, retry as fast as the CPU
+              # limit allows, parsing junk to burn cycles (the pipeline CPU spike).
+              while True:
+                  try:
+                      c = socket.create_connection(
+                          ("mqtt-broker.abb-industrial.svc.cluster.local", 1883), timeout=2)
+                      while True:
+                          time.sleep(8); c.sendall(b"sub")   # durable, idle: low CPU
+                  except Exception:
+                      # reconnect storm: spin on connect attempts (CPU spike)
+                      end = time.time() + 0.5
+                      x = 0
+                      while time.time() < end:
+                          x = (x * 1103515245 + 12345) & 0x7fffffff
+          resources:
+            requests: {cpu: 20m, memory: 16Mi}
+            # CPU limit bounds the reconnect-storm spike (a finite, observable rise).
+            limits: {cpu: 250m, memory: 32Mi}

@@ -1,0 +1,56 @@
+{
+  "scenario": "abb-mqtt-leak-oom-reconnect-cpu",
+  "manifest": "corpus/chaos/industrial/abb-mqtt-leak-oom-reconnect-cpu.yaml",
+  "abbQuestion": "Which cross-service influence turns a broker fault into a downstream CPU spike?",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_MEMORY_LEAK",
+      "class": "MEASURED",
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|mqtt-broker|u-broker",
+      "anchorKind": "Container",
+      "quality": "degraded",
+      "why": "broker container_memory_working_set_bytes rises through 0.95x96Mi = 91.2Mi (the declared-limit-derived bar) while RISING (slope-based)."
+    },
+    {
+      "phenomenon": "PHEN_OOM_KILL_CGROUP",
+      "class": "MEASURED",
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|mqtt-broker|u-broker",
+      "anchorKind": "Container",
+      "quality": "degraded",
+      "why": "the broker cgroup is OOM-killed at the 96Mi memory limit (lastState.terminated OOMKilled / events lane)."
+    }
+  ],
+  "expectCascades": [
+    {
+      "trigger": "PHEN_MEMORY_LEAK",
+      "downstream": "PHEN_OOM_KILL_CGROUP",
+      "class": "AUTHORED",
+      "related": "same-entity",
+      "why": "Eventual outcome",
+      "provenance": "surfaced verbatim from the authored phenomenon_relation edge (src=PHEN_MEMORY_LEAK role=downstream dst=PHEN_OOM_KILL_CGROUP, why 'Eventual outcome') with author+version; NOT inferred."
+    }
+  ],
+  "expectCrossService": [
+    {
+      "edge": "ingest-pipeline -> mqtt-broker",
+      "class": "MEASURED",
+      "direction": "caller->callee (flow); impact propagates callee->caller",
+      "callerCei": "i|abb-cluster|abb-industrial|Pod|ingest-pipeline|u-pipeline",
+      "calleeCei": "i|abb-cluster|abb-industrial|Pod|mqtt-broker|u-broker",
+      "why": "a MEASURED conntrack/flow edge: the pipeline subscribes to the broker; when the broker OOM-drops, the pipeline's reconnect storm spikes its OWN CPU (a finite, observable rise bounded by its 250m limit)."
+    }
+  ],
+  "mustNotFabricate": [
+    {
+      "rule": "no-cascade-edge-oom-to-pipeline-cpu",
+      "statement": "There is NO authored phenomenon_relation edge from PHEN_OOM_KILL_CGROUP to any pipeline-CPU phenomenon. Vigil must NOT mint a causal cascade asserting the broker OOM CAUSED the pipeline CPU spike. The broker->pipeline relationship is a MEASURED cross-service FLOW co-occurrence (directed callee->caller), surfaced ADJACENTLY to the OOM finding, never fused into a single causal story.",
+      "charter": "Cascade -> inferred causation is rejected; a cross-service flow match is a co-occurrence, not a proof of cause."
+    },
+    {
+      "rule": "no-learned-bar-for-pipeline-cpu",
+      "statement": "The pipeline CPU rise must be reported against the DECLARED 250m CPU limit (or as unbounded if none) — never against a learned/behavioural threshold.",
+      "charter": "Borrowed normativity: no learned threshold anywhere."
+    }
+  ],
+  "note": "The cross-service influence is shown as TWO classed facts side by side: the AUTHORED same-entity leak->OOM cascade on the broker, and the MEASURED flow co-occurrence to the pipeline. The operator sees the influence; Vigil never collapses it into an invented causal chain."
+}

@@ -1,0 +1,69 @@
+# ABB scenario 4 — "which workloads need optimisation?" answered with the HONEST
+# null: an unbounded workload Vigil refuses to invent a bar for.
+#
+# Industrial shape: a batch analytics job that processes historian exports. It
+# declares NO resource limits (a very common real-world misconfiguration). Its
+# memory genuinely grows as it buffers a batch.
+#
+# What Vigil reports (and the charter line this scenario defends):
+#   • On the analytics container: container_memory_working_set_bytes is MEASURED
+#     and rising, BUT no customer-declared limit exists, so there is NO borrowed
+#     bar. Vigil states the (entity, variable) pair as UNBOUNDED /
+#     TIER-B-INELIGIBLE and LISTS it — it does NOT mint a threshold.
+#   • This is the literal answer to "which workloads need optimisation": the
+#     honest coverage report names this workload as unbounded (no declared limit),
+#     which is itself the actionable finding (declare a limit).
+#
+# THE DISCIPLINE (borrowed normativity): thresholds come ONLY from the customer's
+# declared limits. Where nothing is declared, say so. Vigil must NOT:
+#   • invent a memory bar from observed behaviour (no learned threshold);
+#   • fire PHEN_MEMORY_LEAK as a DEGRADED bar-crossing (there is no bar to cross);
+#   • forecast a crossing against a fabricated bar (Tier-B-ineligible: the clock
+#     does not run an at-threshold projection on an unbounded series).
+# A rising series with no bar is observed and LISTED, never judged.
+#
+# SAFETY: the job buffers to a modest plateau then holds; with no limit the kubelet
+# could evict under genuine node pressure, so the buffer is intentionally small
+# (~64Mi) and the loop sleeps — it never races the node OOM. Teardown: delete the
+# deployment, NOT `delete -f`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: abb-industrial
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: batch-analytics
+  namespace: abb-industrial
+  labels:
+    app: batch-analytics
+    vigil.io/role: analytics
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: batch-analytics}
+  template:
+    metadata:
+      labels: {app: batch-analytics, vigil.io/role: analytics}
+    spec:
+      containers:
+        - name: analytics
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import time
+              # Buffer a "historian export batch": grow ~6Mi/min to ~64Mi then HOLD.
+              # The series rises and is MEASURED, but there is NO declared limit, so
+              # Vigil has no bar to judge it against — it is listed as unbounded.
+              buf = []
+              for _ in range(64):
+                  buf.append(bytearray(1024*1024)); time.sleep(10)
+              while True:
+                  time.sleep(3600)   # hold the plateau (no OOM, no eviction race)
+          resources:
+            # DELIBERATELY no resources block: no requests, no limits.
+            # This is the unbounded, Tier-B-ineligible workload. Do not add a
+            # limit here — the absence IS the scenario.
+            {}

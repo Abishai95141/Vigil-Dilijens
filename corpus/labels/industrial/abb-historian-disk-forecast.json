@@ -1,0 +1,53 @@
+{
+  "scenario": "abb-historian-disk-forecast",
+  "manifest": "corpus/chaos/industrial/abb-historian-disk-forecast.yaml",
+  "abbQuestion": "When will the historian retention disk fill? (a forecast crossing-anticipation with a band)",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_DISK_FILLING",
+      "class": "MEASURED",
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|historian-retention|u-historian",
+      "anchorKind": "Container",
+      "quality": "rising_sub_bar",
+      "variable": "container_fs_usage_bytes",
+      "bar": "0.85 x 64Mi (declared ephemeral-storage limit) = 54.4Mi",
+      "why": "the container's writable layer fills linearly ~6Mi/min toward the declared-limit-derived 54.4Mi bar; while still SUB-BAR it is a MEASURED healthy-but-rising series."
+    }
+  ],
+  "expectForecast": [
+    {
+      "phenomenon": "PHEN_DISK_FILLING",
+      "class": "PROJECTED",
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|historian-retention|u-historian",
+      "variable": "container_fs_usage_bytes",
+      "bar": "54.4Mi (0.85 x declared 64Mi ephemeral-storage limit)",
+      "crossingAnticipation": true,
+      "bandRequired": true,
+      "bandNeverAPoint": true,
+      "why": "the clock (TimesFM) projects container_fs_usage_bytes crossing the 54.4Mi bar minutes ahead while still sub-bar, emitted as a crossing-anticipation carrying an uncertainty BAND that never collapses to a line."
+    }
+  ],
+  "expectCascades": [],
+  "nonGating": {
+    "statement": "Detection never waits on forecasting. With the clock absent or degraded the MEASURED rising-disk finding is byte-identical, and the forecast is simply ABSENT — no fabricated ETA is substituted.",
+    "charter": "Non-gating (absolute): the deterministic path produces identical results whether the clock is present, degraded, or absent."
+  },
+  "mustNotFabricate": [
+    {
+      "rule": "projected-never-restated-as-measured",
+      "statement": "The crossing-anticipation is PROJECTED and must be surfaced as PROJECTED on /api/warnings — never restated as a MEASURED fact in feeds, chat, or summaries.",
+      "charter": "PROJECTED restated as MEASURED is rejected anywhere."
+    },
+    {
+      "rule": "band-never-collapses-to-a-line",
+      "statement": "The forecast must carry a mandatory uncertainty band. A single point ETA (band collapsed to a line) is a charter violation.",
+      "charter": "PROJECTED forecasts carry a mandatory uncertainty band that never collapses to a line."
+    },
+    {
+      "rule": "bar-is-declared-not-learned",
+      "statement": "The bar is the DECLARED ephemeral-storage limit (54.4Mi = 0.85 x 64Mi), never a learned or behavioural threshold.",
+      "charter": "Borrowed normativity: thresholds come from the customer's declared limits."
+    }
+  ],
+  "note": "The historian-disk question is answered with a PROJECTED, banded crossing-anticipation against the customer-declared limit, surfaced ADJACENTLY to (never fused with) the MEASURED rising-disk finding."
+}

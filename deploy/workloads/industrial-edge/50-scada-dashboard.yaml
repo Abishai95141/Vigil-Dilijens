@@ -1,0 +1,62 @@
+# SCADA-like dashboard / consumer — reads the HISTORIAN.
+#
+# Polls the historian's HTTP /health (a stand-in for a SCADA dashboard's continuous
+# query load against the time-series store) so the dashboard -> historian `selects`
+# read edge is live. This is a pure historian READER (the README arrow:
+# `scada-dashboard --read--> historian`); it has no inbound surface of its own, so it
+# carries NO Service. Tight limits: dashboards are light but constant. Uses curl from
+# a pinned minimal image; no custom build.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scada-dashboard
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: scada-dashboard
+    app.kubernetes.io/component: dashboard
+    app.kubernetes.io/part-of: industrial-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scada-dashboard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scada-dashboard
+        app.kubernetes.io/component: dashboard
+        app.kubernetes.io/part-of: industrial-edge
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+      containers:
+        - name: dashboard
+          # Pinned curl image (doc 14: no floating tags).
+          image: curlimages/curl:8.11.1
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HISTORIAN
+              # Headless StatefulSet stable identity.
+              value: historian-0.historian.industrial-edge.svc.cluster.local
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                curl -s -o /dev/null -w "scada poll historian status=%{http_code}\n" \
+                  "http://$HISTORIAN:8086/health" || echo "scada poll historian unreachable"
+                sleep 5
+              done
+          resources:
+            requests:
+              cpu: 25m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 48Mi

@@ -1,0 +1,96 @@
+# ABB scenario 3 — "which pod causes the CPU spike?"
+#
+# Industrial shape: a telemetry burst generator floods a node, and an edge
+# inference workload (a model server on the same node, with a tight CPU limit)
+# gets CPU-throttled. The operator's literal question is attribution: WHICH pod is
+# responsible for the spike.
+#
+# What Vigil reports (and the charter line this scenario defends):
+#   • On the inference container: PHEN_THROTTLING_CASCADE (MEASURED, FULL match) —
+#     the CFS throttled-period ratio crosses the 0.25 default bar AND node PSI
+#     /proc/pressure/cpu some-stall crosses the 0.10 default bar. The match is
+#     ANCHORED on the inference container (the victim), with a span pod -> node
+#     over a valid runs-on edge. Same mechanism as corpus/chaos/cpu-cascade.yaml.
+#   • Attribution is by MEASURED blast radius + the runs-on topology, NOT by a
+#     learned "blame" score. The telemetry-burst pod is the loud co-located CPU
+#     consumer; Vigil shows it as the node-pressure source via the topology, never
+#     asserts a learned causal weight.
+#
+# THE DISCIPLINE: "which pod causes the spike" is answered by the AUTHORED match
+# structure (required victim throttle + required node PSI) plus MEASURED topology,
+# NOT by a model picking a culprit. There is no learned threshold and no generated
+# "reason". Tearing down the burst generator alone must DROP the match (PSI member
+# observable-and-not-met fails the conjunction): throttling without node pressure
+# is not the cascade. Vigil must NOT keep firing on the victim once the node
+# pressure clears.
+#
+# SAFETY: both workloads are CPU-bounded spinners on one node; memory is capped.
+# Teardown: delete the deployments, NOT `delete -f`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: abb-industrial
+---
+# Edge inference server: the VICTIM. A 100m CPU limit under a full-speed loop
+# throttles >25% of CFS periods -> PHEN_THROTTLING_CASCADE's required T0, anchored
+# on this container.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-inference
+  namespace: abb-industrial
+  labels:
+    app: edge-inference
+    vigil.io/role: inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: edge-inference}
+  template:
+    metadata:
+      labels: {app: edge-inference, vigil.io/role: inference}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vigil-worker2
+      containers:
+        - name: server
+          image: busybox:1.36
+          command: ["sh", "-c", "while true; do :; done"]
+          resources:
+            requests: {cpu: 50m, memory: 16Mi}
+            # The declared limit IS the bar's eligibility (borrowed normativity):
+            # a 100m limit under a full-speed loop throttles ~90% of periods.
+            limits: {cpu: 100m, memory: 32Mi}
+---
+# Telemetry burst generator: the loud co-located CPU consumer. Unlimited spinners
+# (12 runnable threads on a 10-CPU node) drive node-wide runqueue contention so
+# /proc/pressure/cpu some-stall crosses 0.10 -> the required T0+ PSI member, one
+# runs-on hop from the victim. This is the pod the operator must be pointed at.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: telemetry-burst
+  namespace: abb-industrial
+  labels:
+    app: telemetry-burst
+    vigil.io/role: burst
+spec:
+  replicas: 6
+  selector:
+    matchLabels: {app: telemetry-burst}
+  template:
+    metadata:
+      labels: {app: telemetry-burst, vigil.io/role: burst}
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: vigil-worker2
+      containers:
+        - name: burst
+          image: busybox:1.36
+          # Two spinner processes per pod: 12 runnable threads on a 10-CPU node.
+          command: ["sh", "-c", "(while true; do :; done) & while true; do :; done"]
+          resources:
+            requests: {cpu: 100m, memory: 16Mi}
+            # No CPU limit: the burst must contend for the node, not get throttled
+            # (an unthrottled consumer is what creates PSI pressure). Memory bounded.
+            limits: {memory: 32Mi}

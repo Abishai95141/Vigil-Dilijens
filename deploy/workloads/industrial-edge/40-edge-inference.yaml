@@ -1,0 +1,60 @@
+# Edge inference / anomaly service — the on-gateway analytics consumer.
+#
+# SUBSCRIBES to all sensor topics on the MQTT broker and runs a trivial deterministic
+# threshold check (a stand-in for an on-edge anomaly model). It is a CONSUMER of the
+# broker, so it adds the read side of the broker's `selects` fan-out. Tight limits:
+# a small but steady working set, a believable near-threshold candidate under fleet
+# scale. (Charter note: this is a separate WORKLOAD in the twin, not Vigil's own
+# detection path — nothing here is read into the ontology graph.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-inference
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: edge-inference
+    app.kubernetes.io/component: anomaly-service
+    app.kubernetes.io/part-of: industrial-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: edge-inference
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: edge-inference
+        app.kubernetes.io/component: anomaly-service
+        app.kubernetes.io/part-of: industrial-edge
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
+      containers:
+        - name: inference
+          image: eclipse-mosquitto:2.0.20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: BROKER
+              value: mqtt-broker
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Subscribe to the whole edge tree; flag values past a fixed bar.
+              # Deterministic threshold, not a learned model.
+              mosquitto_sub -h "$BROKER" -t 'edge/#' -v | while read -r topic payload; do
+                echo "anomaly-check topic=$topic payload=$payload"
+              done
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 96Mi

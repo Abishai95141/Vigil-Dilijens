@@ -1,0 +1,35 @@
+{
+  "scenario": "abb-unbounded-workload",
+  "manifest": "corpus/chaos/industrial/abb-unbounded-workload.yaml",
+  "abbQuestion": "Which workloads need optimisation? (answered with the honest 'unbounded, Tier-B-ineligible' null)",
+  "expectFindings": [],
+  "expectCoverage": [
+    {
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|batch-analytics|u-analytics",
+      "variable": "container_memory_working_set_bytes",
+      "state": "UNBOUNDED",
+      "tierBEligible": false,
+      "class": "MEASURED",
+      "why": "the batch-analytics container declares NO resource limits (resources: {}), so no customer-declared memory bar exists. The working-set is MEASURED and rising, but there is no bar to judge it against; the (entity, variable) pair is LISTED as unbounded / Tier-B-ineligible."
+    }
+  ],
+  "expectCascades": [],
+  "mustNotFabricate": [
+    {
+      "rule": "no-invented-memory-bar",
+      "statement": "Vigil must NOT mint a memory threshold from observed behaviour for this workload. Where nothing is declared, it says so (unbounded, Tier-B-ineligible, listed).",
+      "charter": "Borrowed normativity: thresholds come from the customer's declared limits, never learned behaviour."
+    },
+    {
+      "rule": "no-degraded-leak-finding",
+      "statement": "Vigil must NOT fire PHEN_MEMORY_LEAK as a DEGRADED bar-crossing here — there is no bar to cross. A rising series with no declared limit is observed and listed, never judged DEGRADED against a fabricated bar.",
+      "charter": "No component may derive a statement of a stronger class than its weakest input; an undeclared bar yields no threshold state."
+    },
+    {
+      "rule": "no-forecast-against-fabricated-bar",
+      "statement": "The clock must NOT run an at-threshold projection for this series — it is Tier-B-ineligible (no bar). No PROJECTED crossing-anticipation may be emitted against an invented limit.",
+      "charter": "Permitted graph->model flows are exhaustive; a series with no bar is not selected for at-threshold forecasting."
+    }
+  ],
+  "note": "The literal answer to 'which workloads need optimisation' is the honest coverage report naming batch-analytics as unbounded (declare a limit). The null IS the finding; inventing a bar to 'show' a result would be the charter violation this scenario guards against."
+}

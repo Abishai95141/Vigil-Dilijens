@@ -1,0 +1,37 @@
+{
+  "scenario": "abb-historian-io-scada-restart",
+  "manifest": "corpus/chaos/industrial/abb-historian-io-scada-restart.yaml",
+  "abbQuestion": "How do PVC / volume I/O patterns link to pod restarts?",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_STORAGE_SATURATION",
+      "class": "MEASURED",
+      "entityCei": "i|abb-cluster||Node|vigil-worker2|u-node",
+      "anchorKind": "Node",
+      "quality": "degraded",
+      "why": "node /proc/pressure/io some-stall crosses the 0.10 default bar while the historian fsyncs a telemetry burst; required per-device disk-IO + PVC volume-stats members are honestly unobservable on this emptyDir rig (every gap named on the finding)."
+    },
+    {
+      "phenomenon": "PHEN_PROBE_FAILURE_RESTART",
+      "class": "MEASURED",
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|scada-reader|u-scada",
+      "anchorKind": "Pod",
+      "quality": "full_or_degraded",
+      "why": "the scada-reader liveness probe (tcpSocket :9090, failureThreshold 3) trips while its read loop is wedged on the saturated historian; restartCount climbs and lastState.terminated is observed."
+    }
+  ],
+  "expectCascades": [],
+  "mustNotFabricate": [
+    {
+      "rule": "no-cascade-edge-storage-to-restart",
+      "statement": "There is NO authored phenomenon_relation edge PHEN_STORAGE_SATURATION -> PHEN_PROBE_FAILURE_RESTART in the ontology. Vigil must NOT mint a cascade / causal edge linking the historian disk saturation to the SCADA restart. The two findings are a CO-OCCURRENCE, surfaced ADJACENTLY, each independently MEASURED and labelled.",
+      "charter": "Co-occurrence -> causal claim is rejected. A cascade is only an AUTHORED trigger->downstream edge lighting up; absent that edge, no cascade exists."
+    },
+    {
+      "rule": "no-invented-bar-for-unobservable-members",
+      "statement": "The unobservable storage members (per-device disk IO, kubelet_volume_stats PVC fill) must be reported as honest coverage gaps, NOT back-filled with an invented or learned threshold.",
+      "charter": "Borrowed normativity + honest partial coverage."
+    }
+  ],
+  "note": "The answer to 'how do PVC I/O patterns link to pod restarts' is an HONEST co-occurrence the operator can see (saturation on the historian node, restart on the SCADA pod), never a fabricated cause. The link is left to the human; Vigil never invents the edge."
+}

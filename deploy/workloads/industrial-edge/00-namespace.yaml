@@ -1,0 +1,24 @@
+# industrial-edge — ABB OT/edge digital twin (NOT e-commerce).
+#
+# A single-node k3s target (~15 GiB node). This stack models an industrial edge
+# gateway: an MQTT broker fan-in, a fleet of device simulators publishing sensor
+# telemetry (temp / vibration / current / power), a time-series HISTORIAN backed by
+# a PVC (the PVC I/O is the point — it exercises kubelet_volume_stats and the
+# PHEN_DISK_FILLING / PVC-fill lanes), an edge anomaly/inference service, and a
+# SCADA-like dashboard that reads the historian.
+#
+# Vigil relevance (doc 04 §3.4): config-sourced resource limits are what make bars
+# RESOLVABLE. Most workloads here declare requests+limits (Tier-A: forecastable). One
+# workload — the vibration simulator — is DELIBERATELY UNBOUNDED (no limits) so the
+# resolvability-hole policy (unbounded -> listed, Tier-B-ineligible, never silent) is
+# exercised from day one, exactly as Online Boutique does it for the e-commerce twin
+# (doc 14 §3.3). Identity (doc 03): each Deployment -> ReplicaSet -> Pod owner chain
+# is a durable ROLE; Services + EndpointSlices drive the `selects` edges; the
+# historian's Pod -> PVC mount exercises the `mounts` path.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: industrial-edge
+  labels:
+    app.kubernetes.io/part-of: industrial-edge
+    vigil.dev/twin: abb-ot-edge

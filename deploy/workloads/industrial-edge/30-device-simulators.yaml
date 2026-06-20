@@ -1,0 +1,284 @@
+# Device-simulator fleet — the OT sensor population.
+#
+# Four sensor FAMILIES, each its own Deployment, each publishing telemetry to the MQTT
+# broker on its own topic. Every replica is a "device": scale a Deployment's replicas
+# and the pod population climbs toward the hundreds the brief calls for (the fan-in to
+# one broker Service is the stress). Implemented with the eclipse-mosquitto image's
+# bundled `mosquitto_pub` in a shell publish loop, so the fleet needs NO custom image
+# — it runs on the constrained node and stays a clean, reviewable manifest.
+#
+# Resource posture (doc 04 §3.4):
+#   temperature  — bounded (Tier-A, forecastable)
+#   current      — bounded (Tier-A, forecastable)
+#   power        — bounded (Tier-A, forecastable)
+#   vibration    — *** DELIBERATELY UNBOUNDED: no limits ***  (Tier-B-INELIGIBLE)
+# The vibration simulator is the resolvability hole: no config-sourced bar -> no
+# crossable limit -> ineligible for forecasting, and it MUST appear on the coverage
+# report's unbounded-workload list ("unbounded: no early-warning eligibility"),
+# never silently skipped (doc 04 §3.4, the policy Online Boutique exercises too).
+---
+# --- temperature: BOUNDED (Tier-A) ---------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim-temperature
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: sim-temperature
+    app.kubernetes.io/component: device-simulator
+    app.kubernetes.io/part-of: industrial-edge
+    vigil.dev/sensor: temperature
+    vigil.dev/bar: bounded
+spec:
+  # Scale this up (kubectl scale deploy/sim-temperature --replicas=N) to grow the
+  # pod population. Starts low to fit the ~15 GiB node.
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sim-temperature
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sim-temperature
+        app.kubernetes.io/component: device-simulator
+        app.kubernetes.io/part-of: industrial-edge
+        vigil.dev/sensor: temperature
+        vigil.dev/bar: bounded
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
+      containers:
+        - name: publisher
+          image: eclipse-mosquitto:2.0.20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: BROKER
+              value: mqtt-broker
+            - name: SENSOR
+              value: temperature
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                v=$(awk 'BEGIN{srand();printf "%.2f", 20+rand()*60}')
+                mosquitto_pub -h "$BROKER" -t "edge/$SENSOR/$POD_NAME" \
+                  -m "{\"sensor\":\"$SENSOR\",\"device\":\"$POD_NAME\",\"value\":$v,\"unit\":\"C\"}" || true
+                sleep 2
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 12Mi
+            limits:
+              cpu: 50m
+              memory: 24Mi
+---
+# --- current: BOUNDED (Tier-A) -------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim-current
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: sim-current
+    app.kubernetes.io/component: device-simulator
+    app.kubernetes.io/part-of: industrial-edge
+    vigil.dev/sensor: current
+    vigil.dev/bar: bounded
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sim-current
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sim-current
+        app.kubernetes.io/component: device-simulator
+        app.kubernetes.io/part-of: industrial-edge
+        vigil.dev/sensor: current
+        vigil.dev/bar: bounded
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
+      containers:
+        - name: publisher
+          image: eclipse-mosquitto:2.0.20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: BROKER
+              value: mqtt-broker
+            - name: SENSOR
+              value: current
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                v=$(awk 'BEGIN{srand();printf "%.2f", rand()*16}')
+                mosquitto_pub -h "$BROKER" -t "edge/$SENSOR/$POD_NAME" \
+                  -m "{\"sensor\":\"$SENSOR\",\"device\":\"$POD_NAME\",\"value\":$v,\"unit\":\"A\"}" || true
+                sleep 2
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 12Mi
+            limits:
+              cpu: 50m
+              memory: 24Mi
+---
+# --- power: BOUNDED (Tier-A) ---------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim-power
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: sim-power
+    app.kubernetes.io/component: device-simulator
+    app.kubernetes.io/part-of: industrial-edge
+    vigil.dev/sensor: power
+    vigil.dev/bar: bounded
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sim-power
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sim-power
+        app.kubernetes.io/component: device-simulator
+        app.kubernetes.io/part-of: industrial-edge
+        vigil.dev/sensor: power
+        vigil.dev/bar: bounded
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
+      containers:
+        - name: publisher
+          image: eclipse-mosquitto:2.0.20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: BROKER
+              value: mqtt-broker
+            - name: SENSOR
+              value: power
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                v=$(awk 'BEGIN{srand();printf "%.1f", 500+rand()*4500}')
+                mosquitto_pub -h "$BROKER" -t "edge/$SENSOR/$POD_NAME" \
+                  -m "{\"sensor\":\"$SENSOR\",\"device\":\"$POD_NAME\",\"value\":$v,\"unit\":\"W\"}" || true
+                sleep 2
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 12Mi
+            limits:
+              cpu: 50m
+              memory: 24Mi
+---
+# --- vibration: *** DELIBERATELY UNBOUNDED — NO LIMITS (Tier-B-ineligible) *** --
+# This is the resolvability hole. It declares requests (so the scheduler can place
+# it) but NO limits block: no config-sourced memory/CPU bar exists, therefore no
+# crossable limit, therefore ineligible for forecasting. Vigil must LIST it on the
+# coverage report as unbounded — never invent a bar, never silently skip it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sim-vibration
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: sim-vibration
+    app.kubernetes.io/component: device-simulator
+    app.kubernetes.io/part-of: industrial-edge
+    vigil.dev/sensor: vibration
+    vigil.dev/bar: unbounded
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sim-vibration
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sim-vibration
+        app.kubernetes.io/component: device-simulator
+        app.kubernetes.io/part-of: industrial-edge
+        vigil.dev/sensor: vibration
+        vigil.dev/bar: unbounded
+    spec:
+      terminationGracePeriodSeconds: 5
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
+      containers:
+        - name: publisher
+          image: eclipse-mosquitto:2.0.20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: BROKER
+              value: mqtt-broker
+            - name: SENSOR
+              value: vibration
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                v=$(awk 'BEGIN{srand();printf "%.3f", rand()*10}')
+                mosquitto_pub -h "$BROKER" -t "edge/$SENSOR/$POD_NAME" \
+                  -m "{\"sensor\":\"$SENSOR\",\"device\":\"$POD_NAME\",\"value\":$v,\"unit\":\"mm_s\"}" || true
+                sleep 2
+              done
+          # requests ONLY — NO limits stanza. This is the intentional unbounded
+          # workload. Do NOT add a `limits:` block here; that would close the
+          # resolvability hole the twin exists to exercise.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 12Mi

@@ -1,0 +1,117 @@
+# MQTT broker (Eclipse Mosquitto) — the OT telemetry fan-in.
+#
+# Every device simulator PUBLISHES sensor telemetry here; the historian-writer and
+# the edge-inference service SUBSCRIBE. This is the hub of the edge topology, so its
+# `selects` fan-in (many simulator pods -> one broker Service) is the densest edge in
+# the twin. Limits are TIGHT on purpose: the broker is small but hot, a realistic
+# near-threshold candidate once the simulator fleet scales toward hundreds of pods.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: mqtt-broker
+    app.kubernetes.io/part-of: industrial-edge
+data:
+  mosquitto.conf: |
+    listener 1883 0.0.0.0
+    allow_anonymous true
+    persistence false
+    max_queued_messages 10000
+    log_dest stdout
+    log_type warning
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mqtt-broker
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: mqtt-broker
+    app.kubernetes.io/component: messaging
+    app.kubernetes.io/part-of: industrial-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mqtt-broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mqtt-broker
+        app.kubernetes.io/component: messaging
+        app.kubernetes.io/part-of: industrial-edge
+    spec:
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1883
+        runAsGroup: 1883
+        fsGroup: 1883
+      containers:
+        - name: mosquitto
+          # Pinned version (doc 14: lockstep machines, no floating tags).
+          image: eclipse-mosquitto:2.0.20
+          ports:
+            - name: mqtt
+              containerPort: 1883
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            tcpSocket:
+              port: 1883
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 1883
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          # TIGHT limits — config-sourced bar; broker working-set is forecastable
+          # (Tier-A). Deliberately close to the small working set so the fan-in fleet
+          # can drive it near-threshold.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+              readOnly: true
+            - name: data
+              mountPath: /mosquitto/data
+            - name: log
+              mountPath: /mosquitto/log
+      volumes:
+        - name: config
+          configMap:
+            name: mosquitto-config
+        - name: data
+          emptyDir: {}
+        - name: log
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mqtt-broker
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: mqtt-broker
+    app.kubernetes.io/part-of: industrial-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mqtt-broker
+  ports:
+    - name: mqtt
+      port: 1883
+      targetPort: 1883

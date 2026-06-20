@@ -1,0 +1,127 @@
+# Historian (InfluxDB 2.x) — the time-series store the whole twin writes into.
+#
+# THE PVC IS THE POINT. The historian is a StatefulSet with a volumeClaimTemplate so
+# its data path lives on a PersistentVolume, not emptyDir — that is what exercises the
+# Pod -> PVC `mounts` edge (doc 03), the PVC-fill / PHEN_DISK_FILLING lane, and the
+# kubelet_volume_stats stream (doc 19 "PVC dark-bar"). Continuous sensor ingest makes
+# the volume grow monotonically: a real, slow filesystem-fill trajectory.
+#
+# Caveat (doc 16 §): on k3s's default `local-path` storageClass the kubelet emits ZERO
+# kubelet_volume_stats, so PVC-FILL is a dark bar there (silence class no-stream-key,
+# never a fabricated reading). PVC PENDING is still observable via KSM. To see live
+# PVC-fill, point this at a CSI storageClass that reports volume stats. We leave
+# storageClassName unset so it binds the cluster default; override in the README.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: historian
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: historian
+    app.kubernetes.io/component: timeseries-store
+    app.kubernetes.io/part-of: industrial-edge
+spec:
+  serviceName: historian
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: historian
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: historian
+        app.kubernetes.io/component: timeseries-store
+        app.kubernetes.io/part-of: industrial-edge
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: influxdb
+          # Pinned version (doc 14: lockstep machines, no floating tags).
+          image: influxdb:2.7-alpine
+          ports:
+            - name: http
+              containerPort: 8086
+          env:
+            - name: DOCKER_INFLUXDB_INIT_MODE
+              value: setup
+            - name: DOCKER_INFLUXDB_INIT_USERNAME
+              value: edge
+            - name: DOCKER_INFLUXDB_INIT_PASSWORD
+              value: edge-historian-dev
+            - name: DOCKER_INFLUXDB_INIT_ORG
+              value: abb-edge
+            - name: DOCKER_INFLUXDB_INIT_BUCKET
+              value: sensors
+            - name: DOCKER_INFLUXDB_INIT_RETENTION
+              # 0 = INFINITE retention (InfluxDB 2.x convention): old points are never
+              # expired, so the bucket — and therefore the PVC — grows MONOTONICALLY,
+              # which is the whole point of this StatefulSet (the PVC-fill lane). A
+              # finite horizon (e.g. 12h) would expire old data and plateau the volume,
+              # contradicting the monotonic-fill trajectory described above.
+              value: "0"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8086
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8086
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          # Declared limits: bounded -> Tier-A. The historian is the marquee
+          # working-set climber (TSM compaction + write buffers) on a constrained
+          # node; the memory bar is the one to watch.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/influxdb2
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: historian
+          app.kubernetes.io/part-of: industrial-edge
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # storageClassName intentionally unset -> cluster default (k3s: local-path).
+        # Override to a CSI class to make PVC-fill observable (see README).
+        resources:
+          requests:
+            storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: historian
+  namespace: industrial-edge
+  labels:
+    app.kubernetes.io/name: historian
+    app.kubernetes.io/part-of: industrial-edge
+spec:
+  # Headless for the StatefulSet's stable network identity; consumers dial the
+  # service name and resolve historian-0.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: historian
+  ports:
+    - name: http
+      port: 8086
+      targetPort: 8086

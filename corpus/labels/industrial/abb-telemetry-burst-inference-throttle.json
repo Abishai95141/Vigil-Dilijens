@@ -1,0 +1,48 @@
+{
+  "scenario": "abb-telemetry-burst-inference-throttle",
+  "manifest": "corpus/chaos/industrial/abb-telemetry-burst-inference-throttle.yaml",
+  "abbQuestion": "Which pod causes the CPU spike?",
+  "expectFindings": [
+    {
+      "phenomenon": "PHEN_THROTTLING_CASCADE",
+      "class": "MEASURED",
+      "entityCei": "i|abb-cluster|abb-industrial|Pod|edge-inference|u-inference",
+      "anchorKind": "Container",
+      "quality": "full",
+      "matchOrder": "first-order",
+      "requiredMembers": [
+        "victim CFS throttled-period ratio > 0.25 default bar (T0, on the edge-inference container)",
+        "node /proc/pressure/cpu some-stall > 0.10 default bar (T0+, one runs-on hop away on vigil-worker2)"
+      ],
+      "span": "pod -> vigil-worker2 over a valid runs-on edge",
+      "why": "the edge-inference container (100m limit, full-speed loop) throttles ~90% of CFS periods while the telemetry-burst pods drive node-wide PSI; the conjunction is a FULL match anchored on the victim."
+    }
+  ],
+  "expectCascades": [],
+  "attribution": {
+    "spikeSourcePod": "i|abb-cluster|abb-industrial|Pod|telemetry-burst|u-burst",
+    "method": "MEASURED blast radius + runs-on topology (the loud co-located CPU consumer on the victim's node)",
+    "class": "MEASURED",
+    "note": "Attribution is via the AUTHORED match structure (required victim throttle + required node PSI) plus MEASURED topology, NOT a learned blame score and NOT generated text."
+  },
+  "dropConditions": [
+    {
+      "action": "tear down telemetry-burst only",
+      "expect": "the THROTTLING_CASCADE match DROPS",
+      "why": "the PSI member becomes observable-and-not-met, failing the conjunction; throttling without node pressure is not the cascade. Vigil must stop firing on the victim once node pressure clears."
+    }
+  ],
+  "mustNotFabricate": [
+    {
+      "rule": "no-learned-blame-score",
+      "statement": "Vigil must NOT pick the culprit pod via a learned/model blame weight or a generated reason. The 'which pod' answer comes only from MEASURED topology (runs-on) + the deterministic match.",
+      "charter": "No learned edge/weight/threshold; reasons are only human-authored graph notes."
+    },
+    {
+      "rule": "no-causal-promotion-of-co-location",
+      "statement": "Co-location on the node is a MEASURED runs-on fact, not a proof that telemetry-burst CAUSED the throttle. Vigil surfaces the topology and the conjunction; it must NOT assert a fused causal claim beyond the AUTHORED cascade structure it matched.",
+      "charter": "Co-occurrence -> causal claim is rejected."
+    }
+  ],
+  "note": "The operator's 'which pod causes the spike' is answered by the deterministic match + runs-on topology pointing at telemetry-burst as the node-pressure source — never by a learned culprit-picker."
+}

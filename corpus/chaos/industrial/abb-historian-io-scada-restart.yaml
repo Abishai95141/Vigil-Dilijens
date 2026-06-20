@@ -1,0 +1,167 @@
+# ABB scenario 1 — "how do PVC I/O patterns link to pod restarts?"
+#
+# Industrial shape: a process historian persists a telemetry burst to its PVC.
+# The fsync-heavy write loop saturates the node's block device, so the SCADA
+# read path (which polls the historian over a Service) starts timing out its
+# liveness probe and the kubelet restarts the SCADA pod.
+#
+# What Vigil reports (and the charter line this scenario defends):
+#   • On the historian Pod's NODE: PHEN_STORAGE_SATURATION (MEASURED, DEGRADED).
+#     /proc/pressure/io some-stall crosses the 0.10 default bar; the required
+#     per-device disk-IO + PVC volume-stats members are honestly unobservable on
+#     this rig (emptyDir, no kubelet_volume_stats ingest) -> every gap is named.
+#   • On the SCADA Pod: PHEN_PROBE_FAILURE_RESTART (MEASURED) — the liveness probe
+#     fails and the container restarts (restartCount climbs; lastState.terminated).
+#
+# THE DISCIPLINE: there is NO authored phenomenon_relation edge
+# STORAGE_SATURATION -> PROBE_FAILURE_RESTART in the ontology. The two findings
+# are a CO-OCCURRENCE, surfaced ADJACENTLY (each MEASURED, each labelled) — Vigil
+# must NOT mint a causal cascade between them. "PVC I/O patterns link to pod
+# restarts" is answered as an honest co-occurrence the operator can see, never as
+# a fabricated cause. (corpus/labels/industrial/abb-historian-io-scada-restart.json)
+#
+# SAFETY: writes go to a node-backed emptyDir (NOT a hostPath/customer PVC); the
+# dd loop rm's its scratch file each pass so the writable layer never grows
+# unbounded; memory limits cap every process. Teardown: delete the deployments,
+# NOT `delete -f` (that nukes the namespace).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: abb-industrial
+---
+# The process historian: an fsync write loop that saturates the node disk while
+# "persisting" a telemetry burst. Same mechanism as corpus/chaos/io-pressure.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: process-historian
+  namespace: abb-industrial
+  labels:
+    app: process-historian
+    vigil.io/role: historian
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: process-historian}
+  template:
+    metadata:
+      labels: {app: process-historian, vigil.io/role: historian}
+    spec:
+      containers:
+        - name: writer
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              # Small chunks, fsync per chunk: the dirty set stays ~8MiB so the
+              # writer pressures the DISK, not its own memory cgroup. This is the
+              # historian persisting a telemetry burst to its volume.
+              while true; do
+                i=0
+                while [ $i -lt 32 ]; do
+                  dd if=/dev/zero of=/historian/burst bs=1M count=8 conv=fsync 2>/dev/null
+                  i=$((i+1))
+                done
+                rm -f /historian/burst
+              done
+          volumeMounts:
+            - name: tsdb
+              mountPath: /historian
+          ports:
+            - {name: read, containerPort: 8080}
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - name: tsdb
+          emptyDir: {} # node-disk backed: the writes hit the real block device
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: process-historian
+  namespace: abb-industrial
+spec:
+  selector: {app: process-historian}
+  ports:
+    - {name: read, port: 8080, targetPort: 8080}
+---
+# The SCADA reader: polls the historian and exposes an HTTP liveness endpoint on
+# its own health port. When historian reads stall under disk saturation, the
+# reader's event loop stops making progress; the /healthz endpoint flips to 503
+# and the kubelet's httpGet probe fails until it restarts the pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scada-reader
+  namespace: abb-industrial
+  labels:
+    app: scada-reader
+    vigil.io/role: scada
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: scada-reader}
+  template:
+    metadata:
+      labels: {app: scada-reader, vigil.io/role: scada}
+    spec:
+      containers:
+        - name: reader
+          image: python:3.12-alpine
+          command: ["python3", "-u", "-c"]
+          args:
+            - |
+              import socket, threading, time
+              # Liveness server: an HTTP health endpoint that returns 200 only
+              # while the read loop is making progress. A stalled historian read
+              # => no progress in >=15s => the endpoint returns 503, so the
+              # kubelet's httpGet probe records a failure. After failureThreshold
+              # consecutive failures the kubelet restarts the container. (A
+              # tcpSocket probe could NOT detect this: the listener stays open and
+              # the TCP handshake always succeeds; the staleness lives in the HTTP
+              # status, which only an httpGet probe reads.)
+              alive = {"t": time.time()}
+              def health():
+                  s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                  s.bind(("0.0.0.0", 9090)); s.listen(8)
+                  while True:
+                      c, _ = s.accept()
+                      try:
+                          c.recv(1024)  # drain the kubelet's GET request line/headers
+                          # If the read loop has not progressed in 15s, report 503.
+                          if time.time() - alive["t"] < 15:
+                              body = b"ok"
+                              c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n"
+                                        b"Connection: close\r\n\r\n%s" % (len(body), body))
+                          else:
+                              body = b"stale"
+                              c.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: %d\r\n"
+                                        b"Connection: close\r\n\r\n%s" % (len(body), body))
+                      except Exception:
+                          pass
+                      finally:
+                          c.close()
+              threading.Thread(target=health, daemon=True).start()
+              while True:
+                  try:
+                      c = socket.create_connection(
+                          ("process-historian.abb-industrial.svc.cluster.local", 8080), timeout=5)
+                      c.sendall(b"read")
+                      c.recv(64)        # blocks while the historian disk is saturated
+                      c.close()
+                      alive["t"] = time.time()
+                  except Exception:
+                      pass
+                  time.sleep(1)
+          ports:
+            - {name: health, containerPort: 9090}
+          livenessProbe:
+            httpGet: {path: /healthz, port: 9090}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}

@@ -1,0 +1,15 @@
+# Kustomization for the ABB industrial-edge digital twin.
+#
+# Ordered so the namespace exists before namespaced objects, the broker before its
+# publishers/subscribers, and the historian before its reader. `kubectl apply -k`
+# applies the whole stack; per-file `kubectl apply -f` works too (see README).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: industrial-edge
+resources:
+  - 00-namespace.yaml
+  - 10-mqtt-broker.yaml
+  - 20-historian.yaml
+  - 30-device-simulators.yaml
+  - 40-edge-inference.yaml
+  - 50-scada-dashboard.yaml
