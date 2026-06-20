@@ -82,3 +82,5 @@ verified**; forecasting moved from "unbacked" to "validated + reproducible (on-d
 - [db-migration.md](db-migration.md) — schema versioning + the upgrade guarantee.
 - [cloud-runbook-gcp.md](cloud-runbook-gcp.md) — stand up a single-node k3s on GCP and run the live tiers against it.
 - [cloud-runbook-aws-azure.md](cloud-runbook-aws-azure.md) — the same single-node rig on AWS (m6i.2xlarge) or Azure (D8s v5); both share `deploy/cloud/bootstrap-vigil-edge.sh`.
+- [cloud-plan-aws.md](cloud-plan-aws.md) — the *plan & reasoning* for the AWS run: which instance and why, setup, and the phased industrial test plan (what each ABB chaos scenario proves).
+- [2026-06-brutal-test-campaign.md](2026-06-brutal-test-campaign.md) — campaign record: what changed, what we did, and the live results (incl. the bugs the testing found).
