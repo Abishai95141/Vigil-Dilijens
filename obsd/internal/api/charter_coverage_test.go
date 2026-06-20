@@ -88,6 +88,9 @@ var apiRouteDisposition = map[string]charterDisposition{
 	// a governance decision returns the human-promoted overlay YAML verbatim — authored
 	// graph text, correct by design (like /api/authored-relations).
 	"/api/governance/decide": dispAuthoredVerbatim,
+	// the governance preview (doc 21 Phase 3/5) returns the exact OverlayYAML a promotion
+	// WOULD author — the same authored graph text, surfaced verbatim for human review.
+	"/api/governance/preview": dispAuthoredVerbatim,
 }
 
 // discoverRegisteredRoutes AST-parses server.go and returns every string literal passed
