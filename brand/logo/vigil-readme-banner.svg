@@ -1,0 +1,27 @@
+<svg width="820" height="240" viewBox="0 0 820 240" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Vigil — Kubernetes-native operational intelligence">
+  <title>Vigil</title>
+
+  <!-- the monochrome plane (Kit. v0.1: Plane/1000) -->
+  <rect x="0.5" y="0.5" width="819" height="239" rx="18" fill="#0a0a0a" stroke="#262625"/>
+
+  <!-- hairline baseline rule -->
+  <line x1="56" y1="170" x2="764" y2="170" stroke="#1c1c1b"/>
+
+  <!-- the aperture: a watcher's lens. outer ring + the filled 'now' dot. -->
+  <g transform="translate(108,86)">
+    <circle cx="0" cy="0" r="46" stroke="#1f1f1e" stroke-width="1" stroke-dasharray="2 7"/>
+    <circle cx="0" cy="0" r="33" stroke="#f0efec" stroke-width="2.4"/>
+    <circle cx="0" cy="0" r="7" fill="#ffffff"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="172" y="80" font-family="'Plus Jakarta Sans', 'Geist', system-ui, sans-serif" font-size="62" font-weight="700" letter-spacing="-2.2" fill="#f0efec">Vigil</text>
+
+  <!-- eyebrow -->
+  <text x="175" y="116" font-family="'JetBrains Mono', ui-monospace, monospace" font-size="12.5" letter-spacing="4" fill="#6a6a67">KUBERNETES-NATIVE · OPERATIONAL INTELLIGENCE</text>
+
+  <!-- the promise (heavy lead, light trail) -->
+  <text x="410" y="206" text-anchor="middle" font-family="'Geist', system-ui, sans-serif" font-size="18">
+    <tspan fill="#d4d4d2" font-weight="500">Reports what is.</tspan><tspan fill="#3f3f3d">&#160;&#160;·&#160;&#160;</tspan><tspan fill="#a5a5a2">Estimates what&#8217;s soon.</tspan><tspan fill="#3f3f3d">&#160;&#160;·&#160;&#160;</tspan><tspan fill="#6a6a67">Never invents why.</tspan>
+  </text>
+</svg>
