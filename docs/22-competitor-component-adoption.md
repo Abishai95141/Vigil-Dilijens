@@ -146,13 +146,36 @@ the unexplained channel's "loud since *t*." Implementation = **re-implement** th
 CUSUM/EWMA math in Go (validated robust in E8) — we do **not** copy their Python;
 we reproduce the algorithm and re-prove the robustness bar in Go.
 
-**Real validation:** replicate the E8 battery in Go (≥300 pure-noise realisations
-→ false-onset rate; ≥300 real-step → detection rate), require comparable numbers
-(false-onset < 5%, detection > 95%), `-race`, injected clock, golden determinism.
+**Built (committed):** a new off-digest `obsd/internal/onset` package — EWMA-residual CUSUM
+with a **sustained-shift confirmation** (trigger on the CUSUM alarm, but emit only if the
+pre→post *level* persisted ≥MinZ signal-sigmas; a transient spike settles back and is
+dropped). Reimplemented in Go, not copied. Wired as `--onset-enabled` → `onsetLoop` producer
+(scans ALL gauge streams, O(n)) → `/api/onsets` (OFF/quiet/active states, honest notes, no
+anomaly/causal vocabulary).
 
-**Scrap criteria:** if onset timing does not materially improve C3's hypotheses
-or the unexplained "loud since" surface beyond what threshold/rate already give,
-**scrap it** and record why. (It is a means to C3, not an end.)
+**Real validation — unit (E8 parity, reimplemented):** false-onset **0/400 = 0.000**,
+detection **400/400 = 1.000 at 6σ**, 95.5% even at a hard 4σ step — beats the competitor's
+E8 (3.3% FP) on a *harder* input. Deterministic, `-race` clean, catches sub-threshold shifts.
+Off-digest proven: replay-determinism + candidate firewall tests untouched.
+
+**Real validation — LIVE on the `vigil-abb` cluster (the requirement):** ran the onset-wired
+obsd against the live cluster scraping real cAdvisor, induced a clean memory-step incident
+(`mem-stepper`: ~baseline → +250MB). The producer caught it on the real
+`container_memory_{working_set,rss,usage}_bytes` series — `direction: up`, at the true step
+time, baseline period correctly **silent**. The live run **earned its keep**: it exposed two
+warts synthetic noise could not — a `stepZ` magnitude blowup (2.6e17) on a perfectly flat
+baseline (MAD→0 vs an absolute sigma floor), and spurious onsets on cAdvisor timestamp /
+high-water-mark gauges (`container_last_seen`, `_max_usage_bytes`). **Both fixed** (StepZ
+clamped to `MaxStepZ`, with a unit test reproducing the blowup; `onsetSkipMetric` drops the
+metadata families) and the **clean re-run confirmed**: only the 3 real memory gauges,
+`stepZ = 99.9` (sane), baseline silent.
+
+**Value gate: KEEP (not scrapped).** It pinpoints onset *time + direction* (no existing lane
+does), catches *sub-threshold* shifts the three primitives leave unmarked, and is the
+temporal-adjacency substrate C3 reads. **Honest caveat:** on a busy cluster the raw surface
+is comprehensive (it lists every gauge that stepped within the ~1h hot ring — ~1000s), so its
+value is as a **queryable substrate + pairwise co-onset input for C3**, not a standalone feed;
+C3 consumes it selectively (a small co-onset window per coupled pair).
 
 ### C3 — Direction-free CausalHypothesis tab — *the charter-clean reframe*
 

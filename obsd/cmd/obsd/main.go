@@ -55,6 +55,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/logtmpl"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/mcp"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/onset"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
@@ -118,6 +119,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		dgxEnabled         = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
 		histQuantiles      = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
 		assocEnabled       = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
+		onsetEnabled       = fs.Bool("onset-enabled", false, "doc 22 C2: compute MEASURED changepoint ONSETS over the hot gauge series (off-digest EWMA-residual CUSUM with sustained-shift confirmation) and surface the step TIMES at /api/onsets — including sub-threshold shifts the three primitives leave unmarked; the temporal-adjacency substrate for the direction-free hypotheses tab. OFF by default; off = byte-identical (no onset computed). Off-digest; never feeds detection/forecasting/governance.")
 		dgxAgentEnabled    = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
 		logsEnabled        = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
 		auditEnabled       = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
@@ -206,7 +208,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -281,7 +283,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -474,6 +476,18 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	if assocEnabled {
 		depView.Store(vapi.NewDependencyView(time.Now().UTC(), time.Time{}, time.Time{}, nil, 0, 0))
 		go assocLoop(ctx, logger, ingestor, &depView, envDuration("DGX_ASSOC_INTERVAL", time.Minute), assocMaxStreams)
+	}
+
+	// doc 22 C2: the off-digest changepoint-onset lane — each interval, compute the MEASURED
+	// step TIMES over the hot GAUGE series (CUSUM + sustained-shift confirmation) and publish
+	// /api/onsets. OFF by default; never feeds detection/forecasting/governance (off-digest).
+	var onsetView atomic.Pointer[vapi.OnsetView]
+	if onsetEnabled {
+		onsetView.Store(vapi.BuildOnsets(nil, true, 0, time.Now().UTC()))
+		// 0 = scan ALL gauge streams: onset is O(n) per stream (linear CUSUM), so unlike the
+		// O(n²) assoc lane it can afford the whole cluster — and honest coverage demands it
+		// (a capped scan would silently skip most workloads).
+		go onsetLoop(ctx, logger, ingestor, &onsetView, envDuration("ONSET_INTERVAL", time.Minute), 0)
 	}
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
@@ -836,6 +850,14 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					deps = *p
 				}
 				return vapi.BuildDepartures(deps, departureEnabled, phaseCDepartureGatePassed, time.Now().UTC())
+			},
+			// doc 22 C2: the changepoint-onset surface (off-digest, MEASURED). The producer
+			// runs every ONSET_INTERVAL; this just serves the latest snapshot or the OFF state.
+			Onsets: func() *vapi.OnsetView {
+				if v := onsetView.Load(); v != nil {
+					return v
+				}
+				return vapi.BuildOnsets(nil, onsetEnabled, 0, time.Now().UTC())
 			},
 			// v3 T-C discrete-event lane: the joined EventsView, or the honest
 			// unavailable state when --events-enabled is off.
@@ -1673,6 +1695,85 @@ func assocLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, d
 			}
 		}
 	}
+}
+
+// onsetLoop periodically computes the MEASURED changepoint ONSETS over the hot GAUGE series
+// (doc 22 C2) and publishes /api/onsets. Off the deterministic path: it reads the hot store
+// and writes only the surfacing view — never detection/forecast/governance. Counters are
+// skipped (a cumulative counter only steps up). Deterministic per snapshot: same samples +
+// same params ⇒ same onsets.
+func onsetLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, view *atomic.Pointer[vapi.OnsetView], every time.Duration, maxStreams int) {
+	if every <= 0 {
+		every = time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	p := onset.DefaultParams()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			hot := in.Hot()
+			keys := hot.Keys()
+			sort.Strings(keys)
+			if maxStreams > 0 && len(keys) > maxStreams {
+				keys = keys[:maxStreams]
+			}
+			var onsets []onset.Onset
+			scanned := 0
+			for _, id := range keys {
+				if typ, ok := in.StreamType(id); ok && typ == "counter" {
+					continue // a cumulative counter only steps up; onset is for gauges
+				}
+				cei, metric := splitStreamID(id)
+				if onsetSkipMetric(metric) {
+					continue // monotonic timestamp / high-water-mark gauge — onset on it is noise
+				}
+				samples := hot.LastN(id, qss.HotCapacity())
+				if len(samples) < p.Warmup+4 {
+					continue
+				}
+				scanned++
+				onsets = append(onsets, onset.Detect(cei, metric, samples, p)...)
+			}
+			sort.SliceStable(onsets, func(i, j int) bool {
+				if !onsets[i].At.Equal(onsets[j].At) {
+					return onsets[i].At.Before(onsets[j].At)
+				}
+				if onsets[i].EntityCEI != onsets[j].EntityCEI {
+					return onsets[i].EntityCEI < onsets[j].EntityCEI
+				}
+				return onsets[i].Metric < onsets[j].Metric
+			})
+			view.Store(vapi.BuildOnsets(onsets, true, scanned, now))
+			if len(onsets) > 0 {
+				logger.Info("onset: published changepoints (doc 22 C2)", "onsets", len(onsets), "gauge_streams", scanned)
+			}
+		}
+	}
+}
+
+// onsetSkipMetric drops metrics that are monotonic timestamps or high-water marks which
+// cAdvisor (and similar exporters) expose as GAUGE: a changepoint on a clock is meaningless,
+// and a high-water mark's step is redundant with the live gauge (working_set already fires).
+// Discovered by the live vigil-abb capture (container_last_seen produced a spurious onset).
+func onsetSkipMetric(metric string) bool {
+	return strings.HasPrefix(metric, "container_last_seen") ||
+		strings.HasPrefix(metric, "container_start_time") ||
+		strings.Contains(metric, "_max_usage_bytes")
+}
+
+// splitStreamID splits a hot-store key "CEI.Key()|metric|sub" into (cei, metric+sub): the
+// CEI key is the first 6 "|"-separated fields (layer|cluster|ns|kind|name|uid), the rest is
+// the metric (+ any sub-id). Fewer than 7 fields ⇒ the whole id as the entity, empty metric.
+func splitStreamID(id string) (cei, metric string) {
+	parts := strings.Split(id, "|")
+	if len(parts) >= 7 {
+		return strings.Join(parts[:6], "|"), strings.Join(parts[6:], "|")
+	}
+	return id, ""
 }
 
 // snapshotSeries reads up to maxStreams hot series (deterministic order) as assoc

@@ -59,6 +59,9 @@ type Providers struct {
 	// Departures returns the band-departure anomaly surface (doc 15 cap. C): a measured
 	// sample leaving its own projected forecast band. nil ⇒ the honest OFF state.
 	Departures func() *DepartureView
+	// Onsets returns the changepoint-onset surface (doc 22 C2): the MEASURED times watched
+	// gauge series stepped (off-digest CUSUM). nil ⇒ the honest OFF state.
+	Onsets func() *OnsetView
 	// Events returns the v3 T-C discrete-event lane surface (OOMKilled,
 	// CrashLoopBackOff joined by CEI); nil ⇒ the honest "not enabled" state.
 	Events func() *EventsView
@@ -529,6 +532,21 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		if v == nil {
 			v = BuildDepartures(nil, false, false, timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/onsets", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *OnsetView
+		if p.Onsets != nil {
+			v = p.Onsets()
+		}
+		if v == nil {
+			v = BuildOnsets(nil, false, 0, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})
