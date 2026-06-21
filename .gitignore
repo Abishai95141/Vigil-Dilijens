@@ -43,3 +43,6 @@ web-legacy/
 
 # Phase A flow-lane collector build artifact (built via just/docker, not committed)
 deploy/flow/conntrack-agent
+
+# Local run scratch: replay/findings SQLite DBs from manual cluster testing
+_run/

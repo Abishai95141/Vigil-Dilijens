@@ -67,8 +67,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 16 {
-		t.Fatalf("rules = %d, want 16 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT)", len(g.Rules))
+	if len(g.Rules) != 17 {
+		t.Fatalf("rules = %d, want 17 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -125,8 +125,14 @@ func TestOverlayVersionPinning(t *testing.T) {
 	// member of DISK_PID_INODE_PRESSURE). v0.8.0 (PVC): + threshold-rules-v6 +
 	// detect-conditions-v7 (the KSM stuck-Pending member of VOLUME_MOUNT_FAILURE), so 15.
 	// v0.10.0 (Phase 5): + phenomenon-severity-v1 (the authored severity field), so 17.
-	if len(merged.Overlays) != 17 {
-		t.Fatalf("overlay provenance records = %d, want 17 (spans, rules v1-v6, conditions v1-v7, cross-service-v0, disk-filling-v1, phenomenon-severity-v1)", len(merged.Overlays))
+	// v0.11.0 (INIT): + init-container-failure-v1 (the KSM init-restart member +
+	// flagged rate bar that wires PHEN_INIT_CONTAINER_FAILURE), so 18.
+	// v0.12.0 (STRUCTURING): + detection-status-v1 (the membership-structuring escape
+	// hatch acknowledging the 6 metric-matcher-dark phenomena), so 19.
+	// v0.13.0 (CORRECTIONS): + corrections-v1 (governed overrides: 2 non-causal probe-cascade
+	// triggers downgraded, the EQG_OOM_EVENTS false-equivalence pattern removed), so 20.
+	if len(merged.Overlays) != 20 {
+		t.Fatalf("overlay provenance records = %d, want 20 (… + init-container-failure-v1, detection-status-v1, corrections-v1)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")
@@ -390,6 +396,197 @@ checks:
   PHEN_MEMORY_LEAK:
     - {signal: SIG_container_memory_family_14_metrics_529498d3, metric: m, facet: level, expect: crossed, min_state: above}
 `, "only meaningful on a slope"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g, err := Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = g.applyOverlay("test.yaml", []byte(c.body))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("want error containing %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+// TestDetectionLaneVocab locks the runtime detection-lane vocabulary to the canonical set.
+// It MUST stay in sync with graphlint's ovDetectionLaneVocab (tools/graphlint, guarded by
+// its own TestDetectionLaneVocabParity) — adding/removing a lane requires updating both
+// copies and both lock tests.
+func TestDetectionLaneVocab(t *testing.T) {
+	canonical := []string{"events-only", "log-only", "needs-scrape-lane", "needs-entity-binding", "wireable-backlog"}
+	if len(knownDetectionLanes) != len(canonical) {
+		t.Fatalf("lane vocab size = %d, want %d (mirror graphlint ovDetectionLaneVocab)", len(knownDetectionLanes), len(canonical))
+	}
+	for _, l := range canonical {
+		if !IsValidDetectionLane(l) {
+			t.Errorf("lane %q should be valid", l)
+		}
+	}
+	// Empty is NOT valid here (a detection_status must name a concrete lane), and an unknown
+	// lane is rejected.
+	if IsValidDetectionLane("") || IsValidDetectionLane("galaxy-wide") {
+		t.Error("empty / unknown lane must be invalid")
+	}
+}
+
+// Governed corrections (doc 12): an overlay `overrides:` block downgrades a non-causal
+// relation and removes a false-equivalence pattern. A valid override applies; one that
+// targets non-existent content or omits a rationale is a hard error.
+func TestOverrideOverlay(t *testing.T) {
+	raw, err := os.ReadFile(kgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Valid: downgrade a real relation + remove a present pattern.
+	g, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := `
+overlay: t
+author: a
+overrides:
+  phenomenon_relations:
+    - src: PHEN_PROBE_CASCADE_META
+      dst: PHEN_KUBE_PROXY_SYNC_SLOW
+      set_role: corroborating
+      rationale: probes hit the pod IP directly and bypass kube-proxy
+  equivalence_patterns:
+    - id: EQG_OOM_EVENTS
+      remove: [oom_kill]
+      rationale: the unanchored pattern mis-binds node_vmstat_oom_kill as a container OOM
+`
+	if err := g.applyOverlay("test.yaml", []byte(valid)); err != nil {
+		t.Fatalf("valid override rejected: %v", err)
+	}
+	rel := ""
+	for _, r := range g.Phenomena["PHEN_PROBE_CASCADE_META"].Relations {
+		if r.TargetID == "PHEN_KUBE_PROXY_SYNC_SLOW" {
+			rel = r.Role
+		}
+	}
+	if rel != "corroborating" {
+		t.Errorf("relation role = %q, want corroborating", rel)
+	}
+	for _, p := range g.EquivalenceGroups["EQG_OOM_EVENTS"].Patterns {
+		if p == "oom_kill" {
+			t.Error("oom_kill pattern should have been removed")
+		}
+	}
+
+	// Defects are hard errors.
+	cases := []struct{ name, body, want string }{
+		{"relation does not exist", `
+overlay: t
+author: a
+overrides:
+  phenomenon_relations:
+    - {src: PHEN_MEMORY_LEAK, dst: PHEN_DNS_FAILURE, set_role: corroborating, rationale: x}
+`, "no such relation exists"},
+		{"relation missing rationale", `
+overlay: t
+author: a
+overrides:
+  phenomenon_relations:
+    - {src: PHEN_PROBE_CASCADE_META, dst: PHEN_KUBE_PROXY_SYNC_SLOW, set_role: corroborating, rationale: ""}
+`, "rationale is required"},
+		{"bad set_role", `
+overlay: t
+author: a
+overrides:
+  phenomenon_relations:
+    - {src: PHEN_PROBE_CASCADE_META, dst: PHEN_KUBE_PROXY_SYNC_SLOW, set_role: sideways, rationale: x}
+`, "is not one of trigger|downstream|corroborating"},
+		{"pattern not present", `
+overlay: t
+author: a
+overrides:
+  equivalence_patterns:
+    - {id: EQG_OOM_EVENTS, remove: [not_a_real_pattern], rationale: x}
+`, "is not present to remove"},
+		{"unknown equivalence group", `
+overlay: t
+author: a
+overrides:
+  equivalence_patterns:
+    - {id: EQG_DOES_NOT_EXIST, remove: [x], rationale: y}
+`, "unknown equivalence group"},
+		{"empties the group", `
+overlay: t
+author: a
+overrides:
+  equivalence_patterns:
+    - {id: EQG_OOM_EVENTS, remove: ['^container_oom_events_total$', oom_kill], rationale: x}
+`, "would remove the LAST pattern"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			g, err := Parse(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = g.applyOverlay("test.yaml", []byte(c.body))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("want error containing %q, got %v", c.want, err)
+			}
+		})
+	}
+}
+
+// detection_status (the membership-structuring escape hatch) is AUTHORED: a known
+// phenomenon, a lane from the closed vocabulary, and a REQUIRED falsifiable rationale.
+// A valid declaration applies; a defective one is a hard error.
+func TestDetectionStatusOverlay(t *testing.T) {
+	raw, err := os.ReadFile(kgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Valid: applies onto an existing phenomenon.
+	g, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := `
+overlay: t
+author: a
+detection_status:
+  PHEN_CERT_EXPIRY:
+    lane: needs-scrape-lane
+    rationale: no kube-apiserver scrape lane exists in obsd
+`
+	if err := g.applyOverlay("test.yaml", []byte(valid)); err != nil {
+		t.Fatalf("valid detection_status rejected: %v", err)
+	}
+	ds := g.Phenomena["PHEN_CERT_EXPIRY"].DetectionStatus
+	if ds == nil || ds.Lane != "needs-scrape-lane" || ds.Rationale == "" {
+		t.Fatalf("detection_status not applied: %+v", ds)
+	}
+
+	// Defects are hard errors.
+	cases := []struct{ name, body, want string }{
+		{"unknown lane", `
+overlay: t
+author: a
+detection_status:
+  PHEN_CERT_EXPIRY: {lane: galaxy-wide, rationale: x}
+`, "is not one of"},
+		{"empty rationale", `
+overlay: t
+author: a
+detection_status:
+  PHEN_CERT_EXPIRY: {lane: needs-scrape-lane, rationale: ""}
+`, "needs a rationale"},
+		{"unknown phenomenon", `
+overlay: t
+author: a
+detection_status:
+  PHEN_DOES_NOT_EXIST: {lane: events-only, rationale: x}
+`, "unknown phenomenon"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

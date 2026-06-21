@@ -102,6 +102,9 @@ func main() {
 		for _, e := range res.overlayErrors {
 			fmt.Printf("      overlay: %s\n", e)
 		}
+		for _, e := range res.structErrors {
+			fmt.Printf("      structuring: %s\n", e)
+		}
 		if res.refWarnTotal > 0 {
 			fmt.Printf("      warn: %d owned_by_agent edge(s) reference an undefined Agent node (curation item, non-detection). e.g. %s\n",
 				res.refWarnTotal, res.refWarnings[0])
@@ -111,6 +114,7 @@ func main() {
 				o.Overlay, o.path, o.Version, o.Author, len(o.Spans), len(o.Rules))
 		}
 		fmt.Print(res.gap.String())
+		fmt.Print(res.structuring.String())
 		if *strict && (res.gap.hasGaps() || res.refWarnTotal > 0) {
 			failed = true
 		}

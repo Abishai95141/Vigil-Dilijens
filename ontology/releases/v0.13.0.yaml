@@ -1,0 +1,61 @@
+# Graph release v0.13.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.13.0
+graph_version: "sha256:6c9e75bed5232dac078153d8cfd89eda35e56b170992886e4170292c4b9b3e32"
+created: "2026-06-21"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - corrections-v1.yaml
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - detection-status-v1.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Adds the GOVERNED-CORRECTION channel (overlay `overrides:`) + lands the 3 high-value
+  content corrections from the research-backed KG audit, and fixes the kubelet
+  obtainability over-claim. The base KG stays immutable: a content DEFECT in the base
+  that cannot be expressed as an addition is corrected by an authored, provenance-bearing
+  OVERRIDE that names an EXISTING target (validated to exist by both the runtime loader and
+  graphlint) and carries a REQUIRED falsifiable rationale — governance correcting an
+  authoring bug (doc 12), not a silent redefine. Two override operations: phenomenon_relation
+  re-role (set_role) and equivalence-group pattern removal. The new overlay corrections-v1.yaml
+  applies three: (1) PHEN_PROBE_CASCADE_META→PHEN_KUBE_PROXY_SYNC_SLOW downgraded trigger→
+  corroborating — NON-CAUSAL (kubelet probes hit the pod IP directly and bypass kube-proxy);
+  (2) PHEN_PROBE_CASCADE_META→PHEN_ETCD_SLOW_PATH downgraded trigger→corroborating —
+  OVERSTATED (local probes run during etcd slowness); both neutralise a future FALSE cascade
+  (resolveDownstream ignores corroborating for direction) while retaining the association;
+  (3) the unanchored "oom_kill" pattern removed from EQG_OOM_EVENTS — it spuriously bound
+  NODE-scope node_vmstat_oom_kill as the per-CONTAINER OOM observable (a scope MIS-JOIN);
+  ^container_oom_events_total$ stays. NO code/detection-logic change for these — the cascade
+  engine and equivalence resolver were correct; the base INPUTS were the defects. Separately,
+  a CODE fix (obsd/internal/binding/obtain.go) corrects the kubelet obtainability over-claim:
+  the kubelet was lumped into nativeTools, so ~38 kubelet-/metrics-only signals (volume_stats,
+  runtime_operations, pleg, rest_client…) were reported obtainable though obsd scrapes cAdvisor
+  via the kubelet but NOT the kubelet's own /metrics; they are now honestly out-of-scope with
+  the accurate reason. cAdvisor stays native (it IS scraped). The graph hash bumps
+  v0.12.0→v0.13.0 because the overlay set changed (19→20 overlays, +1 corrections); the base KG
+  and every prior release stay byte-identical and loadable. CHARTER-CLEAN: an override is
+  AUTHORED (human-declared, rationale = falsifiable claim surfaced with provenance), the
+  relation/equivalence fixes only correct authored content (no model output, no learned value),
+  and they do not perturb the replay digest (the corrected phenomena are dark today, so current
+  findings + the per-tick digest are byte-identical). Documentary hygiene items from the audit
+  (modality mis-tags, weaker equivalences, the corroborating-direction relation) are a tracked
+  backlog — zero current behavioural effect (the matcher never reads them).

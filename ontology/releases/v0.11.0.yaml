@@ -1,0 +1,61 @@
+# Graph release v0.11.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.11.0
+graph_version: "sha256:c5a3c064356d1c3fbb590b8588df69d5cf32fdca154561aa93b0e8ee7480c068"
+created: "2026-06-20"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Wires PHEN_INIT_CONTAINER_FAILURE end-to-end — the init crash-loop detection that
+  was dark because nothing minted a crossable bar on an init container. THE BASE KG
+  STAYS IMMUTABLE (as it has across every release): the whole authored delta lives in
+  one new overlay, init-container-failure-v1.yaml. It STRUCTURES the phenomenon's THREE
+  authored-inline required members (the doc 14 A14 backlog) as first-class Signal nodes +
+  participates_in members: (1) the restart counter SIG_init_container_restart_count_…
+  (a Metric KSM Counter, TOOL-GATED on kube-state-metrics so a cluster without KSM
+  reports the bar honestly out-of-scope, not silently watched — doc 04 §3.1.1, via the
+  documented overlay `signals:` mechanism); (2) the last-terminated reason (a Metric KSM
+  string); (3) the Init:CrashLoopBackOff event (Event modality, kubelet). Only member 1
+  carries a check — the flagged rate-of-change bar THR_INIT_CONTAINER_RESTARTS_RATE (>3
+  init-container restarts in the 15m window — a restart count has NO customer-declared
+  limit, so the bar is a FLAGGED ontology default mirroring THR_CONTAINER_RESTARTS_RATE,
+  never learned). Members 2 and 3 are required but UNCHECKED on this signal set, so the
+  matcher counts them as NAMED unobserved gaps and the finding is an honest 1-of-3
+  DEGRADED match (mirroring PROBE_FAILURE_RESTART: 11 members, 1 checked) — never
+  fabricated (degrade-never-fabricate, doc 07 §3.3/§4). BORROWED NORMATIVITY
+  holds: the bar is the customer's own restart count against a flagged default; nothing
+  is invented. The detection runtime change that lets this fire lives in the binding's
+  container enumeration (obsd kube/config.go now reads pod.Spec.InitContainers as
+  first-class Container entities, init-first then regular) — an init container can
+  crash-loop, OOM, or throttle exactly like a regular one, and a container-scoped rule
+  only ever fires where its metric stream actually exists for that CEI, so the broadened
+  fan-out adds bindings, never false positives. The merged graph hash bumps
+  v0.10.0→v0.11.0 because the overlay set changed (17→18 overlays, 16→17 rules,
+  589→592 merged signals); the base KG and every prior release stay byte-identical and
+  loadable. The overlay loader gains tools/capabilities/source/collection_method on an
+  overlay-declared signal (graph/overlay.go), and graphlint learns the overlay
+  `signals:` block, so an infra signal added by overlay is validated + obtainability-
+  gated as honestly as a base-KG one. BEHAVIOURAL governance class (doc 12): NEW signals
+  + members + check + flagged default; DETECTION surfaces immediately (non-gating), any
+  forecast WARNING for this class stays gate-pending until its backtest gate passes.

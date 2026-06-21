@@ -1,0 +1,58 @@
+# Governed corrections — authored overlay v1 (doc 12 governance; doc 01 charter).
+#
+# The base KG is an immutable vendored mirror, so a content DEFECT in it cannot be edited
+# in place (that would drift every historical release's content hash). This overlay is the
+# GOVERNED-CORRECTION channel: an authored, provenance-bearing override of a base-KG defect
+# that cannot be expressed as an addition. Every override names an EXISTING target (validated
+# to exist by both the runtime loader and graphlint) and carries a REQUIRED falsifiable
+# rationale — governance correcting an authoring bug (doc 12), never a silent redefine.
+#
+# These three corrections came out of a research-backed content audit (causal-relation +
+# false-equivalence lenses, each independently verified). They touch NO code and NO detection
+# logic — the cascade engine (detect/cascade.go) and equivalence resolver (binding) are
+# correct; the base INPUTS were the defects. The fixes are charter-load-bearing: a non-causal
+# edge dressed as a trigger and a scope mis-joining equivalence are exactly what doc 01 forbids.
+overlay: corrections
+version: 1
+author: vigil-engineering
+status: released-v1 (downgrade 2 non-causal probe-cascade triggers; remove 1 false-equivalence pattern)
+
+overrides:
+  # CAUSAL CORRECTIONS — downgrade two non-causal "trigger" edges to "corroborating" so the
+  # cascade engine stops asserting a false causal direction (resolveDownstream ignores
+  # corroborating for direction) while the authored ASSOCIATION is retained. Both downstream
+  # phenomena are dark today (no kube-proxy / apiserver scrape lane), so this is preventive:
+  # it stops a FALSE cascade story from ever being minted once those lanes exist.
+  phenomenon_relations:
+    - src: PHEN_PROBE_CASCADE_META
+      dst: PHEN_KUBE_PROXY_SYNC_SLOW
+      set_role: corroborating
+      rationale: >-
+        NOT causal: kubelet liveness/readiness probes connect DIRECTLY to the pod IP and
+        bypass the Service / kube-proxy iptables data path entirely (kubernetes.io probe
+        docs; k8s issue #81630). kube-proxy sync slowness degrades Service-routed client
+        traffic, not probe execution — the probe path and the kube-proxy path do not
+        intersect, so this is an association, never a trigger.
+    - src: PHEN_PROBE_CASCADE_META
+      dst: PHEN_ETCD_SLOW_PATH
+      set_role: corroborating
+      rationale: >-
+        OVERSTATED: local kubelet probes run on the node and keep executing during
+        apiserver/etcd slowness; they do not depend on etcd WAL fsync latency. The only
+        coupling is a narrow static-pod PodStatus edge case (k8s issue #67204), not a
+        general etcd-slow -> probe-failure cascade — so this is an association, not a trigger.
+
+  # FALSE-EQUIVALENCE CORRECTION — remove the unanchored "oom_kill" pattern from the
+  # CONTAINER-OOM equivalence group. It spuriously binds NODE-scope node_vmstat_oom_kill as
+  # the container-OOM canonical observable (k8s.container.oom.kills) — a SCOPE MIS-JOIN (the
+  # charter's cardinal identity sin). The legitimate, scope-correct member ^container_oom_
+  # events_total$ stays; node_vmstat_oom_kill remains its own node-scope signal.
+  equivalence_patterns:
+    - id: EQG_OOM_EVENTS
+      remove:
+        - oom_kill
+      rationale: >-
+        The unanchored "oom_kill" regex matches NODE-scope node_vmstat_oom_kill and binds it
+        as the per-CONTAINER OOM observable, so a node-wide OOM count would be mis-attributed
+        to a single container (scope mis-join). Container OOM is ^container_oom_events_total$
+        only; the node counter is a distinct node-scope signal, never the same observable.

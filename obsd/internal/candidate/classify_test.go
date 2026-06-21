@@ -29,6 +29,18 @@ func TestClassifyStrayMetric(t *testing.T) {
 		{"redis_connected_clients", StrayOperational},
 		{"pg_stat_database_xact_commit", StrayOperational},
 		{"http_request_duration_seconds_p99", StrayOperational},
+		// Universal metadata-carrier suffixes — pure inventory even on an operational KIND:
+		// a label/annotation carrier (gauge=1) or a static creation timestamp → suppressed.
+		{"kube_persistentvolume_info", StrayObjectMetadata},
+		{"kube_persistentvolume_created", StrayObjectMetadata},
+		{"kube_pod_info", StrayObjectMetadata},
+		{"kube_pod_created", StrayObjectMetadata},
+		{"kube_node_labels", StrayObjectMetadata},
+		{"kube_deployment_annotations", StrayObjectMetadata},
+		// …but a real runtime sub-metric on the SAME kind stays operational (suffix, not substring)
+		{"kube_persistentvolume_capacity_bytes", StrayOperational},
+		{"kube_pod_container_status_restarts_total", StrayOperational},
+		{"kube_node_status_condition", StrayOperational},
 		// Defensive: a bare kube_ prefix with no kind, or non-stray noise
 		{"kube_", StrayOperational},
 		{"some_random_metric", StrayOperational},

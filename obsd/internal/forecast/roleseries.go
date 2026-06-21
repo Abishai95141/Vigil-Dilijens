@@ -141,12 +141,12 @@ func (r *RoleSeriesReader) StreamsFor(uid, metric string) []string {
 // LastN aggregates the role's member streams when streamID is a synthetic role stream;
 // otherwise it delegates. The aggregation is deterministic (AggregateRoleSeries).
 func (r *RoleSeriesReader) LastN(streamID string, n int) []qss.Sample {
-	roleKey, metric, ok := parseRoleStream(streamID)
+	uid, metric, ok := parseRoleStream(streamID)
 	if !ok {
 		return r.Base.LastN(streamID, n)
 	}
 	members := map[string][]qss.Sample{}
-	for _, m := range r.Members(roleKey) {
+	for _, m := range r.Members(uid) {
 		for _, sid := range r.Base.StreamsFor(m, metric) {
 			members[sid] = r.Base.LastN(sid, n)
 		}
@@ -164,11 +164,11 @@ func (r *RoleSeriesReader) LastN(streamID string, n int) []qss.Sample {
 // gauge by construction — the caller only rolls up gauge-class targets). Delegates for a
 // real stream id.
 func (r *RoleSeriesReader) StreamType(streamID string) (string, bool) {
-	roleKey, metric, ok := parseRoleStream(streamID)
+	uid, metric, ok := parseRoleStream(streamID)
 	if !ok {
 		return r.Base.StreamType(streamID)
 	}
-	for _, m := range r.Members(roleKey) {
+	for _, m := range r.Members(uid) {
 		for _, sid := range r.Base.StreamsFor(m, metric) {
 			if t, ok := r.Base.StreamType(sid); ok {
 				return t, true
@@ -178,12 +178,22 @@ func (r *RoleSeriesReader) StreamType(streamID string) (string, bool) {
 	return "gauge", true
 }
 
-func parseRoleStream(streamID string) (roleKey, metric string, ok bool) {
+// parseRoleStream inverts the id StreamsFor builds: RoleStreamPrefix + uid + "\x1f" +
+// metric. The uid is itself the target's StreamUID, which for a CONTAINER target is
+// "roleKey\x1fcontainer" — so the payload has THREE \x1f-separated parts
+// (roleKey, container, metric), not two. The metric never contains \x1f, so split on
+// the LAST separator: everything before is the full uid handed back to Members (which
+// re-splits roleKey\x1fcontainer), everything after is the metric. Splitting on the
+// FIRST separator (the old bug) glued the container onto the metric and dropped it from
+// the uid, so Members resolved container-less pod UIDs, no member stream matched, the
+// role series came back empty, and every container target was wrongly silenced
+// short-context (doc 20 P5). A pod target (uid == roleKey, no inner \x1f) is unaffected.
+func parseRoleStream(streamID string) (uid, metric string, ok bool) {
 	if len(streamID) < len(RoleStreamPrefix) || streamID[:len(RoleStreamPrefix)] != RoleStreamPrefix {
 		return "", "", false
 	}
 	rest := streamID[len(RoleStreamPrefix):]
-	for i := 0; i < len(rest); i++ {
+	for i := len(rest) - 1; i >= 0; i-- {
 		if rest[i] == '\x1f' {
 			return rest[:i], rest[i+1:], true
 		}

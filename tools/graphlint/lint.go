@@ -37,6 +37,13 @@ type kgNode struct {
 	Modality string `json:"modality" yaml:"modality"`
 	DataType string `json:"data_type" yaml:"data_type"`
 	Severity string `json:"severity" yaml:"severity"` // AUTHORED phenomenon prioritisation (doc 21 Phase 5)
+	// Signals is a phenomenon's INLINE member tuples [pattern, role, temporal, note]
+	// (the documentary membership the matcher never reads) — needed by the
+	// membership-structuring lint to count inline-required members.
+	Signals [][]string `json:"signals" yaml:"signals"`
+	// Patterns is an EquivalenceGroup's dialect-bridge regexes — needed to validate an
+	// equivalence-pattern override removes a pattern that is actually present.
+	Patterns []string `json:"patterns" yaml:"patterns"`
 }
 
 type kgEdge struct {
@@ -47,6 +54,9 @@ type kgEdge struct {
 	DstType       string `json:"dst_type" yaml:"dst_type"`
 	TemporalOrder string `json:"temporal_order" yaml:"temporal_order"`
 	Threshold     string `json:"threshold" yaml:"threshold"`
+	// Role distinguishes a required structured member (participates_in) from a
+	// corroborating one — needed by the membership-structuring lint.
+	Role string `json:"role" yaml:"role"`
 }
 
 type kgDoc struct {
@@ -84,16 +94,22 @@ type fileResult struct {
 	refErrTotal   int        // total core ref errors (uncapped)
 	refWarnTotal  int        // total owned_by_agent ref warnings (uncapped)
 	overlayErrors []string   // defective authored overlays (hard errors)
+	structErrors  []string   // membership-structuring HARD fails (inline-required, zero structured-required, unacknowledged)
 	overlays      []overlayDoc
 	gap           GapReport
+	structuring   StructuringReport
 }
 
 // ok reports whether the file passed the HARD checks (schema + core referential
-// integrity + overlay validity). owned_by_agent ref warnings do not fail the graph:
-// it is an organizational annotation, not detection knowledge, so a mistyped agent
-// name is a curation item, not a corruption of what detection reads.
+// integrity + overlay validity + membership structuring). owned_by_agent ref warnings
+// do not fail the graph: it is an organizational annotation, not detection knowledge,
+// so a mistyped agent name is a curation item, not a corruption of what detection reads.
+// A membership-structuring hard fail IS a corruption of what detection reads (a
+// phenomenon the curator declared metric-detectable that the matcher is structurally
+// blind to), so it gates like a dangling participates_in endpoint.
 func (r fileResult) ok() bool {
-	return len(r.schemaErrors) == 0 && len(r.refErrors) == 0 && len(r.overlayErrors) == 0
+	return len(r.schemaErrors) == 0 && len(r.refErrors) == 0 &&
+		len(r.overlayErrors) == 0 && len(r.structErrors) == 0
 }
 
 func compileSchema(schemaPath string) (*jsonschema.Schema, error) {
@@ -238,6 +254,14 @@ func lintFile(sch *jsonschema.Schema, path string, ovls []overlayDoc) (fileResul
 	}
 	res.gap = analyzeGap(doc)
 	res.gap.ThresholdRulesStructured = rules
+	// Membership-structuring analysis (the inline-vs-structured member gate). Needs BOTH
+	// the merged doc (base nodes + edges) AND ovls (overlay `members:`/`detection_status:`
+	// blocks that mergeOverlays never projects into doc.Edges), so it runs here where both
+	// are in scope. Skipped if overlays are defective (they were not merged).
+	if len(res.overlayErrors) == 0 {
+		res.structuring = analyzeStructuringGap(doc, ovls)
+		res.structErrors = res.structuring.hardErrors()
+	}
 	res.overlays = ovls
 	return res, nil
 }

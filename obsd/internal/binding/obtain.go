@@ -66,11 +66,31 @@ type AvailabilityReport struct {
 }
 
 // nativeTools are obtainable on any conformant cluster we can reach at all: the
-// API itself, the kubelet and its embedded cAdvisor, the runtime, and the kernel.
+// API itself, the kubelet, its embedded cAdvisor, the runtime, and the kernel. The
+// kubelet stays here because it genuinely IS present and its EVENTS (OOMKilled,
+// CrashLoopBackOff, evictions…) and STATE (node conditions via KSM) ARE ingested by
+// the events/KSM lanes. What is NOT scraped is the kubelet's own /metrics ENDPOINT —
+// handled modality-aware in GateSignals via unscrapedEndpointTools (a Metric/Log signal
+// that can only come from that endpoint is out-of-scope; an Event/State signal tagged
+// with the same component is not).
 var nativeTools = map[string]bool{
 	"k8s-api": true, "kube-apiserver": true, "kubelet": true, "cadvisor": true,
 	"container-runtime": true, "kernel": true,
 }
+
+// unscrapedEndpointTools name a present component whose OWN /metrics endpoint obsd does
+// NOT scrape. A NUMERIC/LOG (modality Metric or Log) signal whose only emitting tool is one
+// of these can never be ingested — it is honestly out-of-scope despite the component being
+// present (obsd scrapes cAdvisor VIA the kubelet, never the kubelet's own /metrics). This is
+// applied MODALITY-AWARE in GateSignals: Event/State signals tagged with the same component
+// arrive via the events lane / KSM, so they stay obtainable. The value is the accurate reason.
+var unscrapedEndpointTools = map[string]string{
+	"kubelet": "kubelet /metrics endpoint not scraped by obsd (only cAdvisor, via the kubelet, is ingested)",
+}
+
+// scrapedMetricModalities are the signal modalities that ride a /metrics scrape — the only
+// ones the unscraped-endpoint out-of-scope verdict applies to.
+var scrapedMetricModalities = map[string]bool{"Metric": true, "Log": true}
 
 // undetectableTools cannot be detected from the API server at all (in-process
 // libraries, external backends): their presence is INDETERMINATE, stated.
@@ -179,6 +199,14 @@ var kernelCaps = map[string][2]int{
 var presenceSufficientCaps = map[string]string{
 	"CAP_KSM_DEPLOYED":  "kube-state-metrics",
 	"CAP_NODE_EXPORTER": "node-exporter",
+	// A deployed node-exporter IS a privileged node-level DaemonSet: it reads
+	// /proc/net/nf_conntrack, /proc/vmstat (oom_kill), /proc/net/arp, etc. Its
+	// presence satisfies CAP_PRIVILEGED_DS (the conntrack/system-OOM/ARP signals'
+	// capability), same presence-sufficient model as CAP_NODE_EXPORTER above.
+	// Without this it defaults to Indeterminate ("needs node probe"), leaving
+	// fully-wired, telemetry-present phenomena (CONNTRACK_EXHAUSTION,
+	// OOM_KILL_SYSTEM) stuck at "none" coverage.
+	"CAP_PRIVILEGED_DS": "node-exporter",
 	"CAP_CILIUM":        "cilium",
 	"CAP_HUBBLE":        "hubble",
 	"CAP_CALICO":        "calico",
@@ -358,6 +386,28 @@ func GateSignals(g *graph.Graph, facts PlatformFacts) *AvailabilityReport {
 			default:
 				av.State = OutOfScopeUnobtainable
 				av.Reasons = append(av.Reasons, "no emitting tool deployed: "+strings.Join(absent, "|"))
+			}
+
+			// Unscraped-endpoint override (MODALITY-AWARE): a Metric/Log signal whose EVERY
+			// emitting tool is an unscraped-endpoint tool (the kubelet's own /metrics, which
+			// obsd does not scrape — it ingests cAdvisor VIA the kubelet, not the kubelet's
+			// /metrics) is out-of-scope despite the component being present. This NEVER touches
+			// Event/State signals tagged with the same component — those arrive via the events
+			// lane / KSM and stay obtainable (the over-reach the review caught).
+			if av.State == Obtainable && scrapedMetricModalities[s.Modality] {
+				allUnscraped, reason := true, ""
+				for _, tool := range s.Tools {
+					if r := unscrapedEndpointTools[tool]; r != "" {
+						reason = r
+					} else {
+						allUnscraped = false
+						break
+					}
+				}
+				if allUnscraped {
+					av.State = OutOfScopeUnobtainable
+					av.Reasons = append(av.Reasons, reason)
+				}
 			}
 		}
 

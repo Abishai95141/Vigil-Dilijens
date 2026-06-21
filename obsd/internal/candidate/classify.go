@@ -40,13 +40,30 @@ var metadataObjectKinds = map[string]bool{
 	"certificatesigningrequest": true, "volumeattachment": true,
 }
 
+// metadataMetricSuffixes are kube-state-metrics sub-metric suffixes that are PURE object
+// inventory regardless of the object KIND: a label/annotation carrier (always gauge=1, the
+// data is in the labels) or a static creation timestamp. They never describe a runtime signal,
+// so even on an otherwise-operational kind (pod, node, persistentvolume) the *_info / *_created
+// / *_labels / *_annotations series are inventory, not something an operator binds for detection.
+// This is the AUTHORED, universal complement to the kind-level metadataObjectKinds list above —
+// it suppresses e.g. kube_persistentvolume_info and kube_pod_created without special-casing any
+// cluster's objects. Maintained list; not a model output; no threshold, no learning.
+var metadataMetricSuffixes = []string{"_info", "_created", "_labels", "_annotations"}
+
 // ClassifyStrayMetric labels a quarantined stray metric name by operational actionability.
-// kube_<kind>_… whose <kind> is a pure-inventory API object → object-metadata (suppress from
-// the review queue). Everything else → operational (worth a human decision). Pure function of
-// the metric name; deterministic; no threshold, no learning.
+// A kube_<kind>_… stray is object-metadata (suppressed from the review queue) when EITHER the
+// <kind> is a pure-inventory API object (metadataObjectKinds) OR the sub-metric is a universal
+// inventory carrier (metadataMetricSuffixes — *_info/_created/_labels/_annotations). Everything
+// else → operational (worth a human decision). Pure function of the metric name; deterministic;
+// no threshold, no learning.
 func ClassifyStrayMetric(metric string) string {
 	const ksm = "kube_"
 	if strings.HasPrefix(metric, ksm) {
+		for _, suf := range metadataMetricSuffixes {
+			if strings.HasSuffix(metric, suf) {
+				return StrayObjectMetadata
+			}
+		}
 		rest := metric[len(ksm):]
 		kind := rest
 		if i := strings.IndexByte(rest, '_'); i >= 0 {

@@ -49,18 +49,19 @@ func SnapshotConfig(ctx context.Context, cs kubernetes.Interface) (*ConfigSnapsh
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		pc := binding.PodConfig{}
+		// Init AND regular containers are first-class Container entities (doc 03): an
+		// init container can crash-loop, OOM, or throttle exactly like a regular one,
+		// and KSM emits kube_pod_init_container_status_* for it. Enumerate BOTH in spec
+		// order (init first — they run first) so container-scoped rules instantiate on
+		// init containers too (THR_INIT_CONTAINER_RESTARTS_RATE was the dark one). A rule
+		// only ever fires where its metric stream actually exists for that CEI, so the
+		// broadened fan-out adds bindings, never false positives; container names are
+		// unique across both sets (an API-server invariant), so no de-dup is needed.
+		for _, c := range p.Spec.InitContainers {
+			pc.Containers = append(pc.Containers, containerLimits(c))
+		}
 		for _, c := range p.Spec.Containers {
-			cc := binding.ContainerConfig{Name: c.Name}
-			if q, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
-				cc.MemLimitBytes = q.Value()
-			}
-			if q, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
-				cc.CPULimitMilli = q.MilliValue()
-			}
-			if q, ok := c.Resources.Limits[corev1.ResourceEphemeralStorage]; ok {
-				cc.EphemeralStorageLimitBytes = q.Value()
-			}
-			pc.Containers = append(pc.Containers, cc)
+			pc.Containers = append(pc.Containers, containerLimits(c))
 		}
 		// Customer-declared application SLO bars (doc 15 cap. A) from vigil.io/slo.*
 		// annotations. The value is read verbatim; an unparseable value is SKIPPED so
@@ -108,6 +109,24 @@ func SnapshotConfig(ctx context.Context, cs kubernetes.Interface) (*ConfigSnapsh
 		snap.pvcs[c.Namespace+"/"+c.Name] = pc
 	}
 	return snap, nil
+}
+
+// containerLimits extracts one container's declared resource limits into a
+// ContainerConfig. A 0 field means UNDECLARED (the resolvability hole) — never a
+// silent default. Shared by the init- and regular-container passes so both kinds
+// of container resolve their bars identically.
+func containerLimits(c corev1.Container) binding.ContainerConfig {
+	cc := binding.ContainerConfig{Name: c.Name}
+	if q, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+		cc.MemLimitBytes = q.Value()
+	}
+	if q, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+		cc.CPULimitMilli = q.MilliValue()
+	}
+	if q, ok := c.Resources.Limits[corev1.ResourceEphemeralStorage]; ok {
+		cc.EphemeralStorageLimitBytes = q.Value()
+	}
+	return cc
 }
 
 func (s *ConfigSnapshot) Pod(namespace, name string) (binding.PodConfig, bool) {

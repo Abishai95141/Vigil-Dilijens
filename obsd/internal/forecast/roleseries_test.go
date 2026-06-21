@@ -107,3 +107,55 @@ func TestRoleSeriesReaderAdapter(t *testing.T) {
 		t.Errorf("unknown role must not invent a stream, got %v", ids)
 	}
 }
+
+// TestRoleSeriesReaderContainerStream is the regression for the doc 20 P5 short-context
+// bug: a CONTAINER target rolls up to a StreamUID of "roleKey\x1fcontainer", so the
+// synthetic role stream id has THREE \x1f parts (roleKey, container, metric). parseRoleStream
+// must split on the LAST separator and hand the full "roleKey\x1fcontainer" uid back to
+// Members; splitting on the first one drops the container, no member stream resolves, and
+// the aggregation is empty (the spurious short-context that silenced every container metric).
+func TestRoleSeriesReaderContainerStream(t *testing.T) {
+	base := &fakeReader{
+		streams: map[string][]string{
+			"podA/ctr\x1fmem": {"sA"},
+			"podB/ctr\x1fmem": {"sB"},
+		},
+		samples: map[string][]qss.Sample{
+			"sA": {sm(0, 10), sm(1, 20), sm(2, 30)},
+			"sB": {sm(3, 40), sm(4, 50), sm(5, 60)},
+		},
+		types: map[string]string{"sA": "gauge", "sB": "gauge"},
+	}
+	r := &RoleSeriesReader{
+		Base: base,
+		// Container-aware resolver (mirrors main.buildRoleMembers): a uid with a
+		// container component yields podUID/container members.
+		Members: func(roleUID string) []string {
+			switch roleUID {
+			case "R\x1fctr":
+				return []string{"podA/ctr", "podB/ctr"}
+			case "R":
+				return []string{"podA", "podB"}
+			}
+			return nil
+		},
+		Bin:    15 * time.Second,
+		Window: 10 * time.Minute,
+		Now:    func() time.Time { return roleBase.Add(6 * 15 * time.Second) },
+	}
+
+	ids := r.StreamsFor("R\x1fctr", "mem")
+	if len(ids) != 1 || ids[0][:len(RoleStreamPrefix)] != RoleStreamPrefix {
+		t.Fatalf("container-role StreamsFor wrong: %v", ids)
+	}
+	// The fix: LastN must reconstruct podUID/container members and aggregate them — not
+	// return empty (the bug → short-context). want = the continuous churn-stable series.
+	got := r.LastN(ids[0], 1024)
+	want := []qss.Sample{sm(0, 10), sm(1, 20), sm(2, 30), sm(3, 40), sm(4, 50), sm(5, 60)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("container-role LastN aggregation wrong (regression):\n got %+v\nwant %+v", got, want)
+	}
+	if tp, ok := r.StreamType(ids[0]); !ok || tp != "gauge" {
+		t.Errorf("container-role StreamType = %q,%v, want gauge,true", tp, ok)
+	}
+}

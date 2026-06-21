@@ -84,6 +84,54 @@ func TestPutDeterministicIDAndIdempotentUpsert(t *testing.T) {
 	}
 }
 
+// The agent rewords its free-text rationale on every exploration cycle (LLM output is
+// non-deterministic). Re-proposing the SAME edge with a reworded rationale must dedup to
+// ONE row — the rationale is "shown for context but discarded at promotion" and is NOT
+// part of proposal identity. Regression for the queue-flooding bug (47/92 pending were
+// rationale-rewording duplicates of the same stray->entity edges).
+func TestContentIDIgnoresModelRationale(t *testing.T) {
+	s := newStore(t)
+	mk := func(rationale string) Candidate {
+		return Candidate{
+			Kind:     KindEdge,
+			Subject:  "stray:kube_persistentvolume_status_phase/abc ~> entity:i|pvc|erpnext|uid",
+			Relation: "associated-with",
+			Payload:  map[string]any{"proposed": true, "strayMetric": "kube_persistentvolume_status_phase", "rationale": rationale},
+			Evidence: []EvidenceRef{{Kind: "context:stray-metric", Ref: "stray:kube_persistentvolume_status_phase/abc", Detail: "labels{persistentvolume=pvc-uid}"}},
+			Lineage:  Lineage{Source: "dgx-agent", Method: "llm:custom", GraphVersion: "v0.10.0"},
+		}
+	}
+	id1, err := s.Put(t0, mk("label persistentvolume=pvc-uid matches the PVC entity with the same UID"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same edge, different LLM wording on the next cycle.
+	id2, err := s.Put(t0.Add(30*time.Minute), mk("stray metric labels reference persistentvolume=pvc-uid which matches the PVC entity UID suffix"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id1 != id2 {
+		t.Fatalf("reworded rationale produced a NEW id (dedup defeated): %s vs %s", id1, id2)
+	}
+	all, err := s.List(Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("rationale rewording created %d rows, want 1 (the duplication bug)", len(all))
+	}
+	// But a change to a STRUCTURAL payload key (real identity) must still produce a new id.
+	c3 := mk("any rationale")
+	c3.Payload["strayMetric"] = "kube_persistentvolume_capacity_bytes"
+	id3, err := s.Put(t0.Add(time.Hour), c3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id3 == id1 {
+		t.Fatal("a structural payload change collapsed into the same id — over-stripped identity")
+	}
+}
+
 func TestSetStatusPreservedAcrossReput(t *testing.T) {
 	s := newStore(t)
 	id, err := s.Put(t0, Candidate{Kind: KindNode, Subject: "cei:y"})

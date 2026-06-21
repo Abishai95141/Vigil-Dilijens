@@ -77,6 +77,7 @@ func Resolve(stray StrayObservation, inventory []EntityRef) []Candidate {
 	type match struct {
 		e    EntityRef
 		dims []agreedDim
+		n    int // identification strength = DISTINCT shared values (see matchStrength)
 	}
 	var matches []match
 	maxN := 0
@@ -85,10 +86,11 @@ func Resolve(stray StrayObservation, inventory []EntityRef) []Candidate {
 		if len(dims) == 0 {
 			continue
 		}
-		if len(dims) > maxN {
-			maxN = len(dims)
+		n := matchStrength(dims)
+		if n > maxN {
+			maxN = n
 		}
-		matches = append(matches, match{e, dims})
+		matches = append(matches, match{e, dims, n})
 	}
 
 	nodeReason := "unmapped metric (" + stray.Reason + ")"
@@ -113,7 +115,7 @@ func Resolve(stray StrayObservation, inventory []EntityRef) []Candidate {
 	}
 	var winners []match
 	for _, m := range matches {
-		if len(m.dims) == maxN {
+		if m.n == maxN {
 			winners = append(winners, m)
 		}
 	}
@@ -129,13 +131,28 @@ func Resolve(stray StrayObservation, inventory []EntityRef) []Candidate {
 			Subject:  subj + " ~> " + m.e.Key,
 			Payload: map[string]any{
 				"strayMetric": stray.Metric, "entityKey": m.e.Key,
-				"entityKind": m.e.Kind, "sharedCoordinates": len(m.dims),
+				"entityKind": m.e.Kind, "sharedCoordinates": m.n,
 			},
 			Evidence: ev,
 			Lineage:  lineage,
 		})
 	}
 	return out
+}
+
+// matchStrength is the identification strength of an entity match: the number of DISTINCT
+// shared VALUES among the agreed coordinates. Two entity dimensions that agree on the SAME
+// value are ONE identifying fact, not two — e.g. a PVC whose name == its namespace (both
+// "erpnext") coincides with a single stray label value "erpnext" and would otherwise score
+// 2 coordinates (namespace + name) off one coincidence, spuriously clearing the ≥2-coordinate
+// identification floor and minting a false association. Distinct VALUES, not dimension count,
+// is what legitimizes an entity link. Deterministic; still a pure count, no learning.
+func matchStrength(dims []agreedDim) int {
+	seen := make(map[string]struct{}, len(dims))
+	for _, d := range dims {
+		seen[d.val] = struct{}{}
+	}
+	return len(seen)
 }
 
 // agreedCoordinates returns the entity coordinate dimensions whose value is carried by

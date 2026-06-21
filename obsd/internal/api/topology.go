@@ -197,12 +197,22 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 			phens = append(phens, p)
 		}
 		sort.Strings(phens)
-		layer := "workload"
-		if m.kind == "Node" {
+		// Layer + kind are keyed off the entity kind so the surface (and the graph
+		// styler) place each node in the right view. PVC entities are storage, not
+		// workload; the identity layer mints them with the raw k8s kind
+		// ("PersistentVolumeClaim"), but the binding entity-scope, the detect
+		// fingerprints, the ontology and the graph styler all use the short scope
+		// name ("PVC") — normalize here so a PVC renders once, in the storage layer,
+		// with the storage shape. Generic: applies to every cluster's PVCs.
+		kind, layer := m.kind, "workload"
+		switch m.kind {
+		case "Node":
 			layer = "node"
+		case "PVC", "PersistentVolumeClaim":
+			kind, layer = "PVC", "storage"
 		}
 		node := TopoNode{
-			CEIKey: k, Kind: m.kind, Namespace: m.ns, Name: m.name, Layer: layer, Replicas: m.replicas,
+			CEIKey: k, Kind: kind, Namespace: m.ns, Name: m.name, Layer: layer, Replicas: m.replicas,
 			Selected: sel[k], Matched: len(phens) > 0, Degraded: degraded[k],
 			Loud: loud[k], Warned: warn[k], Phenomena: phens,
 		}
@@ -284,18 +294,28 @@ func BuildTopology(clusterID, graphVersion string, now time.Time,
 		}
 		status := edgeStatus(e, budgets, now)
 		if svc != "" {
-			if _, ok := extra[svc]; !ok {
-				ns, _, name := parseInstanceCEI(svc)
-				extra[svc] = TopoNode{CEIKey: svc, Kind: "Service", Namespace: ns, Name: name, Layer: "service", Phenomena: []string{}}
+			// Only mint the secondary node when it is not already a primary node.
+			// A PVC is a tracked instance, so it can ALSO appear in the workload cap;
+			// minting it again here would emit two nodes with the same CEIKey (a
+			// duplicate id that collides in the graph renderer). The edge below still
+			// connects to the primary node — it references the same CEIKey. (Services
+			// are never primary, so this guard is a no-op for them.)
+			if !included[svc] {
+				if _, ok := extra[svc]; !ok {
+					ns, _, name := parseInstanceCEI(svc)
+					extra[svc] = TopoNode{CEIKey: svc, Kind: "Service", Namespace: ns, Name: name, Layer: "service", Phenomena: []string{}}
+				}
 			}
 			if id := svc + "\x00" + wl + "\x00selects"; !seen[id] {
 				seen[id] = true
 				v.Edges = append(v.Edges, TopoEdge{Type: "selects", From: svc, To: wl, Status: status})
 			}
 		} else {
-			if _, ok := extra[pvc]; !ok {
-				ns, _, name := parseInstanceCEI(pvc)
-				extra[pvc] = TopoNode{CEIKey: pvc, Kind: "PVC", Namespace: ns, Name: name, Layer: "storage", Phenomena: []string{}}
+			if !included[pvc] {
+				if _, ok := extra[pvc]; !ok {
+					ns, _, name := parseInstanceCEI(pvc)
+					extra[pvc] = TopoNode{CEIKey: pvc, Kind: "PVC", Namespace: ns, Name: name, Layer: "storage", Phenomena: []string{}}
+				}
 			}
 			if id := wl + "\x00" + pvc + "\x00mounts"; !seen[id] {
 				seen[id] = true

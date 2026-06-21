@@ -222,10 +222,61 @@ type overlayFile struct {
 	// — a phenomenon-id → severity map, applied exactly like Spans (the base KG stays immutable;
 	// the authored delta lives here). Setting a previously-absent attribute is additive, never a
 	// member redefine.
-	Severities map[string]string        `yaml:"phenomenon_severity"`
-	Rules      []ThresholdRule          `yaml:"rules"`
-	Checks     map[string][]MemberCheck `yaml:"checks"`
-	Anchors    map[string]string        `yaml:"anchors"`
+	Severities map[string]string `yaml:"phenomenon_severity"`
+	// DetectionStatuses authors the membership-structuring escape hatch (the honest
+	// acknowledgment of where a phenomenon's detection lives / why it is off the metric
+	// matcher) on EXISTING phenomena — a phenomenon-id → {lane, rationale} map, applied
+	// exactly like Severities. Informational-only; the base KG stays immutable.
+	DetectionStatuses map[string]overlayDetectionStatus `yaml:"detection_status"`
+	// Overrides is the GOVERNED-CORRECTION channel (doc 12): an authored, provenance-bearing
+	// correction of a base-KG content DEFECT that cannot be expressed as an addition — a
+	// non-causal phenomenon_relation that must be downgraded, or a false-equivalence pattern
+	// that must be removed. Distinct from the "overlays add, never redefine" rule: an override
+	// is EXPLICIT, names an EXISTING target (validated to exist), and carries a REQUIRED
+	// falsifiable rationale — governance correcting an authoring bug, not a silent redefine.
+	// The base KG stays immutable; the correction is a versioned overlay delta.
+	Overrides overlayOverrides         `yaml:"overrides"`
+	Rules     []ThresholdRule          `yaml:"rules"`
+	Checks    map[string][]MemberCheck `yaml:"checks"`
+	Anchors   map[string]string        `yaml:"anchors"`
+}
+
+// overlayOverrides carries authored corrections of base content (doc 12 governance).
+type overlayOverrides struct {
+	PhenomenonRelations []overlayRelationOverride     `yaml:"phenomenon_relations"`
+	EquivalencePatterns []overlayEquivPatternOverride `yaml:"equivalence_patterns"`
+}
+
+// overlayRelationOverride re-roles an EXISTING phenomenon_relation edge (src->dst). The
+// canonical use is downgrading a non-causal 'trigger' to 'corroborating' so the cascade
+// engine stops asserting a false direction while the association is retained. The edge must
+// exist; set_role must be a known relation role; rationale is required.
+type overlayRelationOverride struct {
+	Src       string `yaml:"src"`
+	Dst       string `yaml:"dst"`
+	SetRole   string `yaml:"set_role"`
+	Rationale string `yaml:"rationale"`
+}
+
+// overlayEquivPatternOverride removes one or more dialect patterns from an EXISTING
+// equivalence group — the fix for a FALSE equivalence (a pattern that mis-binds an
+// out-of-scope metric as the group's canonical observable). Each removed pattern must
+// currently be present; rationale is required.
+type overlayEquivPatternOverride struct {
+	ID        string   `yaml:"id"`
+	Remove    []string `yaml:"remove"`
+	Rationale string   `yaml:"rationale"`
+}
+
+// knownRelationRoles is the closed phenomenon_relation role vocabulary.
+var knownRelationRoles = map[string]bool{"trigger": true, "downstream": true, "corroborating": true}
+
+// overlayDetectionStatus is the authored escape-hatch declaration for one phenomenon
+// (mirrors graph.DetectionStatus): the lane its detection lives on (closed vocabulary)
+// plus a falsifiable rationale, surfaced verbatim with provenance.
+type overlayDetectionStatus struct {
+	Lane      string `yaml:"lane"`
+	Rationale string `yaml:"rationale"`
 }
 
 // overlayEquivGroup is an authored equivalence-group delta (doc 21 §5.3): the
@@ -249,16 +300,29 @@ type overlayEquivGroup struct {
 
 // overlaySignal is an authored Signal node added by an overlay (doc 15 cap. A): a new
 // observable variable not in the base KG — e.g. an application's own /metrics gauge,
-// which exists only because the customer's app exposes it. id + name + data_type are the
-// minimum the runtime needs (data_type drives the gauge/counter shape derivation). The
-// base KG stays an immutable vendored mirror; new signals live in versioned overlays.
+// which exists only because the customer's app exposes it, or an infra series the base
+// catalogue simply did not enumerate (a KSM init-container counter). id + name +
+// data_type are the minimum the runtime needs (data_type drives the gauge/counter shape
+// derivation). The base KG stays an immutable vendored mirror; new signals live in
+// versioned overlays.
+//
+// tools/capabilities make the obtainability gating HONEST (doc 04 §3.1.1): an infra
+// signal emitted by a separate exporter (kube-state-metrics) must be tool-gated, so a
+// cluster without that exporter reports the bar out-of-scope rather than silently
+// "watched-but-never-firing". Omit them only for a genuinely-ungated signal (an app's
+// own /metrics, obtainable iff the workload itself is). source/collection_method are the
+// emission glue copied onto every binding (doc 04 §3.1 mechanism 3).
 type overlaySignal struct {
-	ID       string `yaml:"id"`
-	Name     string `yaml:"name"`
-	DataType string `yaml:"data_type"` // "gauge" | "counter" | ... (shape derived)
-	Entity   string `yaml:"entity"`    // the entity kind the signal attaches to (Pod, Container, ...)
-	Modality string `yaml:"modality"`  // "Metric" (the only numeric series) — defaulted if empty
-	Notes    string `yaml:"notes"`
+	ID               string   `yaml:"id"`
+	Name             string   `yaml:"name"`
+	DataType         string   `yaml:"data_type"` // "gauge" | "counter" | ... (shape derived)
+	Entity           string   `yaml:"entity"`    // the entity kind the signal attaches to (Pod, Container, ...)
+	Modality         string   `yaml:"modality"`  // "Metric" (the only numeric series) — defaulted if empty
+	Tools            []string `yaml:"tools"`     // emitting tool(s); gates obtainability (empty = not tool-gated)
+	Capabilities     []string `yaml:"capabilities"`
+	Source           string   `yaml:"source"`            // emission glue (mechanism 3), e.g. "kube-state-metrics"
+	CollectionMethod string   `yaml:"collection_method"` // e.g. "Prometheus scrape on KSM /metrics"
+	Notes            string   `yaml:"notes"`
 }
 
 // overlayMember is one STRUCTURED member of an overlay phenomenon (doc 15 cap. A):
@@ -476,7 +540,11 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 		if modality == "" {
 			modality = "Metric"
 		}
-		g.Signals[os.ID] = &Signal{ID: os.ID, Name: os.Name, DataType: os.DataType, Modality: modality, Entity: os.Entity, Notes: os.Notes}
+		g.Signals[os.ID] = &Signal{
+			ID: os.ID, Name: os.Name, DataType: os.DataType, Modality: modality, Entity: os.Entity,
+			Tools: os.Tools, Capabilities: os.Capabilities,
+			Source: os.Source, CollectionMethod: os.CollectionMethod, Notes: os.Notes,
+		}
 	}
 
 	// Equivalence-group deltas (doc 21 §5.3): the deterministic ABSORB path for a promoted
@@ -684,6 +752,98 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 			return fmt.Errorf("phenomenon %s: severity conflict (%q already declared, overlay says %q)", id, p.Severity, sev)
 		}
 		p.Severity = sev
+	}
+
+	// Detection-status escape hatch (the membership-structuring acknowledgment): a
+	// phenomenon-id → {lane, rationale} declaration on an EXISTING phenomenon. The
+	// phenomenon must exist; the lane must be a declared value; the rationale is a
+	// REQUIRED falsifiable claim (an empty rationale is a rubber stamp, rejected); a
+	// conflicting re-declaration is loud. Deterministic (sorted ids). Informational-only —
+	// it changes no detection logic and never enters the replay digest (Severity is the precedent).
+	dsIDs := make([]string, 0, len(f.DetectionStatuses))
+	for id := range f.DetectionStatuses {
+		dsIDs = append(dsIDs, id)
+	}
+	sort.Strings(dsIDs)
+	for _, id := range dsIDs {
+		ds := f.DetectionStatuses[id]
+		p, ok := g.Phenomena[id]
+		if !ok {
+			return fmt.Errorf("detection_status for unknown phenomenon %q", id)
+		}
+		if !IsValidDetectionLane(ds.Lane) {
+			return fmt.Errorf("phenomenon %s: detection_status lane %q is not one of events-only|log-only|needs-scrape-lane|needs-entity-binding|wireable-backlog", id, ds.Lane)
+		}
+		if strings.TrimSpace(ds.Rationale) == "" {
+			return fmt.Errorf("phenomenon %s: detection_status needs a rationale (a falsifiable authored claim, never a rubber stamp)", id)
+		}
+		if p.DetectionStatus != nil && (p.DetectionStatus.Lane != ds.Lane || p.DetectionStatus.Rationale != ds.Rationale) {
+			return fmt.Errorf("phenomenon %s: detection_status conflict (%q already declared, overlay says %q)", id, p.DetectionStatus.Lane, ds.Lane)
+		}
+		p.DetectionStatus = &DetectionStatus{Lane: ds.Lane, Rationale: ds.Rationale}
+	}
+
+	// Governed corrections (doc 12): authored overrides of base-KG content defects. Applied
+	// in file order (deterministic). Each names an EXISTING target and carries a REQUIRED
+	// rationale — a missing target or empty rationale is a loud authoring error.
+	for i, ro := range f.Overrides.PhenomenonRelations {
+		if strings.TrimSpace(ro.Rationale) == "" {
+			return fmt.Errorf("override phenomenon_relation %d (%s->%s): a rationale is required (a falsifiable governed correction, never silent)", i, ro.Src, ro.Dst)
+		}
+		if !knownRelationRoles[ro.SetRole] {
+			return fmt.Errorf("override phenomenon_relation %s->%s: set_role %q is not one of trigger|downstream|corroborating", ro.Src, ro.Dst, ro.SetRole)
+		}
+		p, ok := g.Phenomena[ro.Src]
+		if !ok {
+			return fmt.Errorf("override phenomenon_relation: unknown source phenomenon %q", ro.Src)
+		}
+		if _, ok := g.Phenomena[ro.Dst]; !ok {
+			return fmt.Errorf("override phenomenon_relation: unknown destination phenomenon %q", ro.Dst)
+		}
+		found := false
+		for j := range p.Relations {
+			if p.Relations[j].TargetID == ro.Dst {
+				p.Relations[j].Role = ro.SetRole
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("override phenomenon_relation %s->%s: no such relation exists to override (overrides correct EXISTING content)", ro.Src, ro.Dst)
+		}
+		// Keep the underlying edge consistent with the corrected relation.
+		for j := range g.Edges {
+			if g.Edges[j].Type == "phenomenon_relation" && g.Edges[j].Src == ro.Src && g.Edges[j].Dst == ro.Dst {
+				g.Edges[j].Role = ro.SetRole
+			}
+		}
+	}
+	for i, eo := range f.Overrides.EquivalencePatterns {
+		if strings.TrimSpace(eo.Rationale) == "" {
+			return fmt.Errorf("override equivalence_patterns %d (%s): a rationale is required", i, eo.ID)
+		}
+		eg, ok := g.EquivalenceGroups[eo.ID]
+		if !ok {
+			return fmt.Errorf("override equivalence_patterns: unknown equivalence group %q", eo.ID)
+		}
+		for _, pat := range eo.Remove {
+			idx := -1
+			for k, have := range eg.Patterns {
+				if have == pat {
+					idx = k
+					break
+				}
+			}
+			if idx < 0 {
+				return fmt.Errorf("override equivalence_patterns %s: pattern %q is not present to remove (overrides correct EXISTING content)", eo.ID, pat)
+			}
+			eg.Patterns = append(eg.Patterns[:idx], eg.Patterns[idx+1:]...)
+		}
+		// An equivalence group with zero patterns matches nothing — its whole dialect bridge
+		// goes silently dark. A correction must never empty a group; that is a delete, which
+		// is not a supported (or honest) override.
+		if len(eg.Patterns) == 0 {
+			return fmt.Errorf("override equivalence_patterns %s: would remove the LAST pattern, emptying the group (a dialect bridge must keep >=1 pattern)", eo.ID)
+		}
 	}
 
 	// Threshold rules: validate coherence and attach.

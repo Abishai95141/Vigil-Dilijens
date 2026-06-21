@@ -505,10 +505,43 @@ func sortedEvidence(e []EvidenceRef) []EvidenceRef {
 	return out
 }
 
+// nonIdentityPayloadKeys are payload fields that are NOT part of a proposal's
+// identity: model-generated free text that is "shown for context but DISCARDED at
+// promotion" (doc 12 §3.3). The agent rewords its rationale on every exploration
+// cycle (LLM output is non-deterministic), so including it in the content id would
+// mint a NEW candidate each cycle for the SAME proposed edge/group/hypothesis —
+// defeating dedup and flooding the human-review queue. The Suggestion field is kept
+// out of the id for exactly this reason; rationale lives in Payload, so we strip it
+// here at the one chokepoint every producer flows through.
+var nonIdentityPayloadKeys = map[string]struct{}{
+	"rationale": {}, // the model's free-text explanation for the proposal
+}
+
+// identityPayload returns a copy of p with the non-identity (model-prose) keys
+// removed, so two re-proposals of the same fact that differ only in reworded prose
+// hash to the same content id. Deterministic, structural payload keys are preserved.
+func identityPayload(p map[string]any) map[string]any {
+	if p == nil {
+		return nil
+	}
+	out := make(map[string]any, len(p))
+	for k, v := range p {
+		if _, prose := nonIdentityPayloadKeys[k]; prose {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // contentID derives a deterministic, dedup-stable id from the content that DEFINES a
-// proposal (kind, subject, relation, payload, sorted evidence). Identity, lineage,
-// status, reason, and timestamps are deliberately excluded so the same proposal
-// always maps to the same row.
+// proposal (kind, subject, relation, structural payload, sorted evidence). Identity,
+// lineage, status, reason, timestamps, the Suggestion annotation, and model-generated
+// payload prose (see nonIdentityPayloadKeys) are deliberately excluded so the same
+// proposal always maps to the same row.
 func contentID(c Candidate) string {
 	key := struct {
 		Kind     Kind           `json:"kind"`
@@ -516,7 +549,7 @@ func contentID(c Candidate) string {
 		Relation string         `json:"relation"`
 		Payload  map[string]any `json:"payload"`
 		Evidence []EvidenceRef  `json:"evidence"`
-	}{c.Kind, c.Subject, c.Relation, c.Payload, c.Evidence}
+	}{c.Kind, c.Subject, c.Relation, identityPayload(c.Payload), c.Evidence}
 	raw, _ := json.Marshal(key) // map keys are emitted sorted ⇒ canonical
 	sum := sha256.Sum256(raw)
 	return "cand:" + hex.EncodeToString(sum[:])

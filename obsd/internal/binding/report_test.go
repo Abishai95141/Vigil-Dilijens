@@ -49,6 +49,21 @@ func TestPhenomenonObservabilityKind(t *testing.T) {
 		t.Errorf("OOM should be at least partial on kind (cAdvisor members obtainable): %+v", oom)
 	}
 
+	// PHEN_EVICTION_MEMORY: its required members include the Event-modality "pod
+	// eviction" and "node lifecycle" signals tagged tools=[kubelet], where "kubelet"
+	// names the ORIGINATING component, not a scrape endpoint. obsd ingests those via the
+	// k8s Events lane (cmd/obsd/eventcollect.go), so the kubelet-/metrics-unscraped
+	// verdict is modality-gated and must NOT touch them. Regression guard: when that
+	// guard was absent, every required member went out-of-scope and this phenomenon
+	// collapsed to "none". It must stay at least partial (pod-eviction obtainable).
+	ev, ok := byID["PHEN_EVICTION_MEMORY"]
+	if !ok {
+		t.Fatal("PHEN_EVICTION_MEMORY missing from the observability report")
+	}
+	if ev.Observability == "none" || ev.RequiredObtainable == 0 {
+		t.Errorf("PHEN_EVICTION_MEMORY regressed to none — its Event-lane members must stay obtainable: %+v", ev)
+	}
+
 	// Determinism.
 	rep2 := PhenomenonObservability(g, GateSignals(g, kindFacts()))
 	if !reflect.DeepEqual(rep, rep2) {

@@ -161,6 +161,22 @@
     border-radius: var(--radius-md);
   }
 
+  /* — restrained entrance for popovers / the detail drawer (premium, not flashy) — */
+  .v-enter {
+    animation: v-enter 180ms var(--ease-out) both;
+  }
+  @keyframes v-enter {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.99);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .v-enter {
+      animation: none;
+    }
+  }
+
   /* — the eyebrow / section number, mono, low ink — */
   .v-eyebrow {
     font-family: var(--font-mono);

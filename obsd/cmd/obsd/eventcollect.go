@@ -42,17 +42,25 @@ func runEventCollector(ctx context.Context, logger *slog.Logger, gate *sync.RWMu
 	conds []events.Corroboration, snap *atomic.Pointer[eventsSnapshot], interval time.Duration) {
 
 	reasons := reasonKindSet(conds)
+	// A pod's lastState.terminated persists indefinitely (until the pod is recreated),
+	// so a long-recovered OOM would otherwise surface as a "current" degraded finding
+	// for hours/days — violating the charter's "report what is happening NOW". Only
+	// surface a terminated-state finding while the termination is recent. The Events
+	// stream self-limits (k8s GCs Events after ~1h) and the Waiting/CrashLoopBackOff
+	// path reads the CURRENT state, so both are unaffected; this bounds the historical
+	// terminated path. Operator-tunable; default keeps a recent OOM/crash visible.
+	recency := envDuration("EVENT_TERMINATION_RECENCY", 15*time.Minute)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	logger.Info("event collector started (v3 T-C)", "interval", interval.String(),
-		"reasons", events.Reasons(conds))
-	collectEventsOnce(ctx, logger, gate, client, store, clusterID, reasons, snap) // render once immediately
+		"reasons", events.Reasons(conds), "termination_recency", recency.String())
+	collectEventsOnce(ctx, logger, gate, client, store, clusterID, reasons, snap, recency) // render once immediately
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			collectEventsOnce(ctx, logger, gate, client, store, clusterID, reasons, snap)
+			collectEventsOnce(ctx, logger, gate, client, store, clusterID, reasons, snap, recency)
 		}
 	}
 }
@@ -69,7 +77,9 @@ func reasonKindSet(conds []events.Corroboration) map[string]bool {
 
 func collectEventsOnce(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 	client kubernetes.Interface, store *identity.Store, clusterID string,
-	reasons map[string]bool, snap *atomic.Pointer[eventsSnapshot]) {
+	reasons map[string]bool, snap *atomic.Pointer[eventsSnapshot], recency time.Duration) {
+
+	now := time.Now().UTC()
 
 	// Two discrete-fact sources, both read from the API server (network, no lock):
 	//   1. The Events stream (CoreV1().Events) — kubelet/control-plane Event objects.
@@ -130,13 +140,22 @@ func collectEventsOnce(ctx context.Context, logger *slog.Logger, gate *sync.RWMu
 			p := &pl.Items[i]
 			for j := range p.Status.ContainerStatuses {
 				cs := &p.Status.ContainerStatuses[j]
+				// Recency gate on the HISTORICAL terminated path: lastState.terminated
+				// persists for the life of the pod, so a termination older than the window
+				// is not "happening now" (the container has been running since) and must not
+				// surface as a live finding. A zero/unset FinishedAt is treated as not-recent.
+				// The Waiting/CrashLoopBackOff check below reads the CURRENT state and is kept
+				// independent (no early continue), so a recovered OOM and a live crash-loop on
+				// the same container are judged separately.
 				if t := cs.LastTerminationState.Terminated; t != nil && reasons[t.Reason+"\x00Pod"] {
-					entity, role, unresolved := resolve(p.Namespace, p.Name, "Pod", string(p.UID))
-					put(events.EventFinding{
-						Reason: t.Reason, EntityCEI: entity, RoleCEI: role, RoleUnresolved: unresolved,
-						Namespace: p.Namespace, Name: p.Name, Kind: "Pod", Count: max1(cs.RestartCount),
-						FirstTimestamp: t.StartedAt.Time.UTC(), LastTimestamp: t.FinishedAt.Time.UTC(),
-					})
+					if fin := t.FinishedAt.Time.UTC(); !fin.IsZero() && now.Sub(fin) <= recency {
+						entity, role, unresolved := resolve(p.Namespace, p.Name, "Pod", string(p.UID))
+						put(events.EventFinding{
+							Reason: t.Reason, EntityCEI: entity, RoleCEI: role, RoleUnresolved: unresolved,
+							Namespace: p.Namespace, Name: p.Name, Kind: "Pod", Count: max1(cs.RestartCount),
+							FirstTimestamp: t.StartedAt.Time.UTC(), LastTimestamp: fin,
+						})
+					}
 				}
 				if w := cs.State.Waiting; w != nil && reasons[w.Reason+"\x00Pod"] {
 					entity, role, unresolved := resolve(p.Namespace, p.Name, "Pod", string(p.UID))
@@ -178,7 +197,7 @@ func collectEventsOnce(ctx context.Context, logger *slog.Logger, gate *sync.RWMu
 		return a.EntityCEI < b.EntityCEI
 	})
 	snap.Store(&eventsSnapshot{
-		findings: findings, collectedAt: time.Now().UTC(), resolved: resolved, unresolved: unresolved,
+		findings: findings, collectedAt: now, resolved: resolved, unresolved: unresolved,
 	})
 	logger.Info("event collector: discrete events ingested (v3 T-C)",
 		"events", len(findings), "role_resolved", resolved, "role_unresolved", unresolved)

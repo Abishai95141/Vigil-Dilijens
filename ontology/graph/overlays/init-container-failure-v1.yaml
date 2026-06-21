@@ -1,0 +1,141 @@
+# INIT_CONTAINER_FAILURE — authored overlay v1 (doc 02 §3.5, doc 04 §3.3, doc 07 §3.1).
+#
+# Resolves PHEN_INIT_CONTAINER_FAILURE's INLINE signal pattern (the coverage report's
+# "no structured required members to gate on — inline patterns pending resolution")
+# into the structured triple — the direct analogue of PHEN_PROBE_FAILURE_RESTART's
+# restart-counter member (detect-conditions-v4), for INIT containers.
+#
+# THE BASE KG STAYS IMMUTABLE. The new Signal node lives HERE, in this versioned
+# overlay (the documented mechanism: "new signals live in versioned overlays" —
+# graph/overlay.go), exactly like an app /metrics signal — never edited into the
+# vendored base mirror (which would drift every historical release's content hash).
+# The signal is tool-gated on kube-state-metrics so a cluster WITHOUT KSM reports the
+# bar honestly out-of-scope, not silently watched (doc 04 §3.1.1).
+#
+# TELEMETRY: kube-state-metrics (G2 KSM lane, --ksm-enabled) emits
+# kube_pod_init_container_status_restarts_total from each pod's
+# .status.initContainerStatuses[].restartCount. KSM is object-driven, so the series
+# exists once a pod carries an init container; the signal's tools gate its
+# obtainability honestly (no KSM => not observable).
+#
+# BORROWED NORMATIVITY: a restart count has NO customer-declared Kubernetes limit, so
+# the bar is a FLAGGED ontology default — >3 init restarts in the 15m window — mirroring
+# THR_CONTAINER_RESTARTS_RATE. Never learned, never a guessed customer config. Single
+# observable member: the lastState.terminated + Init:CrashLoopBackOff-event corroboration
+# is NOT on this signal set, so the match is honestly DEGRADED and that absence is NAMED
+# on the finding — never fabricated (degrade-never-fabricate, doc 07).
+#
+# BEHAVIOURAL governance class (doc 12): a NEW signal + member + check + flagged default
+# bumps the graph hash. DETECTION surfaces immediately (non-gating); any forecast WARNING
+# for this class stays gate-pending until its backtest gate passes (doc 11 §3.5).
+overlay: init-container-failure
+version: 1
+author: vigil-engineering
+status: proposed-v1 (resolve the init-container-failure inline pattern into the KSM init-restart-counter member)
+
+# The authored Signal nodes — the THREE required members the base KG authored as
+# INLINE patterns (the doc 14 A14 backlog), now STRUCTURED so detection counts them
+# honestly. Only the restart counter has a scrapable rate-guard check on this signal
+# set; the other two are required members WITHOUT a check, so the matcher counts them
+# as NAMED unobserved gaps (degrade-never-fabricate, doc 07 §3.3/§4) — the match is a
+# genuine 1-of-3 DEGRADED, mirroring PROBE_FAILURE_RESTART (11 members, 1 checked).
+signals:
+  - id: SIG_init_container_restart_count_kube_pod_init_container_status_re_75b71127
+    name: Init container restart count
+    data_type: Counter
+    entity: Component
+    modality: Metric
+    tools:
+      - kube-state-metrics
+    source: kube-state-metrics (Pod .status.initContainerStatuses)
+    collection_method: Prometheus scrape
+    notes: >-
+      .status.initContainerStatuses[].restartCount surfaced by KSM as
+      kube_pod_init_container_status_restarts_total. The init analogue of the
+      regular-container restart counter; the required member of
+      PHEN_INIT_CONTAINER_FAILURE the rate-guard check binds.
+  - id: SIG_init_container_last_terminated_reason_kube_pod_init_container_5e2a90b1
+    name: Init container last-terminated reason
+    data_type: String
+    entity: Component
+    modality: Metric
+    tools:
+      - kube-state-metrics
+    source: kube-state-metrics (Pod .status.initContainerStatuses[].lastState.terminated)
+    collection_method: Prometheus scrape
+    notes: >-
+      kube_pod_init_container_status_last_terminated_reason — the init analogue of the
+      regular-container lastState.terminated reason (SIG_container_last_terminated_
+      reason_...). A required corroborator: authored, but NO rate/level check fits a
+      reason-label string on this signal set, so it stays an unobserved NAMED member.
+  - id: SIG_init_container_crashloop_event_init_crashloopbackoff_9f3cae72
+    name: Init container CrashLoopBackOff event
+    data_type: Event
+    entity: Component
+    modality: Event
+    tools:
+      - kubelet
+    source: kubelet (Pod state phase Init:CrashLoopBackOff|Init:Error)
+    collection_method: Kubernetes event
+    notes: >-
+      The Init:CrashLoopBackOff / Init:Error pod-phase event. A required corroborator
+      carried on the EVENT lane, not this KSM metric signal set, so the fingerprint
+      match names it as an unobserved gap (the events lane surfaces it off-digest).
+
+# Structured membership (signal -> phenomenon): the loader appends a participates_in
+# edge per member so the graph stays self-consistent. The rate-guard check below binds
+# ONLY the restart counter; the other two required members carry no check and so are
+# NAMED unobserved on the finding — an honest 1-of-3 DEGRADED match, never fabricated.
+members:
+  PHEN_INIT_CONTAINER_FAILURE:
+    - signal: SIG_init_container_restart_count_kube_pod_init_container_status_re_75b71127
+      role: required
+      temporal: T0
+      why: >-
+        A climbing init-container restart count is the entity-local observable that an
+        init container is crash-looping; the main containers never start until it
+        succeeds. The checked required member of the phenomenon.
+    - signal: SIG_init_container_last_terminated_reason_kube_pod_init_container_5e2a90b1
+      role: required
+      temporal: T0
+      why: >-
+        The init container's last-terminated reason corroborates WHY it is restarting
+        (Error vs OOMKilled). Authored required, but unchecked on this signal set —
+        surfaced as a NAMED unobserved member, never assumed.
+    - signal: SIG_init_container_crashloop_event_init_crashloopbackoff_9f3cae72
+      role: required
+      temporal: T0+
+      why: >-
+        The Init:CrashLoopBackOff pod-phase event is the kubelet's own confirmation of
+        the crash loop. Carried on the event lane (off this metric signal set), so the
+        fingerprint match names it as an unobserved gap, never fabricated.
+
+rules:
+  - id: THR_INIT_CONTAINER_RESTARTS_RATE
+    signal: SIG_init_container_restart_count_kube_pod_init_container_status_re_75b71127
+    metric: kube_pod_init_container_status_restarts_total
+    kind: rate-of-change
+    default: 3
+    direction: above
+    entity_scope: Container
+    window: 15m
+    rationale: >-
+      The init crash-loop guard: more than 3 init-container restarts inside the 15m
+      window. A restart count has no customer-declared Kubernetes limit, so the bar is
+      a FLAGGED ontology default mirroring THR_CONTAINER_RESTARTS_RATE — never learned,
+      never a guessed customer config.
+
+checks:
+  PHEN_INIT_CONTAINER_FAILURE:
+    - signal: SIG_init_container_restart_count_kube_pod_init_container_status_re_75b71127
+      metric: kube_pod_init_container_status_restarts_total
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: >-
+        >3 init-container restarts in the 15m window (THR_INIT_CONTAINER_RESTARTS_RATE,
+        flagged default — the init crash-loop guard); the KSM init-restart member,
+        observable via the G2 KSM lane. The other authored members
+        (initContainerStatuses[].lastState.terminated, the Init:CrashLoopBackOff event)
+        are not on this signal set — surfaced as a single-member DEGRADED match, named,
+        never fabricated.

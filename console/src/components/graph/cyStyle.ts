@@ -35,10 +35,10 @@ export const cyStyle: CyStyle[] = [
       "text-transform": "uppercase",
       "text-valign": "top",
       "text-halign": "left",
-      "text-margin-x": 10,
-      "text-margin-y": 14,
+      "text-margin-x": 12,
+      "text-margin-y": 16,
       "letter-spacing": 1.5,
-      padding: 26,
+      padding: 36, // more inner air so nodes never crowd the container edge
       "z-index": 1,
     },
   },
@@ -59,16 +59,16 @@ export const cyStyle: CyStyle[] = [
       label: "data(label)",
       color: plane.inkSoft,
       "font-family": LABEL_FONT,
-      "font-size": 11,
+      "font-size": 11.5,
       "font-weight": 500,
       "text-valign": "bottom",
       "text-halign": "center",
-      "text-margin-y": 5,
-      "text-max-width": "120px",
+      "text-margin-y": 8, // more gap node→caption so the disc + label read as distinct
+      "text-max-width": "132px",
       "text-wrap": "ellipsis",
       "text-background-color": plane.plane,
-      "text-background-opacity": 0.72,
-      "text-background-padding": 2,
+      "text-background-opacity": 0.86, // crisper caption against the busy canvas
+      "text-background-padding": 3.5,
       "text-background-shape": "round-rectangle",
       "min-zoomed-font-size": 9, // LOD: caption fades out when zoomed far out
       "z-index": 10,
@@ -194,7 +194,7 @@ export const cyStyle: CyStyle[] = [
       "text-background-color": plane.plane,
       "text-background-opacity": 0.85,
       "text-background-padding": 2,
-      "min-zoomed-font-size": 13, // LOD: edge labels only at high zoom
+      "min-zoomed-font-size": 16, // LOD: edge labels only when zoomed in (calmer overview)
       opacity: 0.85,
       "z-index": 2,
     },
@@ -203,11 +203,11 @@ export const cyStyle: CyStyle[] = [
   {
     selector: 'edge[etype = "flow"]',
     style: {
-      width: 1.4,
+      width: 1.6,
       "line-color": plane.inkLow,
       "target-arrow-shape": "triangle-backcurve",
       "target-arrow-color": plane.inkLow,
-      "arrow-scale": 0.85,
+      "arrow-scale": 1,
       label: "data(rel)",
       "text-rotation": "autorotate",
     },
@@ -256,4 +256,34 @@ export const cyStyle: CyStyle[] = [
   },
   { selector: "edge.dim", style: { opacity: 0.05 } },
   { selector: "edge.hidden", style: { display: "none" } },
+
+  // ── cross-layer affordance ──────────────────────────────────────────────────
+  // A node connected ONLY in a toggled-off layer (a Service routes to it, or it mounts a
+  // PVC, or it runs on a Node) is NOT orphaned — a dashed ring marks it so "no edge in this
+  // view" never reads as "disconnected". DASH carries the meaning; the state colour is kept.
+  {
+    selector: "node.entity.cross-layer",
+    style: { "border-style": "dashed", "border-opacity": 0.85 },
+  },
+  // Reveal-on-select: the selected node's cross-layer connections are ghosted in (its edges
+  // + the endpoints pulled from a hidden layer) so the link shows on demand without
+  // permanently cluttering the dependency mesh. Faint + dashed = "shown from another layer".
+  // Placed last so they win over .dim / .hl for a revealed element.
+  {
+    selector: "node.ghost",
+    style: { opacity: 0.5, "text-opacity": 0.5, "border-style": "dashed" },
+  },
+  {
+    selector: "edge.ghost",
+    style: {
+      "line-style": "dashed",
+      "line-color": plane.mute,
+      "target-arrow-color": plane.mute,
+      "target-arrow-shape": "triangle-backcurve",
+      "arrow-scale": 0.7,
+      opacity: 0.55,
+      width: 1.1,
+      "z-index": 3,
+    },
+  },
 ];

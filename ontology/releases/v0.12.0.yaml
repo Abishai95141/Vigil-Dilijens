@@ -1,0 +1,61 @@
+# Graph release v0.12.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.12.0
+graph_version: "sha256:b04e22a804c59d377730b12548dbf6049db8406fda155ffdb9d7393b873120f4"
+created: "2026-06-21"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - detection-status-v1.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Adds the MEMBERSHIP-STRUCTURING gate + its authored escape hatch. graphlint now
+  enforces a SHACL-style cardinality shape over phenomenon membership: a phenomenon that
+  authors required INLINE members (the documentary `signals` tuples the detection matcher
+  never reads) but has ZERO structured (participates_in) required members is structurally
+  undetectable by the metric matcher — a silent capability hole — and HARD-fails the lint
+  (same tier as a dangling participates_in endpoint). It also prints, every run, a soft
+  "detection reads only X of Y authored required members" report per under-structured
+  phenomenon — the load-bearing honesty that makes a 1-of-3 structured phenomenon
+  reporting Quality "full" visibly an over-statement. The escape hatch is a new AUTHORED
+  overlay block detection_status: { PHEN_ID: { lane, rationale } } over a closed lane
+  vocabulary (events-only | log-only | needs-scrape-lane | needs-entity-binding |
+  wireable-backlog) with a REQUIRED falsifiable rationale — parsed by both the runtime
+  loader (graph.Phenomenon.DetectionStatus, INFORMATIONAL-only so the replay digest stays
+  byte-identical, exactly like Severity) and graphlint (offline-validated: closed vocab,
+  non-empty rationale, known phenomenon, all hard errors otherwise). The new overlay
+  detection-status-v1.yaml ACKNOWLEDGES the 6 base phenomena that remain metric-matcher-
+  dark, each with the honest lane + the exact blocker: CERT_EXPIRY / MESH_CIRCUIT_BREAKER /
+  NETWORK_POLICY_DROPS / IMAGE_GC_EVENTS = needs-scrape-lane (kube-apiserver / service-mesh /
+  CNI / kubelet-/metrics exporters Vigil does not scrape); PDB_VIOLATION = needs-entity-
+  binding (KSM data is live but PDB is not a modelled entity kind — the same gap the
+  init-container fix closed for Container); POD_OVERHEAD_SANDBOX = wireable-backlog (a metric
+  on a live lane could wire it, pending a fault-defining bar). The graph hash bumps
+  v0.11.0→v0.12.0 because the overlay set changed (18→19 overlays, +1 detection-status,
+  0 new rules, 0 new signals); the base KG and every prior release stay byte-identical and
+  loadable. CHARTER-CLEAN: the gate is MEASURED arithmetic over AUTHORED counts; the escape
+  hatch is AUTHORED (human-declared, rationale = falsifiable claim surfaced verbatim with
+  provenance) — no model output enters the graph, no detection logic changes, no digest
+  perturbation. The matcher completeness-denominator honesty fix (count uncovered inline-
+  required members as named gaps so Completeness reflects authored intent) is deliberately
+  deferred to a SEPARATE gated change — it alters findings (≈7 corpora + 7 detect goldens +
+  3 harness gates + a MinCompleteness re-calibration) and needs its own review.

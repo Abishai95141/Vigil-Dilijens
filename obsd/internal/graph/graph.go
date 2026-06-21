@@ -140,10 +140,30 @@ type Phenomenon struct {
 	// phenomena (the anchor is wherever the variables live).
 	Anchor string `json:"-"`
 
+	// DetectionStatus is the AUTHORED acknowledgment of WHERE this phenomenon's
+	// detection lives — or why it is absent from the metric (fingerprint) matcher.
+	// It is the escape hatch for the membership-structuring gate (graphlint): a
+	// phenomenon that authors required INLINE members but has no structured
+	// (participates_in) required member is undetectable by the metric matcher; a
+	// detection_status declaration ACKNOWLEDGES that gap with a falsifiable rationale,
+	// so the gap is honest and provenance-bearing, never silently dark. Like Severity
+	// it is informational/ranking-only — detection ignores it, so it never perturbs the
+	// replay digest. nil ⇒ undeclared (the phenomenon is expected to be metric-detectable).
+	DetectionStatus *DetectionStatus `json:"-"`
+
 	// Derived (not from JSON):
 	InlineMembers []InlineMember `json:"-"`
 	Members       []Member       `json:"-"` // from participates_in edges
 	Relations     []Relation     `json:"-"` // from phenomenon_relation edges
+}
+
+// DetectionStatus records the authored lane a phenomenon's detection lives on, or the
+// honest reason it is not on the metric matcher (the membership-structuring escape
+// hatch). AUTHORED-class: human-declared, the rationale is a falsifiable claim surfaced
+// verbatim with provenance — never learned, never inferred.
+type DetectionStatus struct {
+	Lane      string
+	Rationale string
 }
 
 // HasSpan reports whether the phenomenon declares a topological span (doc 02 §3.6).
@@ -184,6 +204,39 @@ func SeverityRank(s string) int {
 		return 0 // undeclared
 	}
 }
+
+// The closed AUTHORED detection-lane vocabulary — the honest taxonomy of WHERE a
+// phenomenon's detection lives when it is NOT on the metric (fingerprint) matcher.
+// Used by the membership-structuring escape hatch (detection_status). An unknown value
+// is an authoring defect, caught loudly by graphlint and the overlay loader.
+const (
+	// LaneEventsOnly: detected on the discrete-events lane (off-digest), never the metric matcher.
+	LaneEventsOnly = "events-only"
+	// LaneLogOnly: requires a log lane Vigil has not built.
+	LaneLogOnly = "log-only"
+	// LaneNeedsScrapeLane: a real metric exists, but on an exporter Vigil does not scrape
+	// (kube-apiserver / etcd / kube-scheduler / kubelet-/metrics / service-mesh / CNI). DARK
+	// until a new scrape modality is added.
+	LaneNeedsScrapeLane = "needs-scrape-lane"
+	// LaneNeedsEntity: the metric IS on a live lane (KSM / node-exporter), but the phenomenon's
+	// entity kind is not modelled in identity yet (e.g. PDB, HPA as first-class entities).
+	LaneNeedsEntity = "needs-entity-binding"
+	// LaneWireableBacklog: a metric on a LIVE lane could wire it today; the structured member +
+	// rule are an authoring backlog item, not yet done (the most actionable acknowledgment).
+	LaneWireableBacklog = "wireable-backlog"
+)
+
+// knownDetectionLanes is the closed set. KEEP IN SYNC with graphlint's
+// ovDetectionLaneVocab (tools/graphlint/overlay.go) — graphlint cannot import this
+// internal package, so the set is duplicated; a parity lock test guards each copy.
+var knownDetectionLanes = map[string]bool{
+	LaneEventsOnly: true, LaneLogOnly: true, LaneNeedsScrapeLane: true,
+	LaneNeedsEntity: true, LaneWireableBacklog: true,
+}
+
+// IsValidDetectionLane reports whether s is a declared detection lane. Empty is NOT valid
+// here (unlike Severity): a detection_status block must name a concrete lane.
+func IsValidDetectionLane(s string) bool { return knownDetectionLanes[s] }
 
 // EquivalenceGroup bridges customer naming dialects to one canonical variable
 // (doc 02 §3.1): a set of regex patterns plus a canonical name.

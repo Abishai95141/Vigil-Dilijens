@@ -81,6 +81,20 @@ type ovMember struct {
 	Why      string `yaml:"why"`
 }
 
+// ovSignal mirrors the runtime loader's overlaySignal (graph/overlay.go): a new Signal
+// node declared by an overlay — the base KG stays an immutable vendored mirror, so a new
+// observable (an app /metrics gauge, or an infra series the base catalogue did not
+// enumerate, e.g. a KSM init-container counter) lives in a versioned overlay. graphlint
+// registers it so this overlay's own members/rules/checks resolve it, exactly as the
+// runtime loader does — offline validation must match runtime ingestion.
+type ovSignal struct {
+	ID       string `yaml:"id"`
+	Name     string `yaml:"name"`
+	DataType string `yaml:"data_type"`
+	Entity   string `yaml:"entity"`
+	Modality string `yaml:"modality"`
+}
+
 // ovEquivGroup mirrors the runtime loader's overlayEquivGroup (doc 21 §5.3): the deterministic
 // absorb path for a promoted stray→group mapping. graphlint validates it offline so a
 // defective equivalence-group delta (non-compiling pattern, redefinition, incomplete new
@@ -96,19 +110,64 @@ type ovEquivGroup struct {
 }
 
 type overlayDoc struct {
-	path        string
-	Overlay     string                `yaml:"overlay"`
-	Version     int                   `yaml:"version"`
-	Author      string                `yaml:"author"`
-	Status      string                `yaml:"status"`
-	Phenomena   []ovPhenomenon        `yaml:"phenomena"`
-	EquivGroups []ovEquivGroup        `yaml:"equivalence_groups"`
-	Members     map[string][]ovMember `yaml:"members"`
-	Relations   []ovRelation          `yaml:"relations"`
-	Spans       map[string]ovSpan     `yaml:"spans"`
-	Rules       []ovRule              `yaml:"rules"`
-	Checks      map[string][]ovCheck  `yaml:"checks"`
-	Anchors     map[string]string     `yaml:"anchors"`
+	path              string
+	Overlay           string                       `yaml:"overlay"`
+	Version           int                          `yaml:"version"`
+	Author            string                       `yaml:"author"`
+	Status            string                       `yaml:"status"`
+	Signals           []ovSignal                   `yaml:"signals"`
+	Phenomena         []ovPhenomenon               `yaml:"phenomena"`
+	EquivGroups       []ovEquivGroup               `yaml:"equivalence_groups"`
+	Members           map[string][]ovMember        `yaml:"members"`
+	Relations         []ovRelation                 `yaml:"relations"`
+	Spans             map[string]ovSpan            `yaml:"spans"`
+	DetectionStatuses map[string]ovDetectionStatus `yaml:"detection_status"`
+	Overrides         ovOverrides                  `yaml:"overrides"`
+	Rules             []ovRule                     `yaml:"rules"`
+	Checks            map[string][]ovCheck         `yaml:"checks"`
+	Anchors           map[string]string            `yaml:"anchors"`
+}
+
+// ovOverrides mirrors the runtime loader's overlayOverrides: governed corrections of base
+// content (a non-causal relation downgraded, a false-equivalence pattern removed). graphlint
+// validates them offline so a defective correction (unknown target, missing rationale,
+// removing a non-present pattern) is a HARD error before it merges.
+type ovOverrides struct {
+	PhenomenonRelations []ovRelationOverride     `yaml:"phenomenon_relations"`
+	EquivalencePatterns []ovEquivPatternOverride `yaml:"equivalence_patterns"`
+}
+
+type ovRelationOverride struct {
+	Src       string `yaml:"src"`
+	Dst       string `yaml:"dst"`
+	SetRole   string `yaml:"set_role"`
+	Rationale string `yaml:"rationale"`
+}
+
+type ovEquivPatternOverride struct {
+	ID        string   `yaml:"id"`
+	Remove    []string `yaml:"remove"`
+	Rationale string   `yaml:"rationale"`
+}
+
+var ovRelationRoleVocab = map[string]bool{"trigger": true, "downstream": true, "corroborating": true}
+
+// ovDetectionStatus mirrors the runtime loader's overlayDetectionStatus: the authored
+// membership-structuring escape hatch — the lane a phenomenon's detection lives on (or
+// why it is off the metric matcher) plus a falsifiable rationale.
+type ovDetectionStatus struct {
+	Lane      string `yaml:"lane"`
+	Rationale string `yaml:"rationale"`
+}
+
+// ovDetectionLaneVocab is the closed detection-lane vocabulary. KEEP IN SYNC with
+// graph.knownDetectionLanes (obsd/internal/graph/graph.go) — graphlint cannot import the
+// internal package, so the set is duplicated; TestDetectionLaneVocabParity locks this copy.
+// graphlint validates it offline so a defective escape-hatch declaration is a HARD error
+// before it merges.
+var ovDetectionLaneVocab = map[string]bool{
+	"events-only": true, "log-only": true, "needs-scrape-lane": true,
+	"needs-entity-binding": true, "wireable-backlog": true,
 }
 
 var (
@@ -191,6 +250,42 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 			memberOf[e.Dst][e.Src] = true
 		}
 	}
+	// phenomenon_relation edges (src->dst), for validating a relation override targets an
+	// EXISTING relation.
+	relationEdge := map[string]bool{} // "src\x00dst" -> exists
+	for _, e := range doc.Edges {
+		if e.Type == "phenomenon_relation" {
+			relationEdge[e.Src+"\x00"+e.Dst] = true
+		}
+	}
+	// EquivalenceGroup patterns, for validating an equivalence-pattern override removes a
+	// pattern that is actually present. Built from the base AND from overlay-added groups/
+	// patterns (a pre-pass), so an override may target overlay-authored content exactly as the
+	// runtime allows (apply-then-override) — without this, graphlint would falsely reject a
+	// correction the runtime accepts.
+	groupPatterns := map[string]map[string]bool{} // group id -> pattern -> present
+	for _, n := range doc.Nodes {
+		if n.Type == "EquivalenceGroup" {
+			set := map[string]bool{}
+			for _, p := range n.Patterns {
+				set[p] = true
+			}
+			groupPatterns[n.ID] = set
+		}
+	}
+	for _, o := range ovls {
+		for _, eg := range o.EquivGroups {
+			if groupPatterns[eg.ID] == nil {
+				groupPatterns[eg.ID] = map[string]bool{}
+			}
+			for _, p := range append(append([]string{}, eg.Patterns...), eg.AddPatterns...) {
+				groupPatterns[eg.ID][p] = true
+			}
+		}
+		for _, r := range o.Relations {
+			relationEdge[r.Src+"\x00"+r.Dst] = true
+		}
+	}
 
 	var errs []string
 	seenRule := map[string]string{}
@@ -198,6 +293,7 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 	// coherence — spans, checks, and anchors may arrive from different files).
 	spanOf := map[string]string{}             // phen -> declared span (across all overlays)
 	anchorOf := map[string]string{}           // phen -> declared anchor
+	dsOf := map[string]ovDetectionStatus{}    // phen -> declared detection_status (across all overlays)
 	hasChecks := map[string]bool{}            // phen -> any check authored
 	hasNeighbourCheck := map[string]bool{}    // phen -> any neighbour-scoped check
 	hasTwoHopCheck := map[string]bool{}       // phen -> any two-hop-scoped check
@@ -209,6 +305,24 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 		}
 		if strings.TrimSpace(o.Author) == "" {
 			errs = append(errs, fmt.Sprintf("%s: missing author provenance (doc 02 §3.6)", at))
+		}
+		// doc 15 cap. A: register overlay-added Signal nodes FIRST (the runtime loader
+		// applies signals before everything else) so this overlay's own members, rules,
+		// and checks resolve them. id + name + data_type are required (data_type drives
+		// the gauge/counter shape derivation); overlays may add, never redefine.
+		for _, os := range o.Signals {
+			if strings.TrimSpace(os.ID) == "" || strings.TrimSpace(os.Name) == "" {
+				errs = append(errs, fmt.Sprintf("%s: overlay signal missing id/name", at))
+				continue
+			}
+			if strings.TrimSpace(os.DataType) == "" {
+				errs = append(errs, fmt.Sprintf("%s: overlay signal %q: data_type is required (drives the gauge/counter shape)", at, os.ID))
+			}
+			if t := nodeType[os.ID]; t != "" {
+				errs = append(errs, fmt.Sprintf("%s: overlay signal %q already defined as %s (overlays may add, never redefine)", at, os.ID, t))
+				continue
+			}
+			nodeType[os.ID] = "Signal"
 		}
 		// doc 21 §5.3: equivalence-group deltas — extend an existing group's dialect
 		// patterns or define a new group. Mirrors the runtime loader's overlayEquivGroup:
@@ -284,6 +398,69 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 					memberOf[phen] = map[string]bool{}
 				}
 				memberOf[phen][m.Signal] = true
+			}
+		}
+		// detection_status escape hatch (the membership-structuring acknowledgment): a
+		// known phenomenon, a lane from the closed vocabulary, and a REQUIRED rationale
+		// (a falsifiable claim, never a rubber stamp). All hard errors otherwise.
+		dsIDs := make([]string, 0, len(o.DetectionStatuses))
+		for id := range o.DetectionStatuses {
+			dsIDs = append(dsIDs, id)
+		}
+		sort.Strings(dsIDs)
+		for _, id := range dsIDs {
+			ds := o.DetectionStatuses[id]
+			if nodeType[id] != "CorrelationGroup" {
+				errs = append(errs, fmt.Sprintf("%s: detection_status for unknown phenomenon %q", at, id))
+			}
+			if !ovDetectionLaneVocab[ds.Lane] {
+				errs = append(errs, fmt.Sprintf("%s: %s: detection_status lane %q is not events-only|log-only|needs-scrape-lane|needs-entity-binding|wireable-backlog", at, id, ds.Lane))
+			}
+			if strings.TrimSpace(ds.Rationale) == "" {
+				errs = append(errs, fmt.Sprintf("%s: %s: detection_status needs a rationale (a falsifiable authored claim, never a rubber stamp)", at, id))
+			}
+			// Cross-overlay conflict: the same phenomenon re-declared with a different lane
+			// or rationale (mirrors the runtime loader's applyOverlay reject at
+			// graph/overlay.go — offline lint must match runtime ingestion).
+			if prev, dup := dsOf[id]; dup && (prev.Lane != ds.Lane || prev.Rationale != ds.Rationale) {
+				errs = append(errs, fmt.Sprintf("%s: %s: detection_status conflict across overlays (%q vs %q)", at, id, prev.Lane, ds.Lane))
+			}
+			dsOf[id] = ds
+		}
+		// Governed corrections (doc 12): validate overrides target EXISTING base content and
+		// carry a rationale — mirrors the runtime applyOverlay so the offline lint matches.
+		for _, ro := range o.Overrides.PhenomenonRelations {
+			if strings.TrimSpace(ro.Rationale) == "" {
+				errs = append(errs, fmt.Sprintf("%s: override phenomenon_relation %s->%s needs a rationale (a governed correction, never silent)", at, ro.Src, ro.Dst))
+			}
+			if !ovRelationRoleVocab[ro.SetRole] {
+				errs = append(errs, fmt.Sprintf("%s: override phenomenon_relation %s->%s: set_role %q is not trigger|downstream|corroborating", at, ro.Src, ro.Dst, ro.SetRole))
+			}
+			if nodeType[ro.Src] != "CorrelationGroup" || nodeType[ro.Dst] != "CorrelationGroup" {
+				errs = append(errs, fmt.Sprintf("%s: override phenomenon_relation %s->%s: src/dst must be known phenomena", at, ro.Src, ro.Dst))
+			} else if !relationEdge[ro.Src+"\x00"+ro.Dst] {
+				errs = append(errs, fmt.Sprintf("%s: override phenomenon_relation %s->%s: no such relation exists to override (overrides correct EXISTING content)", at, ro.Src, ro.Dst))
+			}
+		}
+		for _, eo := range o.Overrides.EquivalencePatterns {
+			if strings.TrimSpace(eo.Rationale) == "" {
+				errs = append(errs, fmt.Sprintf("%s: override equivalence_patterns %s needs a rationale", at, eo.ID))
+			}
+			pats, ok := groupPatterns[eo.ID]
+			if !ok {
+				errs = append(errs, fmt.Sprintf("%s: override equivalence_patterns: unknown equivalence group %q", at, eo.ID))
+				continue
+			}
+			remaining := len(pats)
+			for _, pat := range eo.Remove {
+				if !pats[pat] {
+					errs = append(errs, fmt.Sprintf("%s: override equivalence_patterns %s: pattern %q is not present to remove", at, eo.ID, pat))
+				} else {
+					remaining--
+				}
+			}
+			if remaining <= 0 {
+				errs = append(errs, fmt.Sprintf("%s: override equivalence_patterns %s: would empty the group (a dialect bridge must keep >=1 pattern)", at, eo.ID))
 			}
 		}
 		for _, r := range o.Relations {
@@ -499,6 +676,15 @@ func validateOverlays(doc kgDoc, ovls []overlayDoc) []string {
 func mergeOverlays(doc *kgDoc, ovls []overlayDoc) (rules int) {
 	spans := map[string]string{}
 	for _, o := range ovls {
+		// doc 15 cap. A: overlay-added signals become first-class nodes so the gap
+		// report's signal total + Metric-shape accounting reflect the MERGED view.
+		for _, os := range o.Signals {
+			modality := os.Modality
+			if modality == "" {
+				modality = "Metric"
+			}
+			doc.Nodes = append(doc.Nodes, kgNode{ID: os.ID, Type: "Signal", Modality: modality, DataType: os.DataType})
+		}
 		// doc 15 Phase C: overlay-added phenomena become first-class nodes so the
 		// gap report counts them (40, not 38) and credits their spans below.
 		for _, op := range o.Phenomena {

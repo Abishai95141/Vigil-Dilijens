@@ -51,6 +51,44 @@ func TestResolveTwoCoordinateMatch(t *testing.T) {
 	}
 }
 
+// Degenerate self-match: an entity whose name == its namespace (e.g. a PVC named
+// "erpnext" in namespace "erpnext") agrees with a SINGLE stray value "erpnext" on TWO
+// dimensions (namespace + name). That is one identifying fact, not two — it must NOT
+// clear the ≥2-coordinate floor and mint a spurious association. Regression for the
+// namespace-value/name coordinate collision the proposal audit flagged.
+func TestResolveDegenerateSameValueNoEdge(t *testing.T) {
+	degen := []EntityRef{
+		{Key: "i|c1|erpnext|PersistentVolumeClaim|erpnext|pvc-7c", Kind: "PersistentVolumeClaim", Namespace: "erpnext", Name: "erpnext", UID: "pvc-7c"},
+	}
+	stray := StrayObservation{
+		Family: "ksm", Metric: "kube_persistentvolume_claim_ref",
+		Labels: map[string]string{"claim_namespace": "erpnext", "name": "erpnext"},
+		Reason: "unmapped-metric-class", StreamRef: "ref@ksm",
+	}
+	got := Resolve(stray, degen)
+	nodes, edges := kinds(got)
+	if nodes != 1 || edges != 0 {
+		t.Fatalf("nodes=%d edges=%d, want 1/0 — one coincidental value must not satisfy the floor (%+v)", nodes, edges, got)
+	}
+	// A TRUE two-value match against the same entity still binds (sanity: the fix doesn't
+	// over-suppress). Distinct values "data-mariadb-0" (name) + "erpnext" (namespace).
+	twoVal := []EntityRef{
+		{Key: "i|c1|erpnext|PersistentVolumeClaim|data-mariadb-0|pvc-f6", Kind: "PersistentVolumeClaim", Namespace: "erpnext", Name: "data-mariadb-0", UID: "pvc-f6"},
+	}
+	stray2 := StrayObservation{
+		Family: "ksm", Metric: "kube_persistentvolume_claim_ref",
+		Labels: map[string]string{"claim_namespace": "erpnext", "name": "data-mariadb-0"},
+		Reason: "unmapped-metric-class", StreamRef: "ref2@ksm",
+	}
+	got2 := Resolve(stray2, twoVal)
+	if _, e2 := kinds(got2); e2 != 1 {
+		t.Fatalf("two DISTINCT shared values should still bind: edges=%d, want 1 (%+v)", e2, got2)
+	}
+	if got2[1].Payload["sharedCoordinates"] != 2 {
+		t.Errorf("sharedCoordinates = %v, want 2 distinct values", got2[1].Payload["sharedCoordinates"])
+	}
+}
+
 // A single shared coordinate (namespace only) is co-occurrence, not identity:
 // no edge, the stray surfaces alone with the ambiguity stated.
 func TestResolveSingleCoordinateNoEdge(t *testing.T) {

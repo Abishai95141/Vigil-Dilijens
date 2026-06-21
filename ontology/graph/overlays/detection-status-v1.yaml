@@ -1,0 +1,79 @@
+# Detection-status acknowledgments — authored overlay v1 (doc 02 §3.6, honest partial
+# coverage). The membership-structuring gate (tools/graphlint) hard-fails any phenomenon
+# that authors required INLINE members but has ZERO structured (participates_in) required
+# members — it is undetectable by the metric matcher, a silent capability hole. This
+# overlay ACKNOWLEDGES the 6 such phenomena that remain on the base KG, each with the
+# honest lane its detection would live on and a falsifiable rationale naming the exact
+# blocker (a missing scrape lane, an unmodelled entity kind, or an un-done wiring). It is
+# the charter discipline made structural: honest partial coverage, stated never hidden.
+#
+# This is NOT a rubber stamp. Each declaration names a concrete metric/exporter and the
+# specific reason detection is not yet on the metric matcher, so an operator reading the
+# coverage surface sees precisely WHY a phenomenon is dark and WHAT would light it up.
+# When a lane/entity is built, the phenomenon graduates: drop its acknowledgment here and
+# author the structured member + rule (exactly as PHEN_INIT_CONTAINER_FAILURE did once the
+# init-container binding existed).
+#
+# Lane vocabulary (closed): events-only | log-only | needs-scrape-lane |
+# needs-entity-binding | wireable-backlog. INFORMATIONAL only — detection ignores it, so
+# the replay digest is byte-identical (Severity is the precedent).
+overlay: detection-status
+version: 1
+author: vigil-engineering
+status: released-v1 (acknowledge the 6 metric-matcher-dark phenomena with honest lane + rationale)
+
+detection_status:
+  PHEN_CERT_EXPIRY:
+    lane: needs-scrape-lane
+    rationale: >-
+      The required members (apiserver_client_certificate_expiration_seconds, the etcd
+      cert-file mtime, TLS-handshake-error logs) live on the kube-apiserver /metrics
+      endpoint and control-plane host filesystem. obsd scrapes only cAdvisor / KSM /
+      node-exporter / app-metrics — there is NO kube-apiserver scrape lane — so cert
+      expiry is genuinely uncovered until a control-plane scrape modality is added.
+
+  PHEN_MESH_CIRCUIT_BREAKER:
+    lane: needs-scrape-lane
+    rationale: >-
+      The required members (envoy_cluster_outlier_detection_ejections_*, Linkerd
+      request_total classification=failure, sidecar outlier-ejected logs) are emitted by
+      Istio/Envoy and Linkerd sidecar /metrics. A service mesh is not a base Vigil lane and
+      there is no mesh-metrics scrape, so this is uncovered until a mesh exporter lane exists.
+
+  PHEN_NETWORK_POLICY_DROPS:
+    lane: needs-scrape-lane
+    rationale: >-
+      The required members (hubble_policy_verdicts_total DENY / cilium_drop_count_total
+      POLICY_DENIED, felix_calc_graph_policy_evals) are CNI-specific Cilium/Hubble/Calico
+      exporters. KSM exposes the NetworkPolicy OBJECT but never drop counters, and Vigil
+      ingests no CNI exporter lane — uncovered until one is added.
+
+  PHEN_PDB_VIOLATION:
+    lane: needs-entity-binding
+    rationale: >-
+      The required member (kube_poddisruptionbudget_status_current_healthy <
+      _status_desired_healthy) IS on the live KSM lane — the data is ingestible today. The
+      blocker is identity: PodDisruptionBudget is not yet a modelled entity kind (the
+      detection would have no entity to bind to), exactly the gap the init-container fix
+      closed for Container. Wireable once PDB is a first-class entity.
+
+  PHEN_POD_OVERHEAD_SANDBOX:
+    lane: wireable-backlog
+    rationale: >-
+      The required member (kube_pod_overhead_cpu_cores / kube_pod_overhead_memory_bytes) is
+      Pod-scoped on the live KSM lane and Pod IS a modelled entity — so it is wireable now.
+      It is parked as backlog because RuntimeClass (Kata/gVisor) overhead is EXPECTED, not
+      inherently a fault: it needs a fault-defining bar (overhead vs a declared budget)
+      before a structured rule is honest, rather than a bare presence gauge.
+
+  PHEN_IMAGE_GC_EVENTS:
+    lane: needs-scrape-lane
+    rationale: >-
+      The phenomenon's core members are the kubelet's image-GC activity: a kubelet LOG
+      line ("attempting to delete unused images" — needs a log lane Vigil has not built)
+      and kubelet_runtime_operations_total remove_image (the kubelet /metrics endpoint,
+      which obsd does not scrape) — so the primary blocker is an absent kubelet scrape
+      lane, exactly as for the control-plane phenomena. Its third required member, the
+      node_filesystem_avail_bytes{mountpoint=~imagefs} disk-pressure CORRELATE, IS on the
+      live node-exporter lane and is separately wireable (pending cluster-agnostic imagefs
+      mountpoint identification) — a partial, not the phenomenon itself.

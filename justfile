@@ -62,6 +62,12 @@ lint:
     fi
     cd proto && buf lint
     cd "{{justfile_directory()}}"
+    # Ontology lint: schema + referential integrity + authored-overlay validity +
+    # the membership-structuring gate (a phenomenon with required inline members but
+    # zero structured required members is undetectable by the metric matcher — a hard
+    # fail unless it declares a detection_status escape hatch). Prints the honest
+    # "detection reads only X of Y authored required members" report.
+    go run ./tools/graphlint
     # Graph release immutability (doc 12 M1): the NEWEST committed release must
     # still describe the actual ontology (newest chosen by created-date, not
     # filename). Editing the graph without cutting a new release fails here (and

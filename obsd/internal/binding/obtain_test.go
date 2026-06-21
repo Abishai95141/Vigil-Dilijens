@@ -27,9 +27,11 @@ func kindFacts() PlatformFacts {
 	}
 }
 
-// Every one of the catalogue's 589 signals lands in exactly one obtainability
+// Every one of the catalogue's 592 signals lands in exactly one obtainability
 // state (doc 04 M1 exit: "every expected signal lands in a state with a stated
-// reason"), and the kind-cluster verdicts are the known-correct ones.
+// reason"), and the kind-cluster verdicts are the known-correct ones. (592 =
+// 589 + the 3 init-container members that wire PHEN_INIT_CONTAINER_FAILURE: the
+// KSM-gated restart counter + last-terminated reason, and the kubelet crashloop event.)
 func TestGateSignalsKindCluster(t *testing.T) {
 	g := loadGraph(t)
 	rep := GateSignals(g, kindFacts())
@@ -38,8 +40,8 @@ func TestGateSignalsKindCluster(t *testing.T) {
 	for _, n := range rep.Counts {
 		total += n
 	}
-	if total != 589 || len(rep.PerSignal) != 589 {
-		t.Fatalf("gated %d/%d signals, want 589 in exactly one state each (counts=%v)", len(rep.PerSignal), total, rep.Counts)
+	if total != 592 || len(rep.PerSignal) != 592 {
+		t.Fatalf("gated %d/%d signals, want 592 in exactly one state each (counts=%v)", len(rep.PerSignal), total, rep.Counts)
 	}
 	for id, av := range rep.PerSignal {
 		if av.State != Obtainable && len(av.Reasons) == 0 {
@@ -63,6 +65,15 @@ func TestGateSignalsKindCluster(t *testing.T) {
 		// PSI metrics: node-exporter absent dominates (out-of-scope), even though
 		// CONFIG_PSI would be indeterminate.
 		{"SIG_node_pressure_psi_12_metrics_ba96070d", OutOfScopeUnobtainable, "node-exporter"},
+		// Kubelet-/metrics-only METRIC signal: the kubelet exists but obsd does not scrape
+		// its own /metrics endpoint, so it is OUT-OF-SCOPE with the accurate reason (it was
+		// previously over-claimed obtainable via the native-kubelet gate). MODALITY-AWARE.
+		{"SIG_kubelet_volume_stats_used_bytes_38fa9389", OutOfScopeUnobtainable, "kubelet /metrics endpoint not scraped"},
+		// Kubelet-tagged EVENT signals: the "kubelet" tag names the originating component, not
+		// a /metrics endpoint — obsd ingests these via the EVENTS lane, so they must stay
+		// OBTAINABLE (the modality-aware guard against the over-reach the review caught).
+		{"SIG_oomkilled_oomkilling_d6c7e936", Obtainable, ""},
+		{"SIG_pod_eviction_evicted_7e816318", Obtainable, ""},
 	}
 	for _, c := range cases {
 		av, ok := rep.PerSignal[c.sig]
@@ -78,8 +89,11 @@ func TestGateSignalsKindCluster(t *testing.T) {
 		}
 	}
 
-	// Tool verdicts: native + detected present; the observability stack absent;
-	// the API-undetectable ones stated indeterminate.
+	// Tool verdicts: native + detected present; the observability stack absent; the
+	// API-undetectable ones stated indeterminate. The kubelet stays PRESENT (it exists and
+	// its events/state are ingested via the events/KSM lanes) — only its own /metrics
+	// endpoint is unscraped, handled modality-aware per-signal (see the kubelet-/metrics
+	// METRIC case above going out-of-scope while the kubelet EVENT cases stay obtainable).
 	wantPresent := []string{"cadvisor", "containerd", "coredns", "etcd", "kube-proxy", "kubelet"}
 	joinedPresent := strings.Join(rep.ToolsPresent, " ")
 	for _, w := range wantPresent {

@@ -1,0 +1,32 @@
+# ABB Genix chaos rig — init-container crash loop (PHEN_INIT_CONTAINER_FAILURE).
+#
+# Story: a pod's init container fails repeatedly (bad dependency / mis-config), so the
+# workload's main containers never start. The init container's restartCount climbs.
+#
+# Mechanism: an initContainer that exits 1 every attempt -> kubelet restarts it with
+# backoff -> kube_pod_init_container_status_restarts_total climbs past the >3-in-15m
+# flagged bar (THR_INIT_CONTAINER_RESTARTS_RATE) -> PHEN_INIT_CONTAINER_FAILURE fires
+# (DEGRADED single-member, KSM init-restart counter). Needs obsd --ksm-enabled.
+#
+# Apply:  kubectl apply -f corpus/chaos/abb-init-container-failure.yaml
+# Heal:   kubectl delete -f corpus/chaos/abb-init-container-failure.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-failer
+  namespace: abb-genix
+  labels: { app: init-failer, scenario: init-container-failure }
+spec:
+  nodeSelector: { vigil.io/sim-node: abb-genix }
+  restartPolicy: Always
+  initContainers:
+    - name: failing-init
+      image: busybox:1.36
+      command: ["sh", "-c", "echo 'init dependency check failed'; exit 1"]
+  containers:
+    - name: main
+      image: busybox:1.36
+      command: ["sh", "-c", "sleep 3600"]
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { cpu: 50m, memory: 32Mi }

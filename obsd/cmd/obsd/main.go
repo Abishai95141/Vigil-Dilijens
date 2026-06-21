@@ -1058,10 +1058,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			Departures:        providers.Departures,
 			AuthoredRelations: providers.AuthoredRelations,
 			Blindspots:        providers.Blindspots,
-			Referee:           providers.Referee,
+			// The MEASURED enrichment lanes for richer synthesis (off the digest, nil when
+			// their flag is off — the tool then states the lane is off): recent log patterns
+			// on a warned entity, what co-moves with its metric (associated-with, never
+			// causal), and what changed shortly before onset (an antecedent, never a cause).
+			LogTemplates: providers.LogTemplates,
+			Dependency:   providers.Dependency,
+			AuditChanges: providers.AuditChanges,
+			Referee:      providers.Referee,
 		}, mcpAdvisoryGatePassed, "vigil-obsd", graphRelease).HTTPHandler()
 		logger.Info("MCP harness enabled (v3 T-A + T-C/T-D + v3.1 synthesis relay)", "route", "/mcp",
-			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events get_root_cause_chain get_insights get_cross_service get_topology get_unexplained get_departures get_authored_relations get_blindspots validate_claim emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
+			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events get_root_cause_chain get_insights get_cross_service get_topology get_unexplained get_departures get_authored_relations get_blindspots get_log_templates get_dependency get_audit_changes validate_claim emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
 	}
 	if incidentMemory {
 		if findingsStore == nil {

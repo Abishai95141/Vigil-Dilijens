@@ -46,6 +46,21 @@ type Sources struct {
 	// signals — so the agent tells an authored cause from an unobservable modality
 	// before committing, instead of over-claiming a cause Vigil never had a sensor for.
 	Blindspots func() *api.BlindspotRegistryView
+	// LogTemplates is the MEASURED log-mining lane (doc 20 P4): deterministic Drain
+	// templates from pod logs — the recent log PATTERNS on a warned/degraded entity (the
+	// second layer for the unmapped tail; regex stays the authored first layer). A
+	// template is an observation, never a cause. nil ⇒ the lane is off (--logs-enabled).
+	LogTemplates func() *api.LogTemplatesView
+	// Dependency is the MEASURED metric-association graph (doc 20 P2): windowed
+	// correlation over hot series, surfaced as UNDIRECTED associated-with edges (never
+	// causal, never directional) — "what co-moves with the warned metric", leads to
+	// investigate. Association is not causation. nil ⇒ the lane is off (--assoc-enabled).
+	Dependency func() *api.DependencyView
+	// AuditChanges is the MEASURED apiserver-audit change feed (doc 20 P4 AUDIT): recent
+	// create/update/delete records — the arrow-of-time antecedents ("what changed shortly
+	// before an onset"). A change preceding a degradation is a co-occurrence in TIME,
+	// NEVER a proven cause. nil ⇒ the lane is off (--audit-enabled + --audit-log-path).
+	AuditChanges func() *api.AuditView
 	// Referee validates an external claim against the charter + authored graph
 	// (v3 T-D). Advisory — NEVER blocks. nil ⇒ the validate_claim tool reports off.
 	Referee func(claim string) api.ClaimVerdict
@@ -165,6 +180,9 @@ const (
 	toolDepartures     = "get_departures"
 	toolAuthoredRels   = "get_authored_relations"
 	toolBlindspots     = "get_blindspots"
+	toolLogTemplates   = "get_log_templates"
+	toolDependency     = "get_dependency"
+	toolAuditChanges   = "get_audit_changes"
 
 	toolValidateClaim = "validate_claim"
 	toolEmitAdvisory  = "emit_advisory"
@@ -185,7 +203,10 @@ const synthesisInstructions = "Vigil is a read-only, deterministic observability
 	"sentence through validate_claim, then emit via emit_advisory. " +
 	"Incident playbook: get_root_cause_chain (the spine) -> get_insights (evidence + the authored why) -> " +
 	"get_cross_service + get_topology (blast radius) -> get_warnings (what crosses a bar soon + the lead time) -> " +
-	"get_incidents (has it recurred / how often) -> get_events (discrete failures) -> get_unexplained + " +
+	"get_incidents (has it recurred / how often) -> get_events (discrete failures) -> " +
+	"get_log_templates (what the warned entity is logging now) + get_dependency (which signals co-move with its " +
+	"metric — associated-with, a lead to check, NEVER causal) + get_audit_changes (what CHANGED shortly before " +
+	"onset — an antecedent in time, NEVER a proven cause) -> get_unexplained + " +
 	"get_silence_ledger + get_blindspots (the honest blind spots — what is NOT watched and what Vigil structurally " +
 	"CANNOT see; if a degraded workload has no finding explaining it, the cause is likely a blind spot here — say so " +
 	"and recommend an out-of-band check, never blame a visible-but-unflagged object) -> draft -> validate_claim -> " +
@@ -263,6 +284,21 @@ func toolDefs() []toolDef {
 			InputSchema: emptyObjectSchema,
 		},
 		{
+			Name:        toolLogTemplates,
+			Description: "MEASURED — the log-mining lane: deterministic Drain templates from pod logs (the second, MEASURED layer for the unmapped tail; the authored regex stays the first layer). Each template is a recurring log-line PATTERN with an occurrence count and example pods — the recent log behaviour of a warned/degraded workload. Use it to corroborate WHAT an entity is logging around an incident; a log template is an observation, never a parsed semantic and never a cause. Off ⇒ stated honestly (needs --logs-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolDependency,
+			Description: "MEASURED — the metric-association graph: windowed correlation over hot series, surfaced as UNDIRECTED associated-with edges (never causal, never directional, barred from detection/forecasting). Use it to find WHICH other signals co-move with a warned metric — leads to investigate, not a cause. Association is NOT causation: an edge here is a co-occurrence, and a direction or a cause must come from get_authored_relations, never from this. Off ⇒ stated honestly (needs --assoc-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolAuditChanges,
+			Description: "MEASURED — the apiserver audit change feed: recent create/update/delete records on cluster objects (the arrow-of-time antecedents — 'what changed shortly before an onset'). A change that PRECEDES a degradation is a co-occurrence in TIME, NEVER a proven cause — surface it as a candidate antecedent to CHECK, not a verdict, and pair it with get_authored_relations/get_blindspots before attributing. Config-dependent (the apiserver audit log must be mounted); off ⇒ stated honestly (needs --audit-enabled + --audit-log-path).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
 			Name:        toolValidateClaim,
 			Description: "The HONEST-LABELER for your synthesis — it NEVER blocks; a flag is a labeling instruction, not a veto. Submit a drafted causal/forecast clause; it checks it against the charter + the AUTHORED graph and returns {flagged, reasons[{class}], matchedAuthored}. Use it to LABEL, not delete: matchedAuthored=true ⇒ an authored relation backs this, present it AS authored (quote it); flagged generated-causation ⇒ no authored relation backs it, keep it but label it YOUR hypothesis (not a Vigil fact); flagged future-certainty ⇒ you stated a projection as certain, soften to a band; flagged class-fusion ⇒ you called a PROJECTED subject MEASURED, separate the classes. Run every causal/forecast sentence through this before emit_advisory.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"claim":{"type":"string","description":"the drafted claim to referee"}},"required":["claim"],"additionalProperties":false}`),
@@ -322,6 +358,12 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.AuthoredRelations), "authored-relations map not available (graph not loaded)"), nil
 	case toolBlindspots:
 		return toolJSON(orNil(s.src.Blindspots), "blindspot registry not available (api off)"), nil
+	case toolLogTemplates:
+		return toolJSON(orNil(s.src.LogTemplates), "log-templates lane not enabled (needs --logs-enabled)"), nil
+	case toolDependency:
+		return toolJSON(orNil(s.src.Dependency), "dependency (association) lane not enabled (needs --assoc-enabled)"), nil
+	case toolAuditChanges:
+		return toolJSON(orNil(s.src.AuditChanges), "audit-changes lane not enabled (needs --audit-enabled + --audit-log-path)"), nil
 	case toolValidateClaim:
 		if s.src.Referee == nil {
 			return mustRaw(toolResult{Content: []toolContent{{Type: "text", Text: `{"available":false,"note":"the validate-claim referee is not enabled (needs --referee-enabled)"}`}}}), nil
