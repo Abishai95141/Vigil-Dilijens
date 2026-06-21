@@ -89,6 +89,35 @@ func testSources() Sources {
 				AuthoredLinks: []api.AuthoredLink{{Src: "PHEN_MEMORY_LEAK", Dst: "PHEN_OOM_KILL_CGROUP", Why: "Eventual outcome"}},
 			}, api.ClaimOpts{})
 		},
+		// --- operator-parity eyes (doc 23): each carries a distinctive marker so the
+		// round-trip tests prove the payload + class survive the MCP wire unchanged.
+		TraceGraph: func() *api.TraceGraphView {
+			return &api.TraceGraphView{Class: "MEASURED", Available: true, GeneratedAt: now, Note: "trace-graph-marker"}
+		},
+		Timeline: func() *api.TimelineView {
+			return &api.TimelineView{GeneratedAt: now, ProjectedNote: "timeline-marker"}
+		},
+		Onsets: func() *api.OnsetView {
+			return &api.OnsetView{Class: "MEASURED", Enabled: true, GeneratedAt: now, Note: "onset-marker"}
+		},
+		CausalHypotheses: func() *api.CausalHypothesesView {
+			return &api.CausalHypothesesView{Class: "DIRECTION-FREE", Enabled: true, GeneratedAt: now, Note: "cohyp-marker"}
+		},
+		Config: func() *api.ConfigView {
+			return &api.ConfigView{GeneratedAt: now, ClusterID: "cl", Note: "config-marker"}
+		},
+		Candidates: func() *api.CandidatesView {
+			return &api.CandidatesView{Class: "CANDIDATE", Available: true, GeneratedAt: now, Note: "candidate-marker"}
+		},
+		ProvisionalCoverage: func() *api.ProvisionalCoverageView {
+			return &api.ProvisionalCoverageView{Class: "CANDIDATE", Available: true, GeneratedAt: now, Note: "provcov-marker"}
+		},
+		Governance: func() *api.GovernanceView {
+			return &api.GovernanceView{Class: "MEASURED", Available: true, GeneratedAt: now, Note: "governance-marker"}
+		},
+		Findings: func() *api.FindingsView {
+			return &api.FindingsView{Class: "MEASURED", Available: true, GeneratedAt: now}
+		},
 	}
 }
 
@@ -259,6 +288,96 @@ func TestSynthesisLaneOffIsHonest(t *testing.T) {
 		}
 		if !strings.Contains(text, "available") {
 			t.Errorf("%s off-lane must state availability honestly; got %s", name, text)
+		}
+	}
+}
+
+// operatorParityTools is the full set of doc-23 eyes (every console surface the agent
+// must also see). Kept here so the list/round-trip/off tests stay in lockstep.
+var operatorParityTools = []string{
+	toolTraceGraph, toolTimeline, toolOnsets, toolCausalHypotheses,
+	toolFindings, toolConfig, toolCandidates, toolProvisionalCoverage, toolGovernance,
+}
+
+// TestOperatorParityToolsAdvertised proves all nine doc-23 tools are listed with an
+// inputSchema and a class-honest description (the discipline the agent reads).
+func TestOperatorParityToolsAdvertised(t *testing.T) {
+	s := New(testSources(), false, "vigil-test", "v3")
+	resp := call(t, s, "tools/list", "")
+	var r struct {
+		Tools []toolDef `json:"tools"`
+	}
+	if err := json.Unmarshal(resp.Result, &r); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]toolDef{}
+	for _, tl := range r.Tools {
+		byName[tl.Name] = tl
+	}
+	for _, name := range operatorParityTools {
+		tl, ok := byName[name]
+		if !ok {
+			t.Errorf("tools/list missing operator-parity tool %s", name)
+			continue
+		}
+		if len(tl.InputSchema) == 0 {
+			t.Errorf("%s missing inputSchema", name)
+		}
+	}
+	// The direction-free tool MUST frame itself as non-causal (the charter line C3 rides on).
+	if d := byName[toolCausalHypotheses].Description; !strings.Contains(d, "DIRECTION-FREE") || !strings.Contains(d, "NEVER assign") {
+		t.Errorf("causal-hypotheses tool must be framed direction-free + never-assign-direction; got %q", d)
+	}
+	// Candidates/provisional-coverage must NOT claim to be MEASURED/AUTHORED facts.
+	if d := byName[toolCandidates].Description; !strings.Contains(d, "CANDIDATE") {
+		t.Errorf("candidates tool must label status CANDIDATE; got %q", d)
+	}
+	if !strings.Contains(byName[toolTraceGraph].Description, "MEASURED") {
+		t.Error("trace-graph tool must label itself MEASURED")
+	}
+}
+
+// TestOperatorParityRoundTrips proves each new view survives the MCP wire with its
+// distinctive marker intact (no class/payload loss at the boundary).
+func TestOperatorParityRoundTrips(t *testing.T) {
+	s := New(testSources(), false, "vigil-test", "v3")
+	cases := []struct{ tool, want string }{
+		{toolTraceGraph, "trace-graph-marker"},
+		{toolTimeline, "timeline-marker"},
+		{toolOnsets, "onset-marker"},
+		{toolCausalHypotheses, "cohyp-marker"},
+		{toolCausalHypotheses, "DIRECTION-FREE"},
+		{toolConfig, "config-marker"},
+		{toolCandidates, "candidate-marker"},
+		{toolCandidates, "CANDIDATE"},
+		{toolProvisionalCoverage, "provcov-marker"},
+		{toolGovernance, "governance-marker"},
+		{toolFindings, `"available":true`},
+	}
+	for _, c := range cases {
+		resp := call(t, s, "tools/call", `{"name":"`+c.tool+`"}`)
+		text, isErr := toolText(t, resp)
+		if isErr {
+			t.Errorf("%s returned isError on a live source", c.tool)
+		}
+		if !strings.Contains(text, c.want) {
+			t.Errorf("%s did not preserve %q across the wire; got %s", c.tool, c.want, text)
+		}
+	}
+}
+
+// TestOperatorParityLaneOffIsHonest proves a nil source for each new tool is surfaced as
+// an honest "not available" text result (isError=false) — an off lane is a true state.
+func TestOperatorParityLaneOffIsHonest(t *testing.T) {
+	s := New(Sources{}, false, "vigil-test", "v3") // every source nil
+	for _, name := range operatorParityTools {
+		resp := call(t, s, "tools/call", `{"name":"`+name+`"}`)
+		text, isErr := toolText(t, resp)
+		if isErr {
+			t.Errorf("%s off-lane must not be isError (an off lane is a true state)", name)
+		}
+		if !strings.Contains(text, `"available":false`) {
+			t.Errorf("%s off-lane must state unavailable, got %s", name, text)
 		}
 	}
 }

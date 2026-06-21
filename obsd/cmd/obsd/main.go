@@ -1129,10 +1129,38 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			LogTemplates: providers.LogTemplates,
 			Dependency:   providers.Dependency,
 			AuditChanges: providers.AuditChanges,
-			Referee:      providers.Referee,
+			// operator-parity eyes (doc 23): the remaining console surfaces, given to the
+			// agent too. Same read-only snapshot funcs as the web /api — no new computation,
+			// no writer in scope (no-write-back holds). Timeline/Findings return (view,error)
+			// or need a build, so they are wrapped.
+			TraceGraph: providers.TraceGraph,
+			Timeline: func() *vapi.TimelineView {
+				if providers.Timeline == nil {
+					return nil
+				}
+				v, _ := providers.Timeline()
+				return v
+			},
+			Onsets:           providers.Onsets,
+			CausalHypotheses: providers.CausalHypotheses,
+			Findings: func() *vapi.FindingsView {
+				if providers.Findings == nil {
+					return nil
+				}
+				rows, err := providers.Findings(200)
+				if err != nil {
+					return nil
+				}
+				return vapi.BuildFindingsView(rows, time.Now().UTC(), providers.FindingsStaleAfter)
+			},
+			Config:              providers.Config,
+			Candidates:          providers.Candidates,
+			ProvisionalCoverage: providers.ProvisionalCoverage,
+			Governance:          providers.Governance,
+			Referee:             providers.Referee,
 		}, mcpAdvisoryGatePassed, "vigil-obsd", graphRelease).HTTPHandler()
-		logger.Info("MCP harness enabled (v3 T-A + T-C/T-D + v3.1 synthesis relay)", "route", "/mcp",
-			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events get_root_cause_chain get_insights get_cross_service get_topology get_unexplained get_departures get_authored_relations get_blindspots get_log_templates get_dependency get_audit_changes validate_claim emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
+		logger.Info("MCP harness enabled (v3 T-A + T-C/T-D + v3.1 synthesis relay + doc-23 operator parity)", "route", "/mcp",
+			"tools", "get_coverage get_silence_ledger get_warnings get_incidents get_events get_root_cause_chain get_insights get_cross_service get_topology get_unexplained get_departures get_authored_relations get_blindspots get_log_templates get_dependency get_audit_changes get_trace_graph get_timeline get_onsets get_causal_hypotheses get_findings get_config get_candidates get_provisional_coverage get_governance validate_claim emit_advisory", "advisoryGate", mcpAdvisoryGatePassed)
 	}
 	if incidentMemory {
 		if findingsStore == nil {

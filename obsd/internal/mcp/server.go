@@ -61,6 +61,47 @@ type Sources struct {
 	// before an onset"). A change preceding a degradation is a co-occurrence in TIME,
 	// NEVER a proven cause. nil ⇒ the lane is off (--audit-enabled + --audit-log-path).
 	AuditChanges func() *api.AuditView
+	// --- operator-parity eyes (doc 23): every surface a human operator reads in the
+	// console, given to the agent too. All read-only snapshot funcs (no writer in scope ⇒
+	// no-write-back STRUCTURAL). Writes — governance decisions, authoring a causal
+	// direction — stay HUMAN and are deliberately absent from this struct. ---
+	// TraceGraph is the MEASURED observed service call graph (doc 20 P4 TRACE): spans
+	// stitched into caller→callee edges — the OBSERVED topology, not an authored one. An
+	// edge is a co-occurrence of calls, never a cause. nil ⇒ off (--traces-enabled).
+	TraceGraph func() *api.TraceGraphView
+	// Timeline is the MEASURED chronological spine (doc 10 M4): phenomenon matches and
+	// loud-but-unexplained spans on one time axis — "what happened, in order". Adjacency in
+	// time is a co-occurrence, never a cause. nil ⇒ the surface is off.
+	Timeline func() *api.TimelineView
+	// Onsets is the MEASURED changepoint surface (doc 22 C2): the off-digest CUSUM time +
+	// direction a watched gauge series stepped — the precise "since when / which way",
+	// including sub-threshold shifts no bar caught. A step's timing is MEASURED; it is NEVER
+	// a cause. High-cardinality on a busy cluster (a substrate to filter, not a feed). nil ⇒ off.
+	Onsets func() *api.OnsetView
+	// CausalHypotheses is the DIRECTION-FREE co-onset surface (doc 22 C3): coupled series
+	// that co-stepped, staged for a HUMAN to author the direction. It carries NO cause and NO
+	// direction — surface each only as an association/lead; never assign a direction yourself
+	// (that is the operator's authorship, read back via get_authored_relations). nil ⇒ off.
+	CausalHypotheses func() *api.CausalHypothesesView
+	// Findings is the MEASURED persisted finding feed: matched-phenomenon rows including
+	// recently STALE ones ("last seen X ago") that get_insights (now-only) omits — read it for
+	// "what just fired / just cleared". A finding is a MEASURED match, never a cause. nil ⇒ off.
+	Findings func() *api.FindingsView
+	// Config is the runtime posture (doc 10 M6): cadences, graph release, forecast-gate state.
+	// The declared limits it reflects are the borrowed-normativity source for every bar. nil ⇒ off.
+	Config func() *api.ConfigView
+	// Candidates is the firewalled DGX candidate staging store (doc 20 P0), surfaced READ-ONLY:
+	// proposed graph extensions with status=CANDIDATE — NOT MEASURED, NOT AUTHORED, never read
+	// by the deterministic path. Never present a candidate as an active phenomenon. nil ⇒ off (--dgx-enabled).
+	Candidates func() *api.CandidatesView
+	// ProvisionalCoverage is the candidate-reconciled coverage projection (doc 20 P5): how much
+	// of the dark/unmapped surface the DGX lane has PROVISIONALLY classified. status=CANDIDATE —
+	// never present it as actual MEASURED coverage. nil ⇒ off (--dgx-enabled).
+	ProvisionalCoverage func() *api.ProvisionalCoverageView
+	// Governance is the candidate review queue (doc 20 + doc 12): pending proposals + the decided
+	// audit trail. READ-ONLY here — a promotion/rejection is always a NAMED HUMAN's decision,
+	// never the agent's. Use it to say "this is proposed and awaiting a human". nil ⇒ off.
+	Governance func() *api.GovernanceView
 	// Referee validates an external claim against the charter + authored graph
 	// (v3 T-D). Advisory — NEVER blocks. nil ⇒ the validate_claim tool reports off.
 	Referee func(claim string) api.ClaimVerdict
@@ -183,6 +224,16 @@ const (
 	toolLogTemplates   = "get_log_templates"
 	toolDependency     = "get_dependency"
 	toolAuditChanges   = "get_audit_changes"
+	// operator-parity eyes (doc 23)
+	toolTraceGraph          = "get_trace_graph"
+	toolTimeline            = "get_timeline"
+	toolOnsets              = "get_onsets"
+	toolCausalHypotheses    = "get_causal_hypotheses"
+	toolFindings            = "get_findings"
+	toolConfig              = "get_config"
+	toolCandidates          = "get_candidates"
+	toolProvisionalCoverage = "get_provisional_coverage"
+	toolGovernance          = "get_governance"
 
 	toolValidateClaim = "validate_claim"
 	toolEmitAdvisory  = "emit_advisory"
@@ -200,18 +251,26 @@ const synthesisInstructions = "Vigil is a read-only, deterministic observability
 	"already-computed cause — relay/narrate them, never derive a different one; (3) get_topology is structure (raw " +
 	"adjacency), not causation; (4) anything you infer BEYOND an authored relation (get_authored_relations is the only " +
 	"legitimate causal basis) is YOUR hypothesis — label it so, never as a Vigil fact; (5) run every causal/forecast " +
-	"sentence through validate_claim, then emit via emit_advisory. " +
-	"Incident playbook: get_root_cause_chain (the spine) -> get_insights (evidence + the authored why) -> " +
-	"get_cross_service + get_topology (blast radius) -> get_warnings (what crosses a bar soon + the lead time) -> " +
-	"get_incidents (has it recurred / how often) -> get_events (discrete failures) -> " +
-	"get_log_templates (what the warned entity is logging now) + get_dependency (which signals co-move with its " +
-	"metric — associated-with, a lead to check, NEVER causal) + get_audit_changes (what CHANGED shortly before " +
-	"onset — an antecedent in time, NEVER a proven cause) -> get_unexplained + " +
-	"get_silence_ledger + get_blindspots (the honest blind spots — what is NOT watched and what Vigil structurally " +
-	"CANNOT see; if a degraded workload has no finding explaining it, the cause is likely a blind spot here — say so " +
-	"and recommend an out-of-band check, never blame a visible-but-unflagged object) -> draft -> validate_claim -> " +
-	"emit_advisory. The remediation is YOURS to reason from ops knowledge + application context you gather; Vigil " +
-	"supplies only the grounded, classed facts."
+	"sentence through validate_claim, then emit via emit_advisory; (6) get_causal_hypotheses and get_candidates are " +
+	"PROPOSALS, not facts — a co-onset pair has NO direction until a human authors it (it then appears in " +
+	"get_authored_relations), and a candidate is never an active phenomenon. Surface them as leads / awaiting-a-human, " +
+	"never as conclusions. " +
+	"You have the SAME eyes as a human operator — every console surface is a tool here. Incident playbook: " +
+	"get_root_cause_chain (the spine) -> get_insights (evidence + the authored why) -> get_findings (what just fired " +
+	"or just cleared, incl. stale 'last seen X ago') -> get_timeline (lay it all out in order — what came first) -> " +
+	"get_cross_service + get_topology + get_trace_graph (blast radius: authored cascade, bound graph, AND the observed " +
+	"call graph) -> get_warnings (what crosses a bar soon + the lead time) + get_onsets (the precise time + direction a " +
+	"series stepped — 'since when, which way', incl. sub-threshold) -> get_incidents (has it recurred / how often) -> " +
+	"get_events (discrete failures) -> get_log_templates (what the warned entity is logging now) + get_dependency " +
+	"(which signals co-move — associated-with, a lead, NEVER causal) + get_audit_changes (what CHANGED shortly before " +
+	"onset — an antecedent in time, NEVER a proven cause) + get_causal_hypotheses (direction-free co-onset leads — " +
+	"NEVER assign their direction) -> get_unexplained + get_silence_ledger + get_blindspots (the honest blind spots — " +
+	"what is NOT watched and what Vigil structurally CANNOT see; if a degraded workload has no finding explaining it, " +
+	"the cause is likely a blind spot here — say so and recommend an out-of-band check, never blame a " +
+	"visible-but-unflagged object) -> get_coverage + get_provisional_coverage + get_candidates + get_governance + " +
+	"get_config (what is watched, what is only PROPOSED and awaiting a human, and the declared posture that set the " +
+	"bars) -> draft -> validate_claim -> emit_advisory. The remediation is YOURS to reason from ops knowledge + " +
+	"application context you gather; Vigil supplies only the grounded, classed facts."
 
 var emptyObjectSchema = json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`)
 
@@ -298,6 +357,52 @@ func toolDefs() []toolDef {
 			Description: "MEASURED — the apiserver audit change feed: recent create/update/delete records on cluster objects (the arrow-of-time antecedents — 'what changed shortly before an onset'). A change that PRECEDES a degradation is a co-occurrence in TIME, NEVER a proven cause — surface it as a candidate antecedent to CHECK, not a verdict, and pair it with get_authored_relations/get_blindspots before attributing. Config-dependent (the apiserver audit log must be mounted); off ⇒ stated honestly (needs --audit-enabled + --audit-log-path).",
 			InputSchema: emptyObjectSchema,
 		},
+		// --- operator-parity eyes (doc 23): the remaining console surfaces ---
+		{
+			Name:        toolTraceGraph,
+			Description: "MEASURED — the observed service call graph (TRACE lane): sampled spans stitched into caller→callee edges, the OBSERVED runtime topology (distinct from the bound graph in get_topology and the authored relations in get_authored_relations). Use it to see who actually called whom around an incident and to widen the blast radius. Coverage is partial (spans are sampled — censusComplete is always false); an edge is a co-occurrence of calls, NEVER a cause. Off ⇒ stated honestly (needs --traces-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolTimeline,
+			Description: "MEASURED — the chronological spine: phenomenon matches and loud-but-unexplained spans laid on one time axis (with the projected lane stated when empty). Use it to ORDER what happened — which degradation came first, what overlapped — before reasoning about a chain. Adjacency in time is a co-occurrence, never proof of cause; the only causal orientation is an authored relation (get_authored_relations).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolOnsets,
+			Description: "MEASURED — the changepoint surface (off-digest CUSUM): the precise TIME and DIRECTION a watched gauge series stepped, including sub-threshold shifts that crossed no bar. Use it to answer 'since when, and which way' for a degraded metric, and to corroborate an early warning's timing. The timing/direction are MEASURED; a step is NEVER a cause. High-cardinality on a busy cluster — filter to the entities you are investigating, don't read it whole. Off ⇒ stated honestly (needs --onset-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolCausalHypotheses,
+			Description: "DIRECTION-FREE co-occurrence leads (NOT causal): pairs of series that stepped together in a window, surfaced for a HUMAN OPERATOR to author the direction. This tool carries NO cause and NO direction by design. Present each ONLY as 'these two co-moved — a lead to investigate'; NEVER assign a direction or a cause yourself, and never restate observed order as causation. A direction becomes legitimate only after an operator authors it, at which point it appears in get_authored_relations. Off ⇒ stated honestly (needs --cohypothesis-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolFindings,
+			Description: "MEASURED — the persisted finding feed: matched-phenomenon rows over time, INCLUDING recently STALE ones marked 'last seen X ago' (which get_insights, a now-only join, omits). Use it for 'what just fired or just cleared' and to see a finding's first/last-seen span and completeness. A stale row is a past match, not a current state — respect the stale flag; a finding is a MEASURED match, never a cause.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolConfig,
+			Description: "MEASURED (about own configuration) — the runtime posture: cluster id, params/graph release, scrape + evaluation cadences, the Tier-B budget, and the forecast lane's gate state. The declared limits it reflects are the BORROWED-NORMATIVITY source — every bar comes from the customer's own declared config, never learned. Use it to ground 'what cadence/version produced this' and 'is forecasting gated on'.",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolCandidates,
+			Description: "CANDIDATE (status, NOT a provenance class — explicitly NEITHER MEASURED NOR AUTHORED): the firewalled Dynamic-Graph-eXtension staging store of PROPOSED graph extensions (stray-metric nodes, agent/modality edges, co-occurrence hypotheses). The deterministic detection path NEVER reads these. Use it to see what Vigil has PROPOSED but not adopted; NEVER present a candidate as an active phenomenon or an authored fact. Off ⇒ stated honestly (needs --dgx-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolProvisionalCoverage,
+			Description: "CANDIDATE (a projection, NOT measured coverage): how much of the dark/unmapped surface the DGX lane has PROVISIONALLY classified — strays reconciled to nodes/groups, agent and modality proposals, all by status. Use it to explain the PATH to closing a coverage gap (what could be promoted), paired with get_coverage (the actual MEASURED coverage). Never present provisional numbers as real coverage. Off ⇒ stated honestly (needs --dgx-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
+			Name:        toolGovernance,
+			Description: "MEASURED (about own pipeline) — the candidate review queue: pending proposals awaiting review plus the decided audit trail (promoted | rejected | shadow) with counts. READ-ONLY: a promotion or rejection is ALWAYS a named human's decision (you cannot make one — there is no decision tool). Use it to say 'this is proposed and awaiting a human', and to cite who decided what, never to act or to treat a pending item as adopted.",
+			InputSchema: emptyObjectSchema,
+		},
 		{
 			Name:        toolValidateClaim,
 			Description: "The HONEST-LABELER for your synthesis — it NEVER blocks; a flag is a labeling instruction, not a veto. Submit a drafted causal/forecast clause; it checks it against the charter + the AUTHORED graph and returns {flagged, reasons[{class}], matchedAuthored}. Use it to LABEL, not delete: matchedAuthored=true ⇒ an authored relation backs this, present it AS authored (quote it); flagged generated-causation ⇒ no authored relation backs it, keep it but label it YOUR hypothesis (not a Vigil fact); flagged future-certainty ⇒ you stated a projection as certain, soften to a band; flagged class-fusion ⇒ you called a PROJECTED subject MEASURED, separate the classes. Run every causal/forecast sentence through this before emit_advisory.",
@@ -364,6 +469,24 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.Dependency), "dependency (association) lane not enabled (needs --assoc-enabled)"), nil
 	case toolAuditChanges:
 		return toolJSON(orNil(s.src.AuditChanges), "audit-changes lane not enabled (needs --audit-enabled + --audit-log-path)"), nil
+	case toolTraceGraph:
+		return toolJSON(orNil(s.src.TraceGraph), "trace lane not enabled (needs --traces-enabled)"), nil
+	case toolTimeline:
+		return toolJSON(orNil(s.src.Timeline), "timeline surface not available (api off)"), nil
+	case toolOnsets:
+		return toolJSON(orNil(s.src.Onsets), "onset lane not enabled (needs --onset-enabled)"), nil
+	case toolCausalHypotheses:
+		return toolJSON(orNil(s.src.CausalHypotheses), "causal-hypothesis lane not enabled (needs --cohypothesis-enabled)"), nil
+	case toolFindings:
+		return toolJSON(orNil(s.src.Findings), "findings feed not available (needs --db)"), nil
+	case toolConfig:
+		return toolJSON(orNil(s.src.Config), "config surface not available (api off)"), nil
+	case toolCandidates:
+		return toolJSON(orNil(s.src.Candidates), "candidate store not enabled (needs --dgx-enabled)"), nil
+	case toolProvisionalCoverage:
+		return toolJSON(orNil(s.src.ProvisionalCoverage), "provisional coverage not enabled (needs --dgx-enabled)"), nil
+	case toolGovernance:
+		return toolJSON(orNil(s.src.Governance), "governance queue not enabled (needs --dgx-enabled)"), nil
 	case toolValidateClaim:
 		if s.src.Referee == nil {
 			return mustRaw(toolResult{Content: []toolContent{{Type: "text", Text: `{"available":false,"note":"the validate-claim referee is not enabled (needs --referee-enabled)"}`}}}), nil
