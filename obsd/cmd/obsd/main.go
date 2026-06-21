@@ -1827,6 +1827,14 @@ const coOnsetRecency = 5 * time.Minute
 // far more relevant set than the whole cluster — only series that actually stepped recently).
 const coOnsetMaxStreams = 512
 
+// coHypMinCoeff is the STRICT correlation floor for a staged cross-workload hypothesis (a
+// busy cluster has many weak co-movers); coHypMaxOut caps how many of the STRONGEST leads are
+// staged per cycle so the firewalled review surface stays reviewable.
+const (
+	coHypMinCoeff = 0.85
+	coHypMaxOut   = 30
+)
+
 // coHypothesisLoop stages DIRECTION-FREE co-occurrence candidates for CROSS-WORKLOAD pairs
 // that stepped together (doc 22 C3). Cross-workload reach (the C3 follow-up): instead of
 // reading the capped cluster-wide assoc lane (whose 256-stream cap excluded most workloads),
@@ -1860,14 +1868,19 @@ func coHypothesisLoop(ctx context.Context, logger *slog.Logger, candStore *candi
 				continue // need at least two distinct recently-onsetting series to pair
 			}
 			// Correlate ONLY the onsetting subset (cross-workload, no cluster-wide cap), reusing
-			// the assoc primitive so the coupling is the SAME MEASURED associated-with edge.
+			// the assoc primitive so the coupling is the SAME MEASURED associated-with edge. A
+			// STRICT correlation floor (0.85, vs the dependency lane's 0.6) keeps only strong
+			// couplings — a busy cluster has many weakly-correlated co-movers that would flood
+			// the review surface.
 			series := snapshotSeriesForKeys(in, keys)
-			edges := assoc.Associate(time.Now().UTC(), series, assoc.DefaultParams)
+			strict := assoc.DefaultParams
+			strict.MinAbsCoefficient = coHypMinCoeff
+			edges := assoc.Associate(time.Now().UTC(), series, strict)
 			pairs := make([]cohypothesis.CoupledPair, 0, len(edges))
 			for _, e := range edges {
 				pairs = append(pairs, cohypothesis.CoupledPair{A: e.A, B: e.B, Coefficient: e.Coefficient})
 			}
-			n, err := cohypothesis.HypothesizeAndStage(candStore, time.Now().UTC(), recent, pairs, window, graphVersion)
+			n, err := cohypothesis.HypothesizeAndStage(candStore, time.Now().UTC(), recent, pairs, window, graphVersion, coHypMaxOut)
 			if err != nil {
 				logger.Error("cohypothesis: stage", "err", err)
 				continue

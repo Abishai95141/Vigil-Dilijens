@@ -23,6 +23,7 @@ package cohypothesis
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -38,11 +39,13 @@ type CoupledPair struct {
 	Coefficient float64 // Pearson r of the association (a MEASURED magnitude, not a learned weight)
 }
 
-// Hypothesize stages a direction-free co-occurrence candidate for every coupled pair whose
-// BOTH endpoints registered an onset within `window` of each other (using each series' most
-// recent onset). Pure + deterministic: same onsets + pairs + window + version ⇒ identical
-// candidates (the content id dedups re-staging).
-func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration, graphVersion string) []candidate.Candidate {
+// Hypothesize stages a direction-free co-occurrence candidate for every CROSS-WORKLOAD coupled
+// pair whose BOTH endpoints registered an onset within `window` of each other (using each
+// series' most recent onset). To stay reviewable on a busy cluster — where hundreds of series
+// step together and many infra metrics co-move — it keeps only the strongest `maxOut`
+// (highest |coefficient|, then tightest co-onset); maxOut ≤ 0 means no cap. Pure +
+// deterministic: same inputs ⇒ identical candidates (the content id dedups re-staging).
+func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration, graphVersion string, maxOut int) []candidate.Candidate {
 	latest := map[string]onset.Onset{}
 	for _, o := range onsets {
 		k := o.EntityCEI + "|" + o.Metric
@@ -50,7 +53,12 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 			latest[k] = o
 		}
 	}
-	var out []candidate.Candidate
+	type scored struct {
+		c     candidate.Candidate
+		coef  float64
+		delta int64
+	}
+	var cand []scored
 	for _, p := range pairs {
 		oa, okA := latest[p.A]
 		ob, okB := latest[p.B]
@@ -77,7 +85,7 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 			first = b
 		}
 		deltaSec := int64(absDur(oA.At.Sub(oB.At)) / time.Second)
-		out = append(out, candidate.Candidate{
+		cand = append(cand, scored{coef: p.Coefficient, delta: deltaSec, c: candidate.Candidate{
 			Kind:     candidate.KindCausalHypothesis,
 			Relation: "co-occurrence",
 			Subject:  a + " ~ " + b,
@@ -99,7 +107,27 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 				Source: "co-onset", Method: "associated-co-onset", GraphVersion: graphVersion,
 				Inputs: []string{a, b},
 			},
-		})
+		}})
+	}
+	// Keep only the strongest leads (highest |coef|, then tightest co-onset, then subject) so
+	// the firewalled store stays reviewable on a busy cluster; ties broken by subject for
+	// determinism. maxOut ≤ 0 ⇒ no cap.
+	sort.Slice(cand, func(i, j int) bool {
+		ai, aj := math.Abs(cand[i].coef), math.Abs(cand[j].coef)
+		if ai != aj {
+			return ai > aj
+		}
+		if cand[i].delta != cand[j].delta {
+			return cand[i].delta < cand[j].delta
+		}
+		return cand[i].c.Subject < cand[j].c.Subject
+	})
+	if maxOut > 0 && len(cand) > maxOut {
+		cand = cand[:maxOut]
+	}
+	out := make([]candidate.Candidate, len(cand))
+	for i := range cand {
+		out[i] = cand[i].c
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Subject < out[j].Subject })
 	return out
@@ -107,9 +135,9 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 
 // HypothesizeAndStage runs Hypothesize and stages each candidate into the firewalled store,
 // returning the count staged. now is injected (no time.Now in the package).
-func HypothesizeAndStage(s *candidate.Store, now time.Time, onsets []onset.Onset, pairs []CoupledPair, window time.Duration, graphVersion string) (int, error) {
+func HypothesizeAndStage(s *candidate.Store, now time.Time, onsets []onset.Onset, pairs []CoupledPair, window time.Duration, graphVersion string, maxOut int) (int, error) {
 	n := 0
-	for _, c := range Hypothesize(onsets, pairs, window, graphVersion) {
+	for _, c := range Hypothesize(onsets, pairs, window, graphVersion, maxOut) {
 		if _, err := s.Put(now, c); err != nil {
 			return n, err
 		}
