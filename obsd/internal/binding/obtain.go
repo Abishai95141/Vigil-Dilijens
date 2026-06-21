@@ -86,6 +86,18 @@ var nativeTools = map[string]bool{
 // arrive via the events lane / KSM, so they stay obtainable. The value is the accurate reason.
 var unscrapedEndpointTools = map[string]string{
 	"kubelet": "kubelet /metrics endpoint not scraped by obsd (only cAdvisor, via the kubelet, is ingested)",
+	// These control-plane / system components are PRESENT in every cluster but obsd scrapes
+	// NONE of their own /metrics endpoints — so a Metric/Log signal whose only emitting tool is
+	// one of them is honestly out-of-scope (not "full"). Without this, coverage over-claimed
+	// e.g. PHEN_DNS_FAILURE as observability:"full" while the blindspot surface declared DNS
+	// invisible — two honesty surfaces contradicting each other (the full-test HIGH finding).
+	// Their Event/State signals (via the events lane / KSM) stay obtainable — modality-aware.
+	"coredns":                 "CoreDNS /metrics endpoint not scraped by obsd (no resolver-metrics lane)",
+	"kube-apiserver":          "kube-apiserver /metrics endpoint not scraped by obsd (the API is used for identity/watch, not metric scrape)",
+	"k8s-api":                 "kube-apiserver /metrics endpoint not scraped by obsd (the API is used for identity/watch, not metric scrape)",
+	"kube-proxy":              "kube-proxy /metrics endpoint not scraped by obsd",
+	"kube-scheduler":          "kube-scheduler /metrics endpoint not scraped by obsd",
+	"kube-controller-manager": "kube-controller-manager /metrics endpoint not scraped by obsd",
 }
 
 // scrapedMetricModalities are the signal modalities that ride a /metrics scrape — the only

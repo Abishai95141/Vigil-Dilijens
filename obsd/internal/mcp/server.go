@@ -275,7 +275,7 @@ func toolDefs() []toolDef {
 		},
 		{
 			Name:        toolAuthoredRels,
-			Description: "AUTHORED — the curated causal map: every directed phenomenon→phenomenon relation Vigil's ontology authors (Src→Dst + the verbatim why), plus the phenomenon vocabulary (id → human aliases). This is the ONLY legitimate causal basis: an observed co-occurrence is an authored CAUSE only if a relation for it appears here; otherwise it is coincidence (say so). Use it to tell authored causes from co-occurrence and to map ids in a chain/finding to meaning. ~13 relations — Vigil never invents a 14th.",
+			Description: "AUTHORED — the curated causal map: every directed phenomenon→phenomenon relation Vigil's ontology authors (Src→Dst + the verbatim why), plus the phenomenon vocabulary (id → human aliases). This is the ONLY legitimate causal basis: an observed co-occurrence is an authored CAUSE only if a relation for it appears here; otherwise it is coincidence (say so). Use it to tell authored causes from co-occurrence and to map ids in a chain/finding to meaning. A small, fixed, curated set — Vigil never invents a relation not authored here.",
 			InputSchema: emptyObjectSchema,
 		},
 		{

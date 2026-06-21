@@ -60,8 +60,12 @@ func TestGateSignalsKindCluster(t *testing.T) {
 		{"SIG_node_nf_conntrack_entries_6161e704", OutOfScopeUnobtainable, "node-exporter"},
 		// KSM family: not deployed.
 		{"SIG_kube_pod_family_30_metrics_3f7fa86f", OutOfScopeUnobtainable, "kube-state-metrics"},
-		// CoreDNS: deployed in kind.
-		{"SIG_coredns_family_full_enumeration_in_network_sheet_9e645682", Obtainable, ""},
+		// CoreDNS: deployed in kind, BUT obsd scrapes no CoreDNS /metrics endpoint — so a
+		// resolver-Metric signal whose only tool is coredns is OUT-OF-SCOPE with the accurate
+		// reason (it was previously over-claimed obtainable via tool-presence, contradicting the
+		// blindspot surface — the full-functionality-test HIGH finding). MODALITY-AWARE: coredns
+		// Event/State signals stay obtainable.
+		{"SIG_coredns_family_full_enumeration_in_network_sheet_9e645682", OutOfScopeUnobtainable, "CoreDNS /metrics endpoint not scraped"},
 		// PSI metrics: node-exporter absent dominates (out-of-scope), even though
 		// CONFIG_PSI would be indeterminate.
 		{"SIG_node_pressure_psi_12_metrics_ba96070d", OutOfScopeUnobtainable, "node-exporter"},

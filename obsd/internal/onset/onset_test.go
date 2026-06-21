@@ -136,6 +136,35 @@ func TestOnsetFlatBaselineStepClampsMagnitude(t *testing.T) {
 	}
 }
 
+// A SUSTAINED RAMP (a memory leak — the live failure mode the full test exercised) must
+// register onsets, all "up", and the EARLIEST near the ramp's start. A continuous ramp
+// re-trips the CUSUM so Detect returns several onsets per series; the surfacing layer keeps
+// the latest (onsetLoop) — here we only assert detection + direction + that the first onset
+// lands early in the ramp.
+func TestOnsetSustainedRampDetectsUpOnsets(t *testing.T) {
+	// flat baseline for 30, then a steady ramp of ~+0.6σ/sample for the rest.
+	s := series(120, func(i int) float64 {
+		v := 100.0
+		if i >= 30 {
+			v += 1.2 * float64(i-30)
+		}
+		return v + 0.4*float64((i*7)%3-1) // mild deterministic jitter
+	})
+	got := Detect("cei", "container_memory_working_set_bytes", s, DefaultParams())
+	if len(got) == 0 {
+		t.Fatal("a sustained ramp must register at least one onset")
+	}
+	for _, o := range got {
+		if o.Direction != "up" {
+			t.Errorf("ramp onset direction = %q, want up", o.Direction)
+		}
+	}
+	firstIdx := int(got[0].At.Sub(base) / (15 * time.Second))
+	if firstIdx < 26 || firstIdx > 40 {
+		t.Errorf("first onset at index %d, want near the ramp start (~30)", firstIdx)
+	}
+}
+
 // A sub-threshold step (one that never crosses any bar) is still caught — this is the gap
 // the existing primitives leave that onset closes.
 func TestOnsetCatchesSubThresholdShift(t *testing.T) {

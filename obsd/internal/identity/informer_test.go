@@ -52,6 +52,13 @@ func startWatcher(t *testing.T, client *fake.Clientset, st *Store) (context.Canc
 
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
+	// -race tolerance: the race detector slows informer sync several-fold, so a tight 3s
+	// deadline flakes (e.g. TestInformerSameNameRecreate). cond() returns the instant it is
+	// true, so flooring the deadline never slows a passing test — it only stops false-negative
+	// timeouts under -race.
+	if timeout < 15*time.Second {
+		timeout = 15 * time.Second
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if cond() {

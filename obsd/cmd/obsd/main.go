@@ -2022,6 +2022,12 @@ func authorCausalDirection(cs *candidate.Store, graphVersion string, now time.Ti
 	if c == nil {
 		return &vapi.CausalDirectionResult{OK: false, CandidateID: req.CandidateID, Message: "no such causal hypothesis"}
 	}
+	if c.Status != candidate.StatusCandidate {
+		// Already decided — a second authoring must not silently flip the direction (the
+		// full-test re-author finding). Promotion is terminal; re-deciding needs a fresh review.
+		return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID, Status: string(c.Status),
+			Message: "this hypothesis is already " + string(c.Status) + " — re-authoring a decided hypothesis is not allowed"}
+	}
 	a, b := anyStr(c.Payload["a"]), anyStr(c.Payload["b"])
 	switch req.Direction {
 	case "not-causal":
