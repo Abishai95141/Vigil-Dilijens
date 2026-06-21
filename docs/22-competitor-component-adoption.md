@@ -121,10 +121,14 @@ the rolled-up targets into the `RoleSeriesReader`.
 - **churn rescue**: 4 short-lived pods (6 bins each, < MinContext) → per-pod is `short-context`-dead; the role worst-member series is **24 continuous points** → forecast fires. Role-series adds capability the per-pod path structurally cannot.
 - full `go test -race ./...` green; `cmd/obsd` builds CGO-free; non-role path byte-identical (delegates unchanged).
 
-**Remaining (honest):** this is unit-level proof against the real pipeline with a *scripted*
-clock. The flag stays **opt-in / gate-pending** until a **live churn backtest** against real
-TimesFM + a churning cluster certifies band coverage/accuracy (the standing forecast-class
-gate) — not faked here. Enabling-by-default waits on that gate.
+**CERTIFIED against real TimesFM (the C1 follow-up — `just role-series-gate`).** The class is no
+longer gate-pending: a real-clock backtest (`roleseries_clockd_integration_test.go`, needs
+`just clockd CLOCK=timesfm`) scores the REAL TimesFM forecast on the churn-stable worst-member
+role series — built by the actual `AggregateRoleSeries` over churning members — against the
+realized future of **3 distinct crossing events**. All 3 pass: band coverage **0.79 / 0.84 /
+0.90** (gate window [0.65, 0.98] — calibrated, never overconfident) and **every event recalled**
+with adequate advance lead. The flag stays **opt-in** (default-off is a deployment choice, not a
+correctness gate); enabling it now rests on a real-TimesFM certification, not a scripted clock.
 
 ### C2 — CUSUM onset primitive (MEASURED timing) — *value-gated*
 

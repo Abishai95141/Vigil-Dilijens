@@ -386,6 +386,14 @@ regime-shift-gate:
     go test -race -count=1 ./obsd/internal/forecast/ -run 'RegimeShift'
     go test -race -count=1 ./obsd/internal/params/ -run 'Forecast|Validate'
 
+# Role-series forecast certification (doc 22 C1): scores the REAL clock's output on the
+# churn-stable worst-member role series (built by the actual AggregateRoleSeries) against the
+# realized future of ≥3 distinct crossing events — band coverage ∈[0.65,0.98] + per-event
+# advance-warning recall. Needs `just clockd CLOCK=timesfm` on :50051 (CLOCKD_TARGET to
+# override). Exit 0 = PASSED (the role-series class is certified against real TimesFM).
+role-series-gate:
+    go test -tags=integration -count=1 -v ./obsd/internal/forecast/ -run TestRoleSeriesClockdChurnCert
+
 # --- Operator console (console/ — the doc-10 surfacing layer) ---------------
 # The dummy testing UI is archived at web-legacy/. The real console is console/.
 
