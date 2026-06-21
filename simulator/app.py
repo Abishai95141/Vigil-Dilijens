@@ -61,6 +61,23 @@ with st.sidebar:
     st.metric("MCP tools", vigil.mcp_tool_count())
 
     st.divider()
+    st.subheader("🚦 Steady traffic")
+    st.caption("Keep a healthy baseline load flowing (the gateway forward rate — well under every "
+               "SLO bar, so it NEVER triggers a failure) so the pipeline stays warm and cascade "
+               "scenarios fire immediately without a warm-up. Heal / Reset returns here, not to idle.")
+    _son = st.session_state.get("steady_on", False)
+    _sr = st.session_state.get("steady_rate", 12)
+    steady_on = st.toggle("Keep system warm", value=_son)
+    steady_rate = st.slider("Baseline rate (polls/s)", faults.IDLE_RATE, faults.STEADY_RATE_MAX, _sr, 1,
+                            help="× 5 assets = samples/s; stays well below the 200/s LOAD_SURGE bar",
+                            disabled=not steady_on)
+    if steady_on != _son or (steady_on and steady_rate != _sr):
+        st.session_state["steady_on"], st.session_state["steady_rate"] = steady_on, steady_rate
+        r = faults.set_steady_traffic(steady_rate) if steady_on else faults.clear_steady_traffic()
+        msg = f"steady traffic ON → rate {faults.baseline_rate()}" if steady_on else "steady traffic OFF (idle rate 5)"
+        (st.success if r.ok else st.error)(f"{msg} · {r.summary()[:40]}")
+
+    st.divider()
     st.subheader("🩹 Safety")
     st.caption("Returns the namespace to a clean baseline: clears all sim flags, restores patched limits, "
                "removes disk ballast, scales everything back to 1.")

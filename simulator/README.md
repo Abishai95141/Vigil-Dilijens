@@ -29,6 +29,13 @@ Opens at http://localhost:8501. The sidebar shows live cluster + Vigil status an
 - **Reversible.** Every fault has a **Heal**; the sidebar **HEAL ALL / RESET** returns the
   namespace to a clean baseline (clears sim flags, restores patched limits, removes disk
   ballast, scales everything back to 1).
+- **Steady traffic (keep warm).** The sidebar **🚦 Steady traffic** toggle holds a healthy
+  baseline load on the gateway (forward rate, default 12 → 60 samples/s, capped at 30 → 150,
+  always well below the 200/s LOAD_SURGE bar) so the whole pipeline stays active — historian
+  writes, queue churn, asset-api freshness, and the observed-flow edges — and a cascade
+  scenario fires *immediately* without a warm-up. It never trips a failure (verified: queue
+  stays bounded, no phenomenon), failures applied on top still fire (a load surge overrides
+  it), and **Heal / HEAL ALL returns to this steady baseline, not to idle**.
 
 ## Layout
 

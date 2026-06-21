@@ -23,6 +23,35 @@ BACKBONE = ["edgenius-broker", "genix-historian", "genix-datalake", "asset-regis
 # remember original limits so heal restores exactly what was there
 _ORIG_LIMITS: dict[tuple[str, str], str] = {}
 
+# --- Steady traffic (keep the pipeline warm) --------------------------------
+# The sim's idle gateway forward rate is 5. Raising it to a STEADY, HEALTHY baseline keeps
+# the whole pipeline active (broker → stream → historian writes, queue churn, asset-api
+# freshness, and the observed-flow edges), so a cascade scenario fires immediately instead
+# of waiting for the system to warm up. The LOAD_SURGE bar is rate(app_requests) > 200
+# samples/s = rate × 5 assets, so a baseline must stay well under 40 to be unambiguously
+# healthy (never trip a failure). The current baseline is what heal/reset returns to.
+IDLE_RATE = 5
+STEADY_RATE_MAX = 30          # 30 × 5 = 150 samples/s, comfortably below the 200/s bar
+_baseline_rate = IDLE_RATE    # updated by the Steady-traffic control; heal targets this
+
+
+def baseline_rate() -> int:
+    return _baseline_rate
+
+
+def set_steady_traffic(rate: int) -> "kube.Result":
+    """Establish a steady healthy baseline load on the gateway (clamped below the bar)."""
+    global _baseline_rate
+    _baseline_rate = max(IDLE_RATE, min(int(rate), STEADY_RATE_MAX))
+    return kube.exec_ctl(SIM_GATEWAY, f"rate={_baseline_rate}")
+
+
+def clear_steady_traffic() -> "kube.Result":
+    """Return the gateway to its idle rate (the baseline heal/reset targets)."""
+    global _baseline_rate
+    _baseline_rate = IDLE_RATE
+    return kube.exec_ctl(SIM_GATEWAY, f"rate={IDLE_RATE}")
+
 
 @dataclass
 class Fault:
@@ -135,6 +164,12 @@ def _flap_heal(target, value=None):
     return kube.scale(target, 1)
 
 
+def _heal_gateway_rate(target, value=None):
+    """Heal a gateway-rate fault back to the CURRENT steady baseline (not idle), so a load
+    surge applied on top of steady traffic returns to the warm baseline, never to idle."""
+    return kube.exec_ctl(target, f"rate={baseline_rate()}")
+
+
 # --- THE CATALOG ------------------------------------------------------------
 
 CATALOG: list[Fault] = [
@@ -176,7 +211,7 @@ CATALOG: list[Fault] = [
         effect="rate(app_requests_total) climbs above the 200 req/s declared SLO.",
         tests=["Anomaly detection", "Load surge", "Borrowed-normativity bar"],
         expected="PHEN_APP_LOAD_SURGE on opcua-gateway (a MEASURED rate crossing a declared bar, not a learned anomaly).",
-        inject_fn=_ctl_inject(lambda v: f"rate={int(v or 80)}"), heal_fn=_ctl_heal("rate=5"),
+        inject_fn=_ctl_inject(lambda v: f"rate={int(v or 80)}"), heal_fn=_heal_gateway_rate,
     ),
     Fault(
         id="connectivity_loss", name="Field connectivity loss", icon="🔌", category="Application", control="toggle",

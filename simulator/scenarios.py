@@ -175,9 +175,11 @@ def global_reset() -> list[tuple[str, kube.Result]]:
         ev.set()
     _OSC.clear()
 
-    # clear all sim /ctl flags
+    # clear all sim /ctl flags — the gateway returns to the current steady baseline (the
+    # steady rate when "keep warm" is on, else idle), never below it, so HEAL ALL keeps the
+    # pipeline warm rather than dropping it to idle.
     for dep, q in [
-        (faults.SIM_GATEWAY, "disconnect=0&rate=5"),
+        (faults.SIM_GATEWAY, f"disconnect=0&rate={faults.baseline_rate()}"),
         (faults.SIM_STREAM, "slow=0&cpuburn=0"),
         (faults.SIM_ANALYZER, "leak=off"),
     ]:
