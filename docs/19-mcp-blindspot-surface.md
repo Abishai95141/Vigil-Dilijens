@@ -1,10 +1,11 @@
 # 19 — MCP Blindspot Surface
 
-**Status:** PROPOSED (design plan). The substrate this builds on — the silence
+**Status:** BUILT (live). The substrate this builds on — the silence
 ledger, the coverage report, the obtainability gate, and the read-only MCP server —
-is BUILT and live (citations below). The **blindspot registry tool** described in §6
-is the one new, unbuilt component; everything else assembles existing, classed
-outputs.
+is BUILT and live (citations below), and the **blindspot registry tool** described in §6
+(`get_blindspots`) is now also BUILT and wired (`obsd/internal/api/blindspots.go`,
+registered in `obsd/internal/mcp/server.go`, with `blindspots_test.go`). This doc records
+the original design; one design point changed in the build — see §6.
 
 **Role in suite:** The MCP-boundary extension of the charter's *honest partial
 coverage* commitment (doc 01). Vigil already states absence to a human operator
@@ -66,7 +67,7 @@ reachability counts and blockers are from the coverage-harm audit (v4, 2026-06-1
 |---|---|---|
 | `NODE_NOT_READY` | critical-now | node-condition `Ready` derivation — "same machinery as DISK, a trivial follow-up now" (audit) |
 | `SCHEDULING_FAILURE` | reachable | events-lane (`FailedScheduling`) reachable, but `involved_kind` handling differs; or a scheduler scrape (audit) |
-| `INIT_CONTAINER_FAILURE` | events-reachable, bigger | **zero base KG members** — needs an authored member first, then the events lane (audit) |
+| `INIT_CONTAINER_FAILURE` | now WIRED | resolved in release v0.13.0 (`init-container-failure-v1.yaml`): an authored KSM init-restart-counter member + `kube/config.go` reading `Spec.InitContainers`. Fires DEGRADED via the KSM lane. |
 | `POD_STUCK_TERMINATING` | events/derivative | reachable via events / pod-status derivation; not yet authored |
 | `PDB_VIOLATION` | deferred | **zero CEI mapping + zero members** — deferred, feasibility unverified (audit) |
 | `PLEG_HANGS`, `CRI_ERRORS`, `RUNTIME_IO_STALL`, `KUBELET_API_CONNECTION` | HIGH | p99 **histograms** needing bucket-interpolation ingest (doc-02 §8 `data_type` queue), NOT scalar-ingestable today; the G3 kubelet-main `/metrics` lane (audit). See §2(c). |
@@ -261,12 +262,13 @@ see.*
 
 ---
 
-## 6. Implementation notes (PROPOSED)
+## 6. Implementation notes (AS BUILT)
 
-A single new read-only MCP tool, `get_blindspots`, returning the blindspot registry.
-It follows the exact pattern of the existing read tools (a reader func on
-`mcp.Sources`, an entry in `toolDefs()`, a dispatch case — `server.go:23-47, 188-262`),
-so no-write-back stays **structural** (no setter, no mutable handle in scope).
+A single read-only MCP tool, `get_blindspots`, returning the blindspot registry, is
+BUILT (`obsd/internal/api/blindspots.go`). It follows the exact pattern of the existing
+read tools (a reader func on `mcp.Sources`, an entry in `toolDefs()`, a dispatch case —
+`server.go`), so no-write-back stays **structural** (no setter, no mutable handle in
+scope).
 
 **Tool contract.**
 - Name: `get_blindspots`. Class: `MEASURED (about own coverage)`. Empty input schema.
@@ -282,15 +284,17 @@ so no-write-back stays **structural** (no setter, no mutable handle in scope).
   their lane is off; `server.go:22-23`).
 
 **Sourcing.**
-- **STATIC** (`static[]`): a new authored table under
-  `ontology/graph/overlays/experimental/` listing the named-but-uningested phenomena
-  with their category, reason, and `unblockedBy` ingest path. Authored only via
-  governance (doc 12) — it is AUTHORED content about coverage, kept terse and
-  verbatim, with author + version provenance like every other note (doc 01:25). The
-  v0.8.0 seed is §2(b) (modality-absent), the zero-member entries of §2(a)
-  (`INIT_CONTAINER_FAILURE`, `PDB_VIOLATION`), and the §2(c) epistemic floors as fixed
-  text. The epistemic floors are *constants* of the architecture, not per-cluster, so
-  they live here unconditionally.
+- **STATIC** (`static[]`): an AUTHORED, versioned-in-code table (`staticBlindspots` in
+  `obsd/internal/api/blindspots.go`) listing the named-but-uningested phenomena with their
+  category, reason, and `unblockedBy` ingest path. *(Design change from the original plan:
+  this was to live in a governance overlay under `ontology/graph/overlays/experimental/`;
+  the build instead authored it as a reviewed Go constant table — still terse,
+  provenance-bearing, and changed only by code review.)* The seed is §2(b)
+  (modality-absent), the zero-member entries of §2(a), and the §2(c) epistemic floors as
+  fixed text; the implemented table now seeds a broader set (APPLICATION_LOGS,
+  APP_DB_INTERNAL_METRICS, L7_PROTOCOL_SEMANTICS, INTRA_CONTAINER_ATTRIBUTION, …). The
+  epistemic floors are *constants* of the architecture, not per-cluster, so they live here
+  unconditionally.
 - **DYNAMIC** (`dynamic[]`): a pure re-projection of `binding.Result` +
   `AvailabilityReport`, identical in spirit to how the silence ledger is built
   (`silence.go:19-27`). Each `OutOfScopeUnobtainable` / `Indeterminate` signal and each
@@ -314,10 +318,10 @@ other payload (`api/charter.go:71-85`).
 
 ## Caveats (honesty about this doc)
 
-- Phenomenon counts (**11 WIRED**, ~30 unwired) reflect the **v0.8.0** snapshot
-  (2026-06-17); they are a snapshot, not a ceiling. Future releases wire more (e.g.
-  task #82 level-based leak, task #138 feasible implementation-debt phenomena), so the
-  static registry must be re-derived per release, not frozen.
+- Phenomenon counts in this doc reflect a **v0.8.0-era snapshot** (2026-06-17); they are a
+  snapshot, not a ceiling. The graph is now at release **v0.13.0** and later releases have
+  wired more (e.g. `DISK_FILLING`, `INIT_CONTAINER_FAILURE`), so the static registry
+  (`obsd/internal/api/blindspots.go`) must be re-derived per release, not frozen.
 - The **environment constraints** in §2(d) (PSI kernel ≥ 4.20, `kubelet_volume_stats=0`
   on kind, `container_oom_events_total=0`) are **hardness facts for a cluster type, not
   design gaps**. kind is deliberately constrained for dev (doc 14 §3.1 honest caveat);

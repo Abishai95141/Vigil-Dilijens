@@ -31,14 +31,14 @@ never substitute a shallow proxy to appear done. Report outcomes faithfully.
 - [x] `ontology/schema/graph.schema.json` (v1-skeleton) + `graph/example-oom.yaml` (scaffold example)
 - [x] `web/` — Vite/React/TS scaffold + provenance design tokens + vitest (deps install on demand)
 - [x] `deploy/` — 3-node kind config + read-only RBAC
-- [x] Root + per-subtree `CLAUDE.md`; README; corpus README
+- [x] Root + per-subtree `DEVELOPMENT.md`; README; corpus README
 - [x] Verified: `go build ./...`, `go vet ./...`, `go test -race ./...`, `just lint`, clockd/harness suites all green
 
 ---
 
 ## Phase 0a — Foundations  (identity is *prerequisite zero*)
 
-- [x] **01 Charter** ratified — classes, composition rules, prohibited derivations (encoded in CLAUDE.md as review rules)
+- [x] **01 Charter** ratified — classes, composition rules, prohibited derivations (encoded in DEVELOPMENT.md as review rules)
 - [x] **01 M2** Class carriage convention named in component contracts
 - [x] **02 M1** Schema v1 — `ontology/schema/kg.schema.json` matches the real KG node/edge shape (10 node + 12 edge types); validates the graph.
 - [x] **02 M2** Reference-graph INGESTED: 842-node KG in `ontology/graph/k8s_signal_kg.json`; runtime loader `obsd/internal/graph` (typed, indexed, content-hashed; resolves phenomenon membership from participates_in / relations from phenomenon_relation) — tested against the real KG (842/3759/589, 457 metric).
@@ -457,3 +457,42 @@ breaks replay + launders PROJECTED→MEASURED). Build order **A → B → D → 
   direction from AUTHORED relations ONLY; silent intermediates traversed-not-asserted).
 - [ ] **Cap D — multi-hop projected cascade** (one forecast root, inherited WIDENING band).
 - [ ] **Cap C — anomaly** (capacity-crossing ships with A; band-departure off-digest PROJECTED).
+
+> Note: the checklist above is the v3 plan-state. All four doc-15 capabilities (A·B·D·C)
+> were subsequently completed (see the departure-gate narrative earlier in this section).
+> The v4–v6 lanes built afterward are summarized below — this log had not been extended
+> for them.
+
+## v4–v6 lanes — telemetry/modality/agent expansion (status as of 2026-06-21, branches v4–v6)
+
+The work after doc 15 was largely additive lanes, each off-digest, non-gating, and gated
+by its own `--flag` (default off, so replay stays byte-identical). All are documented in
+`docs/16–30`. Built and wired into `obsd/cmd/obsd/main.go`:
+
+- **Telemetry ingestion** — KSM lane (`--ksm-enabled`, released v0.5.0), events lane
+  (`--events-enabled`), cross-service flow lane (`--flow-enabled`, doc 15-cross-service),
+  histogram→quantile lift (`--histogram-quantiles`).
+- **New modalities** — logs (`--logs-enabled`, `internal/logtmpl`, `get_log_templates`),
+  traces (`--traces-enabled`, `internal/trace`, `/api/trace-graph`), audit
+  (`--audit-enabled`, `internal/audit`, `get_audit_changes`).
+- **Anomaly + causal** — CUSUM onset (`--onset-enabled`, `internal/onset`, `get_onsets`),
+  association (`--assoc-enabled`, `internal/assoc`), direction-free co-hypotheses
+  (`--cohypothesis-enabled`, `internal/cohypothesis`, `get_causal_hypotheses`; now bounded
+  by TTL+cap, doc 28), offline causal-discovery (`--causal-discovery-path`, doc 29).
+  Band-departure (Cap C, `--departure-enabled`) remains **gate-pending**
+  (`phaseCDepartureGatePassed=false`).
+- **Agent + governance** — the DGX agent lane (`--dgx-enabled` / `--dgx-agent-enabled`,
+  `internal/dgx`, doc 20/21 — PROPOSE→VERIFY→PROMOTE; the agent has no write tool),
+  governance promotion path (doc 12 + console UI), MCP operator-parity (doc 23 — ~27
+  read-only tools exposing every console surface).
+- **Forecasting** — churn-stable role-series forecasting (`--forecast-role-series`),
+  **CERTIFIED** against real TimesFM (`just role-series-gate` 3/3); regime-shift
+  contamination flag; late-onset CUSUM trend rescue (doc 27).
+- **Alerting** — the off-digest email alert lane (`--alerts-enabled`, `internal/notify` +
+  `cmd/obsd/notify.go`, doc 30): Gmail SMTP transport, durable `alerts.db` store, fatigue
+  controls, import-firewall test. (The earlier WhatsApp/OpenWA sketch was scrapped.)
+- **Graph** — ontology now at release **v0.13.0** (20 overlays), adding e.g.
+  `DISK_FILLING` and `INIT_CONTAINER_FAILURE` (the latter closing a former blind-spot row).
+- **Surfaces** — the `console/` operator frontend (Vite/React) and a Streamlit
+  failure-simulation console for abb-genix; full bring-up/onboarding + incident-simulation
+  runbooks (docs 24–26).

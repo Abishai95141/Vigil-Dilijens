@@ -6,7 +6,7 @@
 into Vigil, *how* they survive the charter (doc 01), and *how each will be proven
 to actually work* — not merely to pass a unit test.
 
-> Discipline for this whole arc (restating the engineering mandate, CLAUDE.md):
+> Discipline for this whole arc (restating the engineering mandate, DEVELOPMENT.md):
 > **build robust and complete; never fall back to a shallow proxy to make a goal
 > look met.** Every component below earns its place with a real experiment against
 > real behaviour. **If a component proves valueless after honest dev, it is

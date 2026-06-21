@@ -104,7 +104,7 @@ a real cloud disk** (see [§7](#7-why-cloud-actually-adds-value)).
 ## 3. Cloud cluster choice
 
 **Primary recommendation: k3s on a single cloud VM.** This is the cheapest, closest-to-local
-option, and it's already the documented next step — `deploy/CLAUDE.md` literally says *"stand
+option, and it's already the documented next step — `deploy/DEVELOPMENT.md` literally says *"stand
 up the k3s-on-VMs staging cluster."* (The dev machine itself already runs k3s, so this isn't
 new ground.) k3s ships the **same default storage provisioner** (rancher `local-path`) that
 kind uses, so the PVCs bind with **zero manifest edits**.
@@ -336,7 +336,7 @@ bind step. None of this blocks the demo.
 
 - **Single node ≠ node-pressure realism.** One node can't show the 2-hop noisy-neighbour /
   node-pressure phenomena (that's what the 3-node `vigil` cluster, `deploy/kind/cluster.yaml`,
-  is for — `deploy/CLAUDE.md` calls "two workers the floor" for those). On the cloud
+  is for — `deploy/DEVELOPMENT.md` calls "two workers the floor" for those). On the cloud
   single-node, **demo container-/app-/cascade-level phenomena**, and say node-level pressure
   is out of scope for this cluster.
 - **`local-path` has a PVC blind spot.** On k3s-on-VM default storage, `DISK_FILLING` on a

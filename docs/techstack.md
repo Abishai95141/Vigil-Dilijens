@@ -22,7 +22,7 @@ Python is non-negotiable for 09 and half of 11 (TimesFM is Python/PyTorch; backt
 
 1. **One monorepo.** All three languages, the ontology content, the blueprint docs, and the corpus fixtures in a single repository — agents work best with the whole system greppable.
 2. **`just` is the single command surface.** Every action an agent or human ever takes is a `just` recipe: `just test`, `just lint`, `just up` (kind cluster + add-ons + workload), `just demo`, `just record-bundle`, `just replay`, `just gen` (codegen). No bare command knowledge required.
-3. **CLAUDE.md hierarchy.** Root CLAUDE.md: architecture map (pointing into `docs/` = the 00–14 suite), the charter's prohibited derivations as code-review rules, command index, invariants ("the hot path never touches disk", "no semantic fields in clock protos"). Per-package CLAUDE.md: the package's contract, its owning blueprint doc, do/don't list, test command. The TimesFM repo ships its own SKILL.md for agents — vendor it beside the clockd service.
+3. **DEVELOPMENT.md hierarchy.** Root DEVELOPMENT.md: architecture map (pointing into `docs/` = the 00–14 suite), the charter's prohibited derivations as code-review rules, command index, invariants ("the hot path never touches disk", "no semantic fields in clock protos"). Per-package DEVELOPMENT.md: the package's contract, its owning blueprint doc, do/don't list, test command. The TimesFM repo ships its own SKILL.md for agents — vendor it beside the clockd service.
 4. **Determinism-first testing.** The blueprint's replay guarantee (05/07) doubles as the testing strategy: golden-file fixtures in `testdata/` (recorded bundles in miniature), byte-identical assertions, `go test -race` always, injected clocks (no `time.Now` in logic), table-driven tests. Agents verify their own work by re-running; flaky tests poison agent loops, so hermetic unit tests are network-free and integration tests live behind a build tag that requires a kind cluster.
 5. **No CGO anywhere in the Go tree.** Pure-Go dependencies only (this dictates the SQLite driver choice) so `go test ./...` works in any sandbox, cross-compiles trivially, and never needs a C toolchain.
 6. **Committed codegen.** `buf generate` output is committed, not gitignored — generated types must be greppable by the agent.
@@ -46,7 +46,7 @@ Python is non-negotiable for 09 and half of 11 (TimesFM is Python/PyTorch; backt
 | 03 | Identity & correlation | `obsd/internal/identity` | Go |
 | 04 | Binding & generalization | `obsd/internal/binding` | Go |
 | 05 | Store + observation ("qss") | `obsd/internal/qss`, `obsd/internal/observe` | Go |
-| 06 | Selection | `obsd/internal/select` | Go |
+| 06 | Selection | `obsd/internal/selection` (`select` is a reserved Go keyword) | Go |
 | 07 | Detection | `obsd/internal/detect` | Go |
 | 08 | Unexplained channel | `obsd/internal/unexplained` | Go |
 | 09 | Clock client / clock service | `obsd/internal/clock` (client) · `clockd/` (service) | Go · Python |
@@ -124,15 +124,15 @@ Own thin store per `14` §2.3: in-memory rings (hot, 60 min, the only hot-path r
 ## 13. Repository layout
 
 ```
-/                       CLAUDE.md · justfile · README
-├── docs/               the blueprint suite 00–14 + techstack.md (this file)
+/                       DEVELOPMENT.md · justfile · README
+├── docs/               the blueprint suite 00–14 (core) + 15–30 (extension tracks) + techstack.md (this file)
 ├── proto/              contracts (buf-managed; generated code committed)
 ├── ontology/           schema/ · graph/ (YAML content) · releases/
 ├── obsd/               Go modular monolith
 │   ├── cmd/obsd        runtime binary
 │   ├── cmd/replay      harness replay runner
-│   └── internal/       identity · binding · qss · observe · select ·
-│                       detect · unexplained · clock · graph · api · params
+│   └── internal/       identity · binding · qss · observe · selection ·
+│                       detect · unexplained · clock · graph · api · params · …
 ├── clockd/             Python TimesFM service (uv project, vendored SKILL.md)
 ├── harness/            Python analytics: backtests · falsification · reports
 ├── web/                Vite/React app

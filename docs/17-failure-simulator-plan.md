@@ -222,7 +222,7 @@ that verbatim note, never an empty "all clear".
 ## 6. Safety rails
 
 The cluster constraints are documented and non-negotiable
-(doc 14 §3.1, `deploy/CLAUDE.md`):
+(doc 14 §3.1, `deploy/DEVELOPMENT.md`):
 
 - **kind nodes share ONE ~405GB Docker VM disk**, and there are **3 nodes total**
   (1 control + 2 workers — the floor for topology/pressure phenomena) **sharing

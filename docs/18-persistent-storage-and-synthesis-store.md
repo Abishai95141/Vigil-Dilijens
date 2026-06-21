@@ -106,10 +106,13 @@ path," not a shortcut. The following are rebuilt every tick and lost on restart:
 The MCP adapter (`internal/mcp`) is **READ-ONLY** (`doc.go:1`, `:24-28`). Its
 `Sources` struct is intentionally a set of *reader funcs* with no setter, writer, or
 mutable handle in scope, so no-write-back is **structural**
-(`server.go:18-47`). It exposes **14 tools** (`server.go:148-165`): twelve already-classed
+(`server.go:18-47`). It exposes **~27 tools** (`server.go:toolDefs()`): the already-classed
 view readers — `get_coverage`, `get_silence_ledger`, `get_warnings`, `get_incidents`,
 `get_events`, `get_insights`, `get_root_cause_chain`, `get_cross_service`,
-`get_topology`, `get_unexplained`, `get_departures`, `get_authored_relations` — plus
+`get_topology`, `get_unexplained`, `get_departures`, `get_authored_relations`,
+`get_blindspots`, `get_log_templates`, `get_dependency`, `get_audit_changes`,
+`get_trace_graph`, `get_timeline`, `get_onsets`, `get_causal_hypotheses`, `get_findings`,
+`get_config`, `get_candidates`, `get_provisional_coverage`, `get_governance` — plus
 `validate_claim` (the honest-labeler referee, v3 T-D — *never* blocks) and
 `emit_advisory` (returns a labelled **ADVISORY** 4th class to the caller and **writes
 nothing anywhere**, `doc.go:26-28`; gated until its backtest passes).
@@ -379,7 +382,7 @@ The rules, drawn from doc 01:
 - **Query surface:** read-only `As-Of` and `Between(t0, t1)` query funcs added to
   `internal/store`, exposed to the MCP relay as **new read-only tools** (e.g.
   `get_episode_history`, `get_forecast_calibration`) — added to the `Sources` reader-func
-  struct exactly like the existing twelve, so no-write-back stays structural.
+  struct exactly like the existing read-only tools, so no-write-back stays structural.
 
 ---
 
@@ -387,10 +390,14 @@ The rules, drawn from doc 01:
 
 - **Part B is PROPOSED, not built.** No table in §5 exists in the code today. The
   current verified state is Part A only.
-- **No alerts / notification store exists.** A search of `obsd/` for `alert_config`,
-  `AlertConfig`, or `WhatsApp` returns no matches. The WhatsApp escalation work is
-  documented *design intent* in the memory notes, not built — any alert-history store is
-  a separate future track, not part of this ledger.
+- **An alerts/notification lane now exists** (doc 30) — owning package
+  `obsd/internal/notify` (`store.go` is the durable alert store in `alerts.db`, with
+  `dispatch.go`/`gmail.go` transport and `cmd/obsd/notify.go` the where/when mapping),
+  gated by `--alerts-enabled` (default off) and enforced off-digest by an import-firewall
+  test. It is a separate off-digest, non-gating lane, **not** part of this proposed
+  synthesis ledger. The earlier WhatsApp/OpenWA sketch was scrapped in favour of Gmail
+  SMTP. A richer alert-*history* synthesis store (ACK/snooze, recurrence mining) remains a
+  future track.
 - **The charter is the hard constraint, not a guideline.** Any storage expansion that
   persisted model text as a reason, a learned threshold, or a fused-class row would fail
   the doc-11 charter battery. The ledger is designed *around* that audit; it is not

@@ -29,15 +29,20 @@ decision, not the row.**
 | Governance | CEI-fallback: ~1 node + edges **per stray metric** | ~650 | [`candidate/er.go:71`](../obsd/internal/candidate/er.go), [`main.go:3255`](../obsd/cmd/obsd/main.go) |
 | Governance | dgx-agent: one edge **per (stray, entity)** pair | ~200–300 | [`dgx/agent.go:314`](../obsd/internal/dgx/agent.go) |
 | Governance | phenomenon candidates: **one per signature** (already aggregated) | ~dozens | [`candidate/phenomenon.go`](../obsd/internal/candidate/phenomenon.go) |
-| Causal | co-onset: **O(pairs of co-stepping streams)**; top-30/cycle but a *different* 30 each cycle; **no total cap, no expiry** | 171+ and climbing | [`cohypothesis/cohypothesis.go:48`](../obsd/internal/cohypothesis/cohypothesis.go), [`main.go:1898`](../obsd/cmd/obsd/main.go) |
+| Causal | co-onset: **O(pairs of co-stepping streams)**; top-30/cycle but a *different* 30 each cycle; **now bounded** by a TTL + total cap on the candidate store | ~tens (was 171+ before the bound) | [`cohypothesis/cohypothesis.go:48`](../obsd/internal/cohypothesis/cohypothesis.go), [`main.go:1973`](../obsd/cmd/obsd/main.go) |
 
 Key contributing facts:
 - Candidate identity is content-keyed (SHA256 of kind/subject/relation/identity-payload/
   evidence, [`store.go:516-563`](../obsd/internal/candidate/store.go)). Re-staging the
   same item **updates in place** — so dedup of *identical* items works. The flood is
   **distinct** items, not duplicates.
-- Causal hypotheses have **no total cap and no TTL** — staged pairs accumulate in SQLite
-  at `status=candidate` indefinitely; the top-30 cap is per-cycle only.
+- Causal hypotheses are now bounded by a TTL **and** a total cap (commit 9602f2b):
+  [`candidate.Store.ExpireStale`](../obsd/internal/candidate/store.go) ages out any
+  `status=candidate` co-occurrence not re-observed within the TTL (default 15m,
+  `COHYP_TTL`-overridable) and [`CapKind`](../obsd/internal/candidate/store.go) keeps only
+  the most-recently-updated `coHypMax`; both run every co-onset tick
+  ([`main.go:1973`](../obsd/cmd/obsd/main.go)) and never touch DECIDED rows (the audit
+  trail). The per-cycle top-30 still bounds what each cycle stages.
 - The governance APIs **dump everything** — no pagination, filter, or grouping at the
   wire ([`api/governance.go:81`](../obsd/internal/api/governance.go),
   [`api/candidates.go:40`](../obsd/internal/api/candidates.go)).
@@ -102,7 +107,8 @@ truth, every client and the MCP agent see the same cohorts. The existing `groupP
 accordion generalizes into the frontend renderer.
 
 ## 7. Open items (pending the incoming plan)
-- Total-cap + TTL/expiry for staged causal hypotheses (none today).
+- ~~Total-cap + TTL/expiry for staged causal hypotheses (none today).~~ **DONE**
+  (commit 9602f2b: `candidate.Store.ExpireStale` TTL 15m + `CapKind` total cap).
 - Whether equiv-group becomes the *default* stray review unit (reduce-at-source) vs. only
   a cohort dimension at surfacing.
 - Filter/search/sort + drill-down virtualization on both pages (absent today).
