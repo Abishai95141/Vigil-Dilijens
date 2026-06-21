@@ -1,0 +1,79 @@
+{
+  "class": "CANDIDATE (PROJECTED) \u2014 direction-free leads from offline causal discovery; operator authors direction",
+  "method": "fixed-declared-lag enrichment + PCMCI+ (tigramite ParCorr)",
+  "params": {
+    "lag_set_bins": [
+      0,
+      1,
+      2,
+      4
+    ],
+    "tau_max": 3,
+    "pc_alpha": 0.05,
+    "bin_seconds": 15.0
+  },
+  "before_lag0_cross_edges": 26,
+  "after_directed_cross_candidates": 6,
+  "shortlist": [
+    {
+      "from": "stream.queue",
+      "to": "gateway.req",
+      "lag_bins": 0,
+      "lag_seconds": 0,
+      "coefficient": 0.506,
+      "contemporaneous": true,
+      "leadlag_hint_bins": 0,
+      "leadlag_r": 0.68
+    },
+    {
+      "from": "sensors.cpu",
+      "to": "gateway.cpu",
+      "lag_bins": 2,
+      "lag_seconds": 30,
+      "coefficient": 0.37,
+      "contemporaneous": false,
+      "leadlag_hint_bins": 2,
+      "leadlag_r": 0.549
+    },
+    {
+      "from": "stream.dl_writes",
+      "to": "gateway.req",
+      "lag_bins": 0,
+      "lag_seconds": 0,
+      "coefficient": 0.354,
+      "contemporaneous": true,
+      "leadlag_hint_bins": -4,
+      "leadlag_r": 0.51
+    },
+    {
+      "from": "gateway.req",
+      "to": "stream.cpu",
+      "lag_bins": 0,
+      "lag_seconds": 0,
+      "coefficient": 0.351,
+      "contemporaneous": true,
+      "leadlag_hint_bins": 0,
+      "leadlag_r": 0.571
+    },
+    {
+      "from": "analyzer.cpu",
+      "to": "assetapi.cpu",
+      "lag_bins": 0,
+      "lag_seconds": 0,
+      "coefficient": 0.331,
+      "contemporaneous": true,
+      "leadlag_hint_bins": 4,
+      "leadlag_r": 0.262
+    },
+    {
+      "from": "gateway.req",
+      "to": "sensors.cpu",
+      "lag_bins": 2,
+      "lag_seconds": 30,
+      "coefficient": 0.307,
+      "contemporaneous": false,
+      "leadlag_hint_bins": 0,
+      "leadlag_r": 0.583
+    }
+  ]
+}
