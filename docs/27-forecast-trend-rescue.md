@@ -99,6 +99,33 @@ started, confidence is low, it will sharpen" rather than either silence or false
   is being forecast but is still far from its 243 Mi bar, so no card fires yet — it would warn
   as the creep approaches, which the old gate never would because it stayed silenced.)
 
+## Forecast accuracy of a rescued series — early vs corrected (live)
+
+A second live run drove pdm-analyzer toward a lowered **121.6 Mi** bar (steady 12 MB/min
+creep) and captured the forecast card at every 15 s step. **Actual crossing: 12:05:15.**
+
+| stage | mem | projected crossing | error vs actual | band |
+|---|---|---|---|---|
+| watching (38→93 Mi) | — | `no-crossing-within-horizon` | — | (rescued, not silenced) |
+| **early** (first card) | 95 Mi | 12:06:45 | **+90s (late)** | **wide**, far-edge beyond horizon |
+| mid | 99 Mi | 12:06:31 | +76s | moderate |
+| **corrected** | 113 Mi | 12:05:43 | **+28s** | **tight** |
+| corrected (near) | 119 Mi | 12:05:32 | **+17s** | tight |
+
+**Result:** the forecast was correct and behaved exactly as the cold-start design intends —
+it started **wide and rough** (~90 s late, honestly labelled *wide* + *beyond-horizon*, never
+false precision) and **converged tight and accurate** (~17–28 s late) as the slope matured.
+It was consistently *conservative* (projected slightly late, never early — the safe error
+direction for a leak warning), and gave a **~2 min 13 s lead** on this fast creep (which
+scales up proportionally for a gentle real-world creep). Throughout the early phase
+(38→93 Mi) the gate reported `no-crossing-within-horizon`, **not** `flat-series` — i.e. the
+trend rescue kept it *forecast* where the old gate would have *silenced* it.
+
+Honest caveat: the dedicated `EarlyOnset` flag did not trigger here — during the true
+cold-start window the forecast honestly projected *no crossing yet*, so there was no early
+card to flag. The flag is the safety net for a steeper/closer creep that projects a crossing
+in its first few slope points; the wide→tight convergence it exists to caveat *was* observed.
+
 ## A note on lead time (the related worry)
 
 Lead time ≈ `(bar − value) / ramp_rate`, bounded by when the model confidently projects a
