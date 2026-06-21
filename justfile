@@ -302,6 +302,17 @@ ksm-gate:
 assoc-gate:
     go test -race ./obsd/internal/assoc/...
 
+# alerts gate (docs/30) — the off-digest email alert lane holds its contract: the
+# fatigue controls fire (edge-trigger + per-key cooldown + coalesce-to-one-digest +
+# quiet hours + token-bucket rate limit), a send failure records nothing (the fact
+# retries, never a silent drop), render is deterministic, every clause carries a
+# provenance class, the system scaffolding is causal-token-free and a PROJECTED clause
+# keeps the "projected" register, AND no deterministic package imports the lane
+# (the import-firewall). Hermetic (an in-memory store + a fake notifier; no network,
+# no SMTP). Exit 0 = PASSED.
+alerts-gate:
+    go test -race ./obsd/internal/notify/...
+
 # dgx-agent gate (doc 20 P3) — the agent harness functions + its charter gates hold:
 # the LLM PROPOSES, the harness gates (GROUNDING: every cited ref must exist in the
 # context; EVIDENCE FLOOR; STRUCTURAL: a causal edge is rejected — causation only via the

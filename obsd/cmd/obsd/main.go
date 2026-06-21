@@ -55,6 +55,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/kube"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/logtmpl"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/mcp"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/notify"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/observe"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/onset"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
@@ -130,6 +131,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		tracesPath          = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
 		causalDiscoveryPath = fs.String("causal-discovery-path", "", "doc 29 §B: path to the OFFLINE causal-discovery harness JSON shortlist (harness/causal-discovery/ — fixed-lag + PCMCI-pruned candidate links). Each interval the file is read and its links are staged as DIRECTION-FREE causal-hypothesis candidates (PCMCI's direction is a PROJECTED hint; a named operator authors the arrow at /api/causal-hypotheses/author). Empty ⇒ off. Needs --dgx-enabled (the candidate store). Off-digest; never feeds detection (the candidate firewall enforces it).")
 		forecastRoleSeries  = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin worst-member-toward-bar of its live member pods — max below an `above` bar, so it stays comparable to the per-pod bar; OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default (opt-in); off = byte-identical (the forecast feeds per-pod targets unchanged). CERTIFIED against real TimesFM — `just role-series-gate` passes 3/3 churn-leak crossing events (band coverage in [0.65,0.98] + per-event advance-warning recall).")
+		alertsOn            = fs.Bool("alerts-enabled", false, "docs/30: the off-digest email alert lane — mail CLASSED facts (cascade chain forms, OOM/crash fires, forecast crossing) with fatigue controls (edge-trigger + per-key cooldown + coalesce + quiet hours + rate limit). OFF by default; off = byte-identical (the lane is never constructed, never touches the digest). NON-GATING: a send failure is logged + retried, never blocks detection. Needs ALERT_SMTP_USER/ALERT_SMTP_PASSWORD/ALERT_TO env (a Gmail App Password); never hard-coded. Enforced off-digest by the notify import-firewall test.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -211,7 +213,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -286,7 +288,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -1192,6 +1194,32 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		eventsEnabled, eventsConds, eventsDets, &eventsSnap, &eventsView, forecastRoleSeries)
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore, forecastRoleSeries, store)
+	}
+
+	// docs/30: the off-digest email alert lane. Reads the per-tick CLASSED views the
+	// inventory/forecast loops publish (cascade chains, OOM/crash findings + events,
+	// forecast crossings) and mails the new facts with fatigue controls. OFF by default;
+	// off = byte-identical (the lane is never constructed and never touches the digest).
+	// Non-gating: a send failure is logged + retried, never blocks detection. The notify
+	// import-firewall test proves the deterministic path can't reach this package.
+	if alertsEnabled {
+		if cfg, user, pass, host, mapCfg, interval, ok := notifyConfigFromEnv(logger); ok {
+			alertPath := ""
+			if dbPath != "" {
+				base := strings.TrimSuffix(filepath.Base(dbPath), filepath.Ext(dbPath))
+				alertPath = filepath.Join(filepath.Dir(dbPath), base+".alerts.db")
+			}
+			if as, err := notify.Open(alertPath); err != nil {
+				logger.Error("alert lane disabled: store open failed (non-gating)", "err", err)
+			} else {
+				defer as.Close()
+				disp := notify.NewDispatcher(cfg, as, notify.NewSMTPNotifier(host, user, pass), time.Now().UTC())
+				go notifyLoop(ctx, logger, disp, mapCfg, &warningsView, &transitiveChainView, &crossSvcView, &eventsView, findingsStore, interval)
+				logger.Info("alert lane enabled (docs/30, off-digest, non-gating)",
+					"persistent", alertPath != "", "recipients", len(cfg.To), "interval", interval.String(),
+					"cooldown", cfg.Cooldown.String(), "short_lead", mapCfg.shortLead.String())
+			}
+		}
 	}
 
 	logger.Info("running identity & correlation layer (doc 03) — Ctrl-C to stop", "health_addr", ln.Addr().String())
