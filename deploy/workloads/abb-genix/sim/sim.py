@@ -512,16 +512,25 @@ def role_analyzer():
                 S["inference_seconds"] = time.time() - t0
                 S["last_update"] = time.time()
                 leaking = S["leak"]
+                leak_kb = S.get("leak_kb", 4096.0)
             if leaking:
-                # ~4MiB / pass: working set climbs through the at-threshold band of the
-                # 0.95 x limit bar (MEMORY_LEAK signature) before the kernel OOM-kills it.
-                _LEAK_BUF.append(bytearray(4 * 1024 * 1024))
+                # leak_kb KiB / pass (default 4096 = ~4MiB): working set climbs through the
+                # at-threshold band of the 0.95 x limit bar (MEMORY_LEAK signature) before the
+                # kernel OOM-kills it. A SMALL leak_kb (e.g. 48) makes a GENTLE creep — low
+                # variance early, the late-onset case the forecast trend-rescue is built for,
+                # and a longer forecast lead (lead ≈ headroom / rate).
+                _LEAK_BUF.append(bytearray(int(leak_kb) * 1024))
             time.sleep(float(os.environ.get("ANALYZE_INTERVAL", "10")))
 
     threading.Thread(target=analyze_loop, daemon=True).start()
 
     def ctl(qs):
         with LOCK:
+            if "leak_kb" in qs:
+                try:
+                    S["leak_kb"] = max(1.0, float(qs["leak_kb"][0]))  # per-pass leak size (KiB)
+                except ValueError:
+                    pass
             if "leak" in qs:
                 S["leak"] = qs["leak"][0] in ("1", "true", "on", "yes")
                 if not S["leak"]:

@@ -139,8 +139,17 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 			silence(t, SilenceAlreadyCrossed)
 			continue
 		}
-		// Dynamics guard (§3.2 "showing real dynamics" / §3.6 flat silence).
-		if flat(series, in.P.FlatEpsilon) {
+		// Dynamics guard (§3.2 "showing real dynamics" / §3.6 flat silence). flat()'s
+		// coefficient-of-variation test alone falsely silences a low-variance series whose
+		// recent points have BEGUN a sustained directional drift — a late-onset leak (60 quiet
+		// points dilute a 4-point creep), the earliest and most valuable moment to warn.
+		// RESCUE it with the EWMA-residual CUSUM (trend.go): silence as flat only if it is
+		// BOTH low-variance AND has no recent sustained onset. Off-default ⇒ flat()-only.
+		var trend TrendResult
+		if in.P.TrendRescue {
+			trend = Trend(series, trendParamsFrom(in.P))
+		}
+		if flat(series, in.P.FlatEpsilon) && !trend.Tripped {
 			silence(t, SilenceFlat)
 			continue
 		}
@@ -184,6 +193,15 @@ func RunCycle(ctx context.Context, cc ClockCaller, in CycleInput) CycleResult {
 			if shift != nil {
 				cand.RegimeShift = shift
 			}
+			// Cold-start confidence: a candidate rescued by a drift whose new slope is still
+			// short is flagged early-onset (low confidence) rather than silenced — the band
+			// firms as the slope establishes. Flag, never fabricate the band (charter).
+			if trend.Tripped && in.P.TrendMinOnsetPoints > 0 && trend.NewSlope < in.P.TrendMinOnsetPoints {
+				cand.EarlyOnset = &EarlyOnset{
+					Direction: trend.Direction, NewSlopePoints: trend.NewSlope, StepZ: trend.StepZ,
+					Note: "the directional drift only just began (new slope below the configured floor); this projection is EARLY and low-confidence — the band firms as the slope establishes",
+				}
+			}
 		}
 		if in.Trace {
 			tr := InvocationTrace{
@@ -224,6 +242,15 @@ func crossed(v, bar float64, direction string) bool {
 		return v <= bar
 	}
 	return v >= bar
+}
+
+// trendParamsFrom builds the CUSUM trend-rescue params from the forecast params. Alpha
+// (the EWMA baseline smoothing) is pinned to the onset/C2 detector's value; H<=0 disables.
+func trendParamsFrom(p params.ForecastParams) TrendParams {
+	return TrendParams{
+		Alpha: 0.10, K: p.TrendCusumK, H: p.TrendCusumH,
+		Warmup: p.TrendWarmup, MinZ: p.TrendMinZ, RecentWindow: p.TrendRecentWindow,
+	}
 }
 
 // flat is the low-variance silence (§3.6): step-to-step volatility relative

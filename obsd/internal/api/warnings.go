@@ -88,6 +88,21 @@ type WarningCard struct {
 	// remedy is to declare a context window at the shift. nil when the input was
 	// single-regime.
 	Contamination *ContaminationRow `json:"contamination,omitempty"`
+
+	// EarlyOnset (09 §3.6 companion) — a MEASURED caveat that this series was rescued from
+	// the flat() silence by a sustained drift that ONLY JUST BEGAN: the projection is early
+	// and low-confidence, and the band firms as the slope establishes. Shown adjacent to the
+	// projection (the join, never the fusion). nil when the slope is mature.
+	EarlyOnset *EarlyOnsetRow `json:"earlyOnset,omitempty"`
+}
+
+// EarlyOnsetRow renders the cold-start confidence caveat (09 §3.6 companion). The numbers
+// are MEASURED facts about the new drift; Note is a FIXED authored instruction.
+type EarlyOnsetRow struct {
+	Direction      string  `json:"direction"`
+	NewSlopePoints int     `json:"newSlopePoints"` // points observed since the drift began
+	StepZ          float64 `json:"stepZ"`          // sustained shift magnitude (signal-sigma units)
+	Note           string  `json:"note"`
 }
 
 // ContaminationRow renders a detected regime-shift caveat (09 M5 companion). The
@@ -178,6 +193,12 @@ func BuildWarnings(graphVersion, graphRelease string, now time.Time, enabled boo
 				ShiftAgoSecs: float64(rs.PostPoints-1) * c.Cadence.Seconds(),
 				NewRegimePts: rs.PostPoints,
 				Note:         contaminationNote,
+			}
+		}
+		if eo := c.EarlyOnset; eo != nil {
+			card.EarlyOnset = &EarlyOnsetRow{
+				Direction: eo.Direction, NewSlopePoints: eo.NewSlopePoints,
+				StepZ: eo.StepZ, Note: eo.Note,
 			}
 		}
 		if atRisk != nil {

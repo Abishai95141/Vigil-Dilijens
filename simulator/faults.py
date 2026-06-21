@@ -140,13 +140,14 @@ def _flap_heal(target, value=None):
 CATALOG: list[Fault] = [
     # ===== Application faults (the sim /ctl control surface) =====
     Fault(
-        id="mem_leak", name="Memory leak", icon="🧠", category="Application", control="toggle",
+        id="mem_leak", name="Memory leak", icon="🧠", category="Application", control="slider",
         target_default=SIM_ANALYZER, target_choices=[SIM_ANALYZER], target_locked=True,
-        what="Arms a real heap leak in pdm-analyzer (/ctl?leak=on): it appends ~4 MiB every analyze cycle.",
-        effect="Working set climbs steadily toward the 0.95×256Mi ≈ 243 Mi limit, then the kernel OOM-kills the container (exit 137) and it restarts.",
+        param_label="Leak rate", param_min=32, param_max=8192, param_default=4096, param_step=32, param_unit="KiB/cycle",
+        what="Arms a real heap leak in pdm-analyzer (/ctl?leak=on&leak_kb=<rate>): it appends <rate> KiB every analyze cycle.",
+        effect="Working set climbs toward the 0.95×256Mi ≈ 243 Mi limit, then the kernel OOM-kills the container (exit 137). A LOW rate (e.g. 48) is a GENTLE creep — low-variance early (the late-onset case) and a LONGER forecast lead (lead ≈ headroom / rate); a HIGH rate (4096) is the fast flagship.",
         tests=["Forecasting", "Anomaly detection", "Root-cause (authored cascade)", "Recurrence memory"],
-        expected="A PROJECTED early-warning on container_memory_working_set_bytes (band + lead time), then PHEN_MEMORY_LEAK → PHEN_OOM_KILL_CGROUP cascade, OOMKilled event corroboration, incident recorded.",
-        inject_fn=_ctl_inject(lambda v: "leak=on"), heal_fn=_ctl_heal("leak=off"),
+        expected="A PROJECTED early-warning on container_memory_working_set_bytes (band + lead time; a gentle rate is now RESCUED from the flat-series silence by the CUSUM trend gate, doc 27), then PHEN_MEMORY_LEAK → PHEN_OOM_KILL_CGROUP cascade, OOMKilled event corroboration, incident recorded.",
+        inject_fn=_ctl_inject(lambda v: f"leak=on&leak_kb={int(v or 4096)}"), heal_fn=_ctl_heal("leak=off"),
     ),
     Fault(
         id="latency_queue", name="Latency / queue backlog", icon="🐌", category="Application", control="slider",

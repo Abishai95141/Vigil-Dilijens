@@ -61,6 +61,12 @@ type Candidate struct {
 	// mixed regime; declaring a context window at the shift cleans it. nil when the
 	// input was single-regime. Surfaced adjacent to the projection, never fused.
 	RegimeShift *RegimeShift `json:"regimeShift,omitempty"`
+
+	// EarlyOnset (09 §3.6 companion) flags a projection on a series whose directional
+	// drift only just began (new slope < the configured floor): rescued from the flat()
+	// silence but COLD-STARTED, so the band is early/low-confidence and firms as the
+	// slope establishes. nil when the slope is mature. Surfaced adjacent, never fused.
+	EarlyOnset *EarlyOnset `json:"earlyOnset,omitempty"`
 }
 
 // Silence is one target that produced NO candidate this cycle, with the

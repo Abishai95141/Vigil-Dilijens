@@ -188,6 +188,25 @@ type ForecastParams struct {
 	RegimeShiftFraction   float64 `yaml:"regime_shift_fraction"`    // up-jump ≥ this × window-range to count (magnitude floor)
 	RegimeShiftMinSegment int     `yaml:"regime_shift_min_segment"` // min points each side of the shift (a sustained regime, not a transient)
 	RegimeShiftPlateau    float64 `yaml:"regime_shift_plateau"`     // pre/post net drift ≤ this × jump ⇒ a STEP that plateaus (not a ramp — the leak guard)
+
+	// Trend-rescue (doc 09 §3.6 companion): an EWMA-residual CUSUM that RESCUES a
+	// low-variance series whose recent points have BEGUN a sustained directional drift
+	// from the flat() coefficient-of-variation silence — the late-onset leak CV cannot
+	// see (60 quiet points dilute a 4-point creep; worse, a noisy-trendless series scores
+	// HIGHER than a real early creep, so amplitude cannot be tuned to separate them). The
+	// gate becomes: silence as flat only if flat() AND there is NO recent sustained onset.
+	// Constants DECLARED, never learned (mirrors the onset/C2 detector). Off the digest
+	// (non-gating). TrendRescue=false OR TrendCusumH<=0 disables it ⇒ byte-identical to the
+	// flat()-only gate. TrendMinOnsetPoints is the cold-start confidence floor: a drift
+	// younger than this many points is still forecast but FLAGGED early-onset (low
+	// confidence — the band firms as the slope establishes), never silenced.
+	TrendRescue         bool    `yaml:"trend_rescue"`
+	TrendCusumK         float64 `yaml:"trend_cusum_k"`          // CUSUM per-step slack (residual-sigma units)
+	TrendCusumH         float64 `yaml:"trend_cusum_h"`          // CUSUM decision threshold (residual-sigma units); <=0 disables
+	TrendWarmup         int     `yaml:"trend_warmup"`           // head points that seed the sigma estimate, never tripped
+	TrendMinZ           float64 `yaml:"trend_min_z"`            // sustained pre→post shift floor (signal-sigma units) — the transient-spike defense
+	TrendRecentWindow   int     `yaml:"trend_recent_window"`    // a drift must have begun within this many points of the series end to count as in-progress
+	TrendMinOnsetPoints int     `yaml:"trend_min_onset_points"` // new-slope shorter than this ⇒ forecast but FLAG early-onset (cold-start confidence)
 }
 
 // Default returns the embedded dev-profile parameters, validated.

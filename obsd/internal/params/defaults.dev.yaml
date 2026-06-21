@@ -80,6 +80,13 @@ forecast:                           # doc 09 + doc 14 A13/A15 — the warm path 
   regime_shift_fraction: 0.35       # the up-jump must be ≥35% of the window's range to count (magnitude floor; below = noise)
   regime_shift_min_segment: 8       # ≥8 points each side of the shift (a sustained regime, not a transient spike)
   regime_shift_plateau: 0.35        # both old & new regimes must be roughly flat (net drift ≤ 35% of the jump): a STEP that PLATEAUS, never an ongoing or stabilising ramp (the leak-protection guard)
+  trend_rescue: true                # 09 §3.6 companion: RESCUE a low-variance series with a recent sustained directional drift from the flat() silence (the late-onset leak CV cannot see). flat() alone silences it; flat() AND no recent onset silences it. Off the digest (non-gating). false ⇒ byte-identical flat()-only gate.
+  trend_cusum_k: 0.5                # CUSUM per-step slack (residual-sigma units; mirrors the onset/C2 detector)
+  trend_cusum_h: 4.0                # CUSUM decision threshold (residual-sigma units); <=0 disables the rescue
+  trend_warmup: 12                  # head points that seed the sigma estimate, never tripped
+  trend_min_z: 3.0                  # sustained pre→post shift floor (signal-sigma units): a transient spike settles back and is dropped; a real step persists (the FP defense, 0/400 on noise in the C2 sweep)
+  trend_recent_window: 48           # the drift must have begun within 48 points of the series end to count as in-progress (an old step that plateaued is the regime-shift detector's jurisdiction)
+  trend_min_onset_points: 6         # new-slope shorter than 6 points ⇒ forecast but FLAG early-onset (cold-start: the band firms as the slope establishes), never silenced
 
 incident:                           # v3 T-B (doc 03 + 14 §1.4) — durable cross-run phenomenon memory; surfacing-only, off the deterministic path
   resolve_gap: 45s                  # a gap longer than this between fires of one (phenomenon, role) = a NEW recurrence (must exceed evaluation_tick)
