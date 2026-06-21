@@ -4,6 +4,8 @@
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import type {
+  CausalDirectionResult,
+  CausalHypothesesView,
   ChatResponse,
   ClaimVerdict,
   ConfigView,
@@ -82,6 +84,24 @@ export const useTimeline = () => useView<TimelineView>("timeline", "/api/timelin
 export const useConfig = () => useView<ConfigView>("config", "/api/config");
 export const useUnexplained = () => useView<UnexplainedView>("unexplained", "/api/unexplained");
 export const useGovernance = () => useView<GovernanceView>("governance", "/api/governance");
+export const useCausalHypotheses = () =>
+  useView<CausalHypothesesView>("causal-hypotheses", "/api/causal-hypotheses");
+
+// A NAMED operator's authored causal DIRECTION for a co-occurrence hypothesis (doc 22 C3 —
+// the system never infers direction). "a-to-b"/"b-to-a" promote with the directed note and
+// return the committable overlay; "not-causal" rejects. decidedBy is mandatory.
+export const authorCausalDirection = (
+  candidateId: string,
+  direction: "a-to-b" | "b-to-a" | "not-causal",
+  decidedBy: string,
+  note: string,
+) =>
+  postJson<CausalDirectionResult>("/api/causal-hypotheses/author", {
+    candidateId,
+    direction,
+    decidedBy,
+    note,
+  });
 
 export const validateClaim = (claim: string) =>
   postJson<ClaimVerdict>("/api/validate-claim", { claim });

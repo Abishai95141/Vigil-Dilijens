@@ -62,6 +62,12 @@ type Providers struct {
 	// Onsets returns the changepoint-onset surface (doc 22 C2): the MEASURED times watched
 	// gauge series stepped (off-digest CUSUM). nil ⇒ the honest OFF state.
 	Onsets func() *OnsetView
+	// CausalHypotheses returns the direction-free causal-hypothesis surface (doc 22 C3):
+	// coupled series that co-stepped, surfaced for a human to author the direction. nil ⇒ OFF.
+	CausalHypotheses func() *CausalHypothesesView
+	// AuthorCausalDirection records a named operator's authored causal direction (or
+	// not-causal) for a hypothesis, returning the AUTHORED overlay YAML. nil ⇒ unavailable.
+	AuthorCausalDirection func(CausalDirectionRequest) *CausalDirectionResult
 	// Events returns the v3 T-C discrete-event lane surface (OOMKilled,
 	// CrashLoopBackOff joined by CEI); nil ⇒ the honest "not enabled" state.
 	Events func() *EventsView
@@ -549,6 +555,38 @@ func Register(mux *http.ServeMux, p Providers) {
 			v = BuildOnsets(nil, false, 0, timeNowUTC())
 		}
 		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/causal-hypotheses", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *CausalHypothesesView
+		if p.CausalHypotheses != nil {
+			v = p.CausalHypotheses()
+		}
+		if v == nil {
+			v = BuildCausalHypotheses(nil, false, timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/causal-hypotheses/author", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.AuthorCausalDirection == nil {
+			writeJSON(w, &CausalDirectionResult{OK: false, Message: "causal-hypothesis authoring is not enabled"})
+			return
+		}
+		var req CausalDirectionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, p.AuthorCausalDirection(req))
 	})
 
 	mux.HandleFunc("/api/timeline", func(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,7 @@
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { Shell } from "./app/Shell";
 import { AnomaliesPage } from "./routes/anomalies";
+import { CausalHypothesesPage } from "./routes/causal-hypotheses";
 import { ChatPage } from "./routes/chat";
 import { ConfigPage } from "./routes/config";
 import { CoveragePage } from "./routes/coverage";
@@ -36,6 +37,7 @@ const routeTree = root.addChildren([
   r("/coverage", CoveragePage),
   r("/silence", SilencePage),
   r("/governance", GovernancePage),
+  r("/causal-hypotheses", CausalHypothesesPage),
   r("/referee", RefereePage),
   r("/config", ConfigPage),
   // NOTE: not "/mcp" — that path is proxied to obsd's POST-only JSON-RPC endpoint

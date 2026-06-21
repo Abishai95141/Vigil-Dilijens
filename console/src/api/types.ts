@@ -588,6 +588,44 @@ export interface DepartureView {
   departures?: Departure[]; // omitempty — present only when active=true
 }
 
+// doc 22 C3 — direction-free causal hypotheses: coupled series that co-stepped,
+// surfaced for a human to author the DIRECTION (the system never infers it).
+// Source: obsd/internal/api/causalhypothesis.go (CausalHypothesesView).
+export interface CausalHypothesesView {
+  generatedAt: string;
+  class: string;
+  enabled: boolean;
+  note: string;
+  hypotheses?: CausalHypothesisRow[];
+}
+export interface CausalHypothesisEvidence {
+  kind: string;
+  ref: string;
+  detail?: string;
+}
+export interface CausalHypothesisRow {
+  id: string;
+  subject: string;        // "A ~ B" (direction-free)
+  relation: string;       // "co-occurrence" | "observed-adjacency"
+  source: string;         // "co-onset" | "audit"
+  a?: string;
+  b?: string;
+  aDirection?: string;    // onset direction (up|down) of A
+  bDirection?: string;
+  observedFirst?: string; // MEASURED order — NOT a cause
+  deltaSeconds?: number;
+  coefficient?: number;
+  evidence?: CausalHypothesisEvidence[];
+  createdAt: string;
+}
+export interface CausalDirectionResult {
+  ok: boolean;
+  candidateId: string;
+  status?: string;        // "promoted" | "rejected"
+  overlayYaml?: string;
+  message?: string;
+}
+
 // One band-departure. Classed PROJECTED (weakest input = the band). No causal claim.
 // Source: obsd/internal/departure/departure.go (Departure).
 export interface Departure {

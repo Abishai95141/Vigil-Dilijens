@@ -209,16 +209,43 @@ direction-free**; it **never** feeds detection (the candidate firewall already
 guarantees this — `candidate/firewall_test.go`); only a **named human** supplies
 direction; PROJECTED model hints (if any) are discarded at promotion.
 
-**Real validation:** end-to-end — stage a hypothesis from a genuinely coupled
-co-onset pair, surface it in the tab, have the operator author a direction,
-confirm it becomes an AUTHORED overlay **and** that the deterministic detection
-digest is **byte-identical** before/after (the firewall holds; replay
-determinism unbroken).
+**Built (committed):** `obsd/internal/cohypothesis` — a pure producer pairing the latest
+`assoc` associated-with edges with the latest C2 onsets; for every coupled pair whose both
+series stepped within a window it stages a `KindCausalHypothesis` (relation `co-occurrence`,
+**direction-free**), carrying the observed order as MEASURED EVIDENCE (no `cause`/`direction`
+field — a unit test asserts the payload never leaks one). Wired `--cohypothesis-enabled` →
+`coHypothesisLoop` → `GET /api/causal-hypotheses` + `POST /api/causal-hypotheses/author`
+(direction `a-to-b`/`b-to-a` → promote with the operator's directed note + the committable
+overlay; `not-causal` → reject; a named operator is **mandatory**). New console tab "Causal
+hypotheses" (nav/router/route/client/types) — projections + associations + the author-the-
+direction controls. Off-digest: the candidate firewall test + the deterministic-path
+import-deps check both still pass (the deterministic packages reach neither `cohypothesis`
+nor `candidate`).
 
-**Scrap criteria:** if the co-onset producer yields mostly spurious pairs (every
-co-stalling pair on a shared node — the E4b/E5 failure mode), **tighten or scrap
-the auto-producer** and keep only the manual `assoc`→author path. Better no
-hypothesis than a noisy one.
+**Real validation — LIVE on `vigil-abb` (the full pipeline, real cAdvisor):** with
+onset+assoc+dgx+cohypothesis on, the producer staged **real co-onset hypotheses from live
+data** — e.g. influxdb's `container_memory_mapped_file` ~ `container_memory_total_active_file`
+both stepped up (19s apart, r=0.89), surfaced direction-free with the observed order labelled
+"not a cause." Then the **operator-authoring flow was exercised end-to-end**: authoring a
+direction returned the AUTHORED overlay (`author: <operator>`, `note: operator-authored causal
+direction: A → B. …`, the MEASURED evidence, graph-version pinned, `relation` stays
+co-occurrence); `not-causal` rejected with the operator's note; authoring with **no** named
+operator was **refused** ("the system never authors a direction"). Console tab builds clean
+(tsc + biome + vite). `go test -race ./...` green throughout.
+
+**Honest caveat (reach, not correctness):** the demonstrated live pairs were *within-container*
+metric pairs (two facets of influxdb's memory), and an *induced cross-pod* pair onset correctly
+but fell **outside the `assoc` 256-stream O(n²) cap** (its Pod-kind streams sort after the
+Container-kind streams that fill the cap). So the producer is correct and the mechanism is
+proven end-to-end, but a compelling *cross-workload* causal lead requires the coupled pair to
+be in the assoc scan set — a tunable bound, not a producer flaw. A future refinement could
+prioritise cross-entity pairs for the co-onset path.
+
+**Value gate: KEEP.** This is the capability the competitor has and Vigil's charter forbade it
+to *assert* — now surfaced charter-cleanly: Vigil shows the lead (association + co-onset +
+observed order, all MEASURED) and a named operator draws the arrow. It directly addresses the
+"Vigil punts novel-incident root cause" critique from the original analysis, without inventing
+the edges the competitor's auto-direction does (E3b/E4b).
 
 ---
 

@@ -41,6 +41,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/assoc"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/audit"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/cohypothesis"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/departure"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/detect"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/dgx"
@@ -120,6 +121,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		histQuantiles      = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
 		assocEnabled       = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
 		onsetEnabled       = fs.Bool("onset-enabled", false, "doc 22 C2: compute MEASURED changepoint ONSETS over the hot gauge series (off-digest EWMA-residual CUSUM with sustained-shift confirmation) and surface the step TIMES at /api/onsets — including sub-threshold shifts the three primitives leave unmarked; the temporal-adjacency substrate for the direction-free hypotheses tab. OFF by default; off = byte-identical (no onset computed). Off-digest; never feeds detection/forecasting/governance.")
+		coHypEnabled       = fs.Bool("cohypothesis-enabled", false, "doc 22 C3: stage DIRECTION-FREE causal hypotheses — a coupled pair (an associated-with edge) whose BOTH series stepped (a C2 onset) within a window — into the candidate store, surfaced at /api/causal-hypotheses for a human to author the DIRECTION (the system never infers it). Needs --onset-enabled + --assoc-enabled + --dgx-enabled. OFF by default; off = byte-identical. Off-digest; never feeds detection (the candidate firewall enforces it).")
 		dgxAgentEnabled    = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
 		logsEnabled        = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
 		auditEnabled       = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
@@ -208,7 +210,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -283,7 +285,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -489,6 +491,21 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		// (a capped scan would silently skip most workloads).
 		go onsetLoop(ctx, logger, ingestor, &onsetView, envDuration("ONSET_INTERVAL", time.Minute), 0)
 	}
+
+	// doc 22 C3: the off-digest direction-free causal-hypothesis lane — each interval, pair the
+	// latest associated-with edges (assoc) with the latest onsets (C2) and stage a DIRECTION-FREE
+	// co-occurrence candidate for every coupled pair that co-stepped. The candidate store is
+	// firewalled (the deterministic path can never read it); a human authors the direction.
+	if coHypEnabled {
+		if candStore == nil || !onsetEnabled || !assocEnabled {
+			logger.Warn("cohypothesis: --cohypothesis-enabled needs --dgx-enabled + --onset-enabled + --assoc-enabled; lane idle",
+				"dgx", candStore != nil, "onset", onsetEnabled, "assoc", assocEnabled)
+		} else {
+			go coHypothesisLoop(ctx, logger, candStore, &depView, &onsetView, graphVersion,
+				envDuration("COHYP_INTERVAL", time.Minute), envDuration("COHYP_WINDOW", 90*time.Second))
+		}
+	}
+
 	var coverage atomic.Pointer[vapi.CoverageView]
 	coverage.Store(vapi.BuildCoverage(clusterID, graphVersion, graphRelease, time.Now(), nil, nil, nil))
 	// The deterministic absence ledger (v3 T-A): built from the SAME binding.Result
@@ -858,6 +875,26 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					return v
 				}
 				return vapi.BuildOnsets(nil, onsetEnabled, 0, time.Now().UTC())
+			},
+			// doc 22 C3: the direction-free causal-hypothesis surface + the operator's
+			// direction-authoring path. Reads the firewalled candidate store (causal_hypothesis
+			// candidates); authoring records a NAMED human's decision and renders the overlay.
+			CausalHypotheses: func() *vapi.CausalHypothesesView {
+				if !coHypEnabled || candStore == nil {
+					return vapi.BuildCausalHypotheses(nil, false, time.Now().UTC())
+				}
+				rows, err := candStore.List(candidate.Filter{Kind: candidate.KindCausalHypothesis, Status: candidate.StatusCandidate})
+				if err != nil {
+					logger.Error("cohypothesis: list candidates", "err", err)
+					return vapi.BuildCausalHypotheses(nil, true, time.Now().UTC())
+				}
+				return vapi.BuildCausalHypotheses(mapCausalHypothesisRows(rows), true, time.Now().UTC())
+			},
+			AuthorCausalDirection: func(req vapi.CausalDirectionRequest) *vapi.CausalDirectionResult {
+				if !coHypEnabled || candStore == nil {
+					return &vapi.CausalDirectionResult{OK: false, Message: "causal-hypothesis authoring is not enabled"}
+				}
+				return authorCausalDirection(candStore, graphVersion, time.Now().UTC(), req)
 			},
 			// v3 T-C discrete-event lane: the joined EventsView, or the honest
 			// unavailable state when --events-enabled is off.
@@ -1774,6 +1811,147 @@ func splitStreamID(id string) (cei, metric string) {
 		return strings.Join(parts[:6], "|"), strings.Join(parts[6:], "|")
 	}
 	return id, ""
+}
+
+// coHypothesisLoop pairs the latest associated-with edges (assoc) with the latest onsets (C2)
+// and stages a DIRECTION-FREE co-occurrence candidate for every coupled pair that co-stepped
+// (doc 22 C3). Off the deterministic path: it reads two off-digest views and writes only the
+// firewalled candidate store; a human authors the direction. Never feeds detection.
+func coHypothesisLoop(ctx context.Context, logger *slog.Logger, candStore *candidate.Store,
+	depView *atomic.Pointer[vapi.DependencyView], onsetView *atomic.Pointer[vapi.OnsetView],
+	graphVersion string, every, window time.Duration) {
+	if every <= 0 {
+		every = time.Minute
+	}
+	if window <= 0 {
+		window = 90 * time.Second
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			dv := depView.Load()
+			ov := onsetView.Load()
+			if dv == nil || ov == nil {
+				continue // assoc / onset views not populated yet
+			}
+			pairs := make([]cohypothesis.CoupledPair, 0, len(dv.Edges))
+			for _, e := range dv.Edges {
+				pairs = append(pairs, cohypothesis.CoupledPair{A: e.A, B: e.B, Coefficient: e.Coefficient})
+			}
+			n, err := cohypothesis.HypothesizeAndStage(candStore, time.Now().UTC(), ov.Onsets, pairs, window, graphVersion)
+			if err != nil {
+				logger.Error("cohypothesis: stage", "err", err)
+				continue
+			}
+			if n > 0 {
+				logger.Info("cohypothesis: staged direction-free co-onset hypotheses (doc 22 C3)",
+					"count", n, "associated_pairs", len(pairs), "onsets", len(ov.Onsets))
+			}
+		}
+	}
+}
+
+// mapCausalHypothesisRows adapts firewalled candidate.Candidate rows to the api surface (main
+// does the mapping so the api never imports internal/candidate). Payload values arrive as
+// JSON-decoded types (numbers are float64).
+func mapCausalHypothesisRows(cs []candidate.Candidate) []vapi.CausalHypothesisRow {
+	out := make([]vapi.CausalHypothesisRow, 0, len(cs))
+	for _, c := range cs {
+		if c.Kind != candidate.KindCausalHypothesis {
+			continue
+		}
+		row := vapi.CausalHypothesisRow{
+			ID: c.ID, Subject: c.Subject, Relation: c.Relation, Source: c.Lineage.Source, CreatedAt: c.CreatedAt,
+			A: anyStr(c.Payload["a"]), B: anyStr(c.Payload["b"]),
+			ADirection: anyStr(c.Payload["aDirection"]), BDirection: anyStr(c.Payload["bDirection"]),
+			ObservedFirst: anyStr(c.Payload["observedFirst"]),
+			DeltaSeconds:  anyInt64(c.Payload["deltaSeconds"]), Coefficient: anyFloat(c.Payload["coefficient"]),
+		}
+		for _, e := range c.Evidence {
+			row.Evidence = append(row.Evidence, vapi.EvidenceRow{Kind: e.Kind, Ref: e.Ref, Detail: e.Detail})
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// authorCausalDirection records a NAMED operator's authored causal direction for a hypothesis
+// (or marks it not-causal). The system never infers the direction — only this human decision
+// becomes AUTHORED. On a direction, it promotes with the operator's directed note and returns
+// the committable overlay YAML; on not-causal, it rejects with the operator's note.
+func authorCausalDirection(cs *candidate.Store, graphVersion string, now time.Time, req vapi.CausalDirectionRequest) *vapi.CausalDirectionResult {
+	if strings.TrimSpace(req.DecidedBy) == "" {
+		return &vapi.CausalDirectionResult{OK: false, CandidateID: req.CandidateID,
+			Message: "a named operator (decidedBy) is required — the system never authors a direction"}
+	}
+	rows, err := cs.List(candidate.Filter{Kind: candidate.KindCausalHypothesis})
+	if err != nil {
+		return &vapi.CausalDirectionResult{OK: false, CandidateID: req.CandidateID, Message: err.Error()}
+	}
+	var c *candidate.Candidate
+	for i := range rows {
+		if rows[i].ID == req.CandidateID {
+			c = &rows[i]
+			break
+		}
+	}
+	if c == nil {
+		return &vapi.CausalDirectionResult{OK: false, CandidateID: req.CandidateID, Message: "no such causal hypothesis"}
+	}
+	a, b := anyStr(c.Payload["a"]), anyStr(c.Payload["b"])
+	switch req.Direction {
+	case "not-causal":
+		if err := cs.Decide(now, c.ID, candidate.StatusRejected, req.DecidedBy, req.Note); err != nil {
+			return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID, Message: err.Error()}
+		}
+		return &vapi.CausalDirectionResult{OK: true, CandidateID: c.ID, Status: "rejected",
+			Message: "recorded as not-causal by " + req.DecidedBy}
+	case "a-to-b", "b-to-a":
+		from, to := a, b
+		if req.Direction == "b-to-a" {
+			from, to = b, a
+		}
+		note := fmt.Sprintf("operator-authored causal direction: %s → %s. %s", from, to, req.Note)
+		if err := cs.Decide(now, c.ID, candidate.StatusPromoted, req.DecidedBy, note); err != nil {
+			return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID, Message: err.Error()}
+		}
+		promoted := *c
+		promoted.Status, promoted.DecidedBy, promoted.Note, promoted.DecidedAt = candidate.StatusPromoted, req.DecidedBy, note, now
+		y, err := candidate.PromotedOverlayYAML(promoted, graphVersion)
+		if err != nil {
+			return &vapi.CausalDirectionResult{OK: true, CandidateID: c.ID, Status: "promoted",
+				Message: "promoted but overlay render failed: " + err.Error()}
+		}
+		return &vapi.CausalDirectionResult{OK: true, CandidateID: c.ID, Status: "promoted", OverlayYAML: y}
+	default:
+		return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID,
+			Message: "direction must be a-to-b, b-to-a, or not-causal"}
+	}
+}
+
+func anyStr(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func anyFloat(v any) float64 {
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	return 0
+}
+
+func anyInt64(v any) int64 {
+	if f, ok := v.(float64); ok {
+		return int64(f)
+	}
+	return 0
 }
 
 // snapshotSeries reads up to maxStreams hot series (deterministic order) as assoc
