@@ -88,14 +88,22 @@ func forecastLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex,
 		// Freeze exactly the series this cycle needs — microseconds under the
 		// read gate; the clock's RPCs then run lock-free on the copy. When role-series
 		// is on (doc 20 P5), the reader resolves a role-keyed target to the deterministic
-		// per-bin sum of its live member pods (churn-stable), delegating otherwise.
+		// per-bin worst-member-toward-bar of its live member pods (churn-stable, and
+		// comparable to the per-pod bar — doc 22 C1), delegating otherwise.
 		var reader forecast.StreamReader = ingestor
 		if roleSeries {
+			// The bar direction is a per-target property; back the reader's resolver from
+			// the rolled-up targets so it reduces toward the right bar (max above/min below).
+			dir := make(map[string]string, len(fin.targets))
+			for _, t := range fin.targets {
+				dir[t.StreamUID+"\x1f"+t.Metric] = t.Direction
+			}
 			reader = &forecast.RoleSeriesReader{
 				Base: ingestor, Members: buildRoleMembers(store),
-				Bin:    p.Scrape.Interval.Duration(),
-				Window: p.Scrape.Interval.Duration() * 1024,
-				Now:    func() time.Time { return time.Now().UTC() },
+				Bin:       p.Scrape.Interval.Duration(),
+				Window:    p.Scrape.Interval.Duration() * 1024,
+				Now:       func() time.Time { return time.Now().UTC() },
+				Direction: func(uid, metric string) string { return dir[uid+"\x1f"+metric] },
 			}
 		}
 		gate.RLock()

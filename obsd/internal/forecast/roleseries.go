@@ -1,6 +1,7 @@
 package forecast
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -16,25 +17,34 @@ import (
 // per-bin AGGREGATION of whichever member pods exist in each bin.
 //
 // This is NOT shape-stitching (the charter-rejected move of gluing pod A's value curve
-// onto pod B's). We never concatenate two pods' curves. Each bin independently sums the
-// members present THEN, so a replaced pod's new UID simply contributes to later bins —
-// the role series is continuous across churn because it is defined by live membership,
-// not by any single mortal stream. The aggregation is MEASURED arithmetic; the identity
-// succession is AUTHORED (the OwnerReference the store reads). Both permitted classes,
-// joined, never fused.
+// onto pod B's). We never concatenate two pods' curves. Each bin independently reduces
+// the members present THEN (worst toward the bar — see combineToBar), so a replaced pod's
+// new UID simply contributes to later bins — the role series is continuous across churn
+// because it is defined by live membership, not by any single mortal stream. The
+// aggregation is MEASURED arithmetic; the identity succession is AUTHORED (the
+// OwnerReference the store reads). Both permitted classes, joined, never fused.
+//
+// WHY NOT A SUM (doc 22 C1): Vigil's bars are PER-ENTITY (e.g. a container memory limit
+// is per-pod). A replica SUM scales with the pod count and crosses a per-pod bar with two
+// healthy pods, so RunCycle would silence the role "already crossed" and the early-warning
+// would be dead for exactly the multi-pod workloads role-series exists to serve. The
+// churn-stable question against a per-pod bar is "is the WORST member about to cross its
+// OWN bar" — the max member toward an `above` bar, the min toward a `below` bar.
 
 // AggregateRoleSeries bins each member stream into [start, end] buckets of width `bin`
-// and SUMS the members present in each bucket, yielding one role-level series (oldest
-// first). Pure + deterministic: members are processed in sorted-key order and each
-// member's bucket value is its latest sample in that bucket (ascending-time wins), so
-// the output is byte-identical regardless of member or sample arrival order.
+// and reduces the members present in each bucket with `reduce`, yielding one role-level
+// series (oldest first). `reduce` is the per-bin combiner — the worst member toward the
+// bar (combineToBar). It is called reduce(acc, v) and never with a bucket's first value
+// (which seeds acc), so min/max need no sentinel. A nil reduce yields nil (a misuse).
 //
-// A bucket with no member samples is OMITTED (not zero-filled): a gap in scraping is
-// honest absence, not a measured zero. Counter members are summed like gauges here —
-// the caller is responsible for only aggregating gauge-class streams (a counter role
-// series is deferred upstream exactly as a counter pod series is).
-func AggregateRoleSeries(members map[string][]qss.Sample, start, end time.Time, bin time.Duration) []qss.Sample {
-	if bin <= 0 || !end.After(start) {
+// Pure + deterministic: members are processed in sorted-key order and each member's
+// bucket value is its latest sample in that bucket (ascending-time wins), so the output
+// is byte-identical regardless of member or sample arrival order. A bucket with no member
+// samples is OMITTED (not zero-filled): a gap in scraping is honest absence, not a measured
+// zero. The caller aggregates only gauge-class streams (a counter role series is deferred
+// upstream exactly as a counter pod series is).
+func AggregateRoleSeries(members map[string][]qss.Sample, start, end time.Time, bin time.Duration, reduce func(acc, v float64) float64) []qss.Sample {
+	if bin <= 0 || !end.After(start) || reduce == nil {
 		return nil
 	}
 	keys := make([]string, 0, len(members))
@@ -43,19 +53,24 @@ func AggregateRoleSeries(members map[string][]qss.Sample, start, end time.Time, 
 	}
 	sort.Strings(keys)
 
-	// bucketIdx -> summed value across members present in that bucket.
-	sum := map[int]float64{}
+	// bucketIdx -> reduced value across members present in that bucket (first value seeds).
+	agg := map[int]float64{}
+	seen := map[int]bool{}
 	for _, k := range keys {
 		binned := binMemberToBuckets(members[k], start, end, bin)
 		for idx, v := range binned {
-			sum[idx] += v
+			if !seen[idx] {
+				agg[idx], seen[idx] = v, true
+			} else {
+				agg[idx] = reduce(agg[idx], v)
+			}
 		}
 	}
-	if len(sum) == 0 {
+	if len(agg) == 0 {
 		return nil
 	}
-	idxs := make([]int, 0, len(sum))
-	for idx := range sum {
+	idxs := make([]int, 0, len(agg))
+	for idx := range agg {
 		idxs = append(idxs, idx)
 	}
 	sort.Ints(idxs)
@@ -63,10 +78,20 @@ func AggregateRoleSeries(members map[string][]qss.Sample, start, end time.Time, 
 	for _, idx := range idxs {
 		out = append(out, qss.Sample{
 			At:    start.Add(time.Duration(idx) * bin),
-			Value: sum[idx],
+			Value: agg[idx],
 		})
 	}
 	return out
+}
+
+// combineToBar is the per-bin reducer for a bar direction: the member CLOSEST to crossing
+// — max toward an `above` bar, min toward a `below` bar. This is what keeps a role series
+// comparable to the per-pod bar it is judged against (doc 22 C1). Unknown/empty ⇒ above.
+func combineToBar(direction string) func(acc, v float64) float64 {
+	if direction == "below" {
+		return math.Min
+	}
+	return math.Max
 }
 
 // binMemberToBuckets maps one member's samples to bucketIdx -> latest value in that
@@ -112,6 +137,11 @@ type RoleSeriesReader struct {
 	Bin     time.Duration // bucket width (the scrape cadence)
 	Window  time.Duration // how far back to aggregate (≈ the hot-ring span)
 	Now     func() time.Time
+	// Direction returns the bar direction ("above"/"below") for a role-stream's
+	// (uid, metric) so LastN reduces members toward that bar (combineToBar). Nil or an
+	// empty result ⇒ "above" (max), the dominant case. main backs it from the rolled-up
+	// targets so the package imports neither identity nor the graph.
+	Direction func(uid, metric string) string
 }
 
 // StreamsFor returns a single synthetic role stream when uid is a role key with live
@@ -151,9 +181,13 @@ func (r *RoleSeriesReader) LastN(streamID string, n int) []qss.Sample {
 			members[sid] = r.Base.LastN(sid, n)
 		}
 	}
+	direction := ""
+	if r.Direction != nil {
+		direction = r.Direction(uid, metric)
+	}
 	end := r.Now().UTC()
 	start := end.Add(-r.Window)
-	agg := AggregateRoleSeries(members, start, end, r.Bin)
+	agg := AggregateRoleSeries(members, start, end, r.Bin, combineToBar(direction))
 	if n > 0 && len(agg) > n {
 		agg = agg[len(agg)-n:]
 	}

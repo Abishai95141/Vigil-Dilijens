@@ -1,6 +1,7 @@
 package forecast
 
 import (
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestAggregateRoleSeriesFollowsChurn(t *testing.T) {
 		"podB": {sm(3, 40), sm(4, 50), sm(5, 60)}, // its successor, bins 3..5
 	}
 	start, end := roleBase, roleBase.Add(6*15*time.Second)
-	got := AggregateRoleSeries(members, start, end, 15*time.Second)
+	got := AggregateRoleSeries(members, start, end, 15*time.Second, math.Max)
 
 	want := []qss.Sample{sm(0, 10), sm(1, 20), sm(2, 30), sm(3, 40), sm(4, 50), sm(5, 60)}
 	if !reflect.DeepEqual(got, want) {
@@ -32,25 +33,31 @@ func TestAggregateRoleSeriesFollowsChurn(t *testing.T) {
 	}
 }
 
-func TestAggregateRoleSeriesSumsOverlapAndIsOrderInvariant(t *testing.T) {
-	// both pods alive in the same bins ⇒ the role series is their SUM per bin.
+func TestAggregateRoleSeriesReducesOverlapTowardBarAndIsOrderInvariant(t *testing.T) {
+	// both pods alive in the same bins ⇒ the role series is the WORST member toward the
+	// bar per bin (max for an `above` bar; doc 22 C1), NOT the SUM — a replica sum would
+	// cross a per-pod bar with two healthy pods.
 	members := map[string][]qss.Sample{
 		"podA": {sm(0, 10), sm(1, 20)},
 		"podB": {sm(0, 1), sm(1, 2)},
 	}
 	start, end := roleBase, roleBase.Add(2*15*time.Second)
 	bin := 15 * time.Second
-	got := AggregateRoleSeries(members, start, end, bin)
-	want := []qss.Sample{sm(0, 11), sm(1, 22)}
+	got := AggregateRoleSeries(members, start, end, bin, math.Max)
+	want := []qss.Sample{sm(0, 10), sm(1, 20)} // max(10,1), max(20,2)
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("per-bin sum wrong: got %+v want %+v", got, want)
+		t.Fatalf("per-bin worst-member wrong: got %+v want %+v", got, want)
+	}
+	// a `below` bar reduces toward the minimum member instead.
+	if lo := AggregateRoleSeries(members, start, end, bin, math.Min); !reflect.DeepEqual(lo, []qss.Sample{sm(0, 1), sm(1, 2)}) {
+		t.Fatalf("below-bar min reduction wrong: got %+v", lo)
 	}
 	// shuffle each member's samples — the aggregation must be identical (it sorts).
 	shuffled := map[string][]qss.Sample{
 		"podB": {sm(1, 2), sm(0, 1)},
 		"podA": {sm(1, 20), sm(0, 10)},
 	}
-	if got2 := AggregateRoleSeries(shuffled, start, end, bin); !reflect.DeepEqual(got, got2) {
+	if got2 := AggregateRoleSeries(shuffled, start, end, bin, math.Max); !reflect.DeepEqual(got, got2) {
 		t.Fatalf("aggregation is not order-invariant:\n%+v\n%+v", got, got2)
 	}
 }

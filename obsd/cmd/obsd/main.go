@@ -124,7 +124,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		auditLogPath       = fs.String("audit-log-path", "", "doc 20 P4 AUDIT lane: path to the apiserver audit log in JSONL (audit.k8s.io/v1 Event per line). The apiserver audit policy is OFF by default on kind; this is config-dependent (mount the audit log to obsd). Empty ⇒ the audit lane stays off even with --audit-enabled.")
 		tracesEnabled      = fs.Bool("traces-enabled", false, "doc 20 P4 TRACE lane: read OTel spans (JSONL at --traces-path), build the MEASURED observed service call graph at /api/trace-graph, and stage each discovered call as a STRUCTURAL topology candidate (never causal) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the trace import-firewall). Needs --traces-path; the topology candidates also need --dgx-enabled (the store).")
 		tracesPath         = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
-		forecastRoleSeries = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin sum of its live member pods, OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default; off = byte-identical (the forecast feeds per-pod targets unchanged). Gate-pending like every forecast class.")
+		forecastRoleSeries = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin worst-member-toward-bar of its live member pods — max below an `above` bar, so it stays comparable to the per-pod bar; OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default; off = byte-identical (the forecast feeds per-pod targets unchanged). Gate-pending like every forecast class.")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -2685,9 +2685,11 @@ func fetchPodLogLines(ctx context.Context, client kubernetes.Interface, pods []c
 // (doc 20 P5 churn-stable identity): a target keyed on a single pod UID dies when the pod
 // is replaced, so we re-key it on the role CEI (the OwnerReference-derived RoleCEI the
 // identity store already tracks) and dedup per (role, container, metric). The role's
-// series is then the deterministic per-bin SUM of its live members (RoleSeriesReader), so
-// it survives churn. Node/PVC targets and unresolvable-role targets pass through unchanged
-// (honest). Deterministic: output sorted by (CEIKey, Metric).
+// series is then the deterministic per-bin worst-member-toward-bar of its live members
+// (RoleSeriesReader — max for an `above` bar, min for `below`, so it stays comparable to
+// the per-pod bar; doc 22 C1), so it survives churn without the replica-sum mis-bar that
+// would falsely read "already crossed". Node/PVC targets and unresolvable-role targets
+// pass through unchanged (honest). Deterministic: output sorted by (CEIKey, Metric).
 func rollUpTargetsToRole(targets []forecast.Target, store *identity.Store) []forecast.Target {
 	seen := map[string]bool{}
 	out := make([]forecast.Target, 0, len(targets))

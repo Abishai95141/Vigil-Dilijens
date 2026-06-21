@@ -99,27 +99,32 @@ off), using Vigil's real OwnerReference-derived CEI identity
 (`identity/cei.go`, `main.go:rollUpTargetsToRole / buildRoleMembers`) — **not** a
 string hack. So this is not a bug-fix task.
 
-**Open risk to resolve first (bar-semantics):** a role series is the **sum** of N
-members. A per-pod limit (e.g. a container memory `limit`) is **not** the bar for
-the sum — `sum crosses N×limit` ≠ "a single pod is about to OOM." Forecasting the
-sum against a per-pod bar would be a category error. Resolution options to
-evaluate: (a) forecast the role sum but resolve the bar as the *aggregate*
-(Σ limits / declared role budget) where one exists; (b) forecast the **per-member
-max** rather than the sum for OOM-style bars; (c) keep role-series for
-*capacity/throughput* metrics (where sum-vs-aggregate-bar is sound) and leave
-OOM-style per-pod bars on the per-pod path. Decide empirically.
+**Bar-semantics risk — RESOLVED (the original SUM was unsound; fixed to worst-member).**
+The bug was real and is **proven on the real code**: the role series was the per-bin
+**SUM** of members, compared against a **per-pod** bar. A driving test through the actual
+`RunCycle` showed three healthy replicas at ~210 bytes each summing to **622.8 > 486** →
+`SilenceAlreadyCrossed`, i.e. the role forecast was *dead for every multi-pod workload* —
+the exact case role-series exists for. A single real leaker (438, below its 486 limit)
+summed to **752**, so even a true leak could not fire.
 
-**Real validation (not unit tests):** drive a **simulated churn** sequence
-(members appearing/dying across the window, à la HPA/rollout) through both the
-per-pod path and the role path, and measure **forecast accuracy + band coverage**
-on a continuing trend that the per-pod path loses at each restart. Success = the
-role path keeps a coherent forecast across churn where per-pod fragments; bar
-semantics produce a *meaningful* crossing. Re-confirm the E9 property holds in
-Vigil's own identity model.
+The fix (committed): role aggregation is now the **worst member toward the bar** — per-bin
+`max` for an `above` bar, `min` for a `below` bar (`combineToBar`), so the series stays
+comparable to the per-pod bar it is judged against. The churn-stable question becomes "is
+**any** member about to cross **its own** bar." Option (b) from the original list, chosen
+because **every authored bar is per-entity** (entity_scope ∈ Container/Pod/Node/PVC; none is
+role/aggregate-scoped), so a sum has no valid bar in the ontology. Direction is plumbed from
+the rolled-up targets into the `RoleSeriesReader`.
 
-**Scrap criteria:** if no honest bar can be attached to a role-summed series for
-the OOM-style classes we care about, **do not enable it for those classes** —
-surface it as informational only, and say so. Keep it only where the bar is sound.
+**Real validation (done, deterministic, driving the real `RunCycle`):**
+- 3 healthy replicas (each ~210, bar 486) → worst-member **207.9** → **forecast fires** (was a dead `already-crossed`).
+- single leaker among healthy → role tracks the leaker exactly at **438** (not the 752 sum) → fires.
+- **churn rescue**: 4 short-lived pods (6 bins each, < MinContext) → per-pod is `short-context`-dead; the role worst-member series is **24 continuous points** → forecast fires. Role-series adds capability the per-pod path structurally cannot.
+- full `go test -race ./...` green; `cmd/obsd` builds CGO-free; non-role path byte-identical (delegates unchanged).
+
+**Remaining (honest):** this is unit-level proof against the real pipeline with a *scripted*
+clock. The flag stays **opt-in / gate-pending** until a **live churn backtest** against real
+TimesFM + a churning cluster certifies band coverage/accuracy (the standing forecast-class
+gate) — not faked here. Enabling-by-default waits on that gate.
 
 ### C2 — CUSUM onset primitive (MEASURED timing) — *value-gated*
 
