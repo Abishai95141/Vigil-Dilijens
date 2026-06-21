@@ -48,8 +48,6 @@ export const NAV: NavGroup[] = [
   },
 ];
 
-export const ASK: NavItem = { to: "/chat", label: "Ask Vigil", icon: "ask" };
-
 export function NavIcon({ name, size }: { name: IconName; size?: number }) {
   const C = Icon[name];
   return <C size={size} />;

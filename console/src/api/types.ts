@@ -878,34 +878,6 @@ export interface ForecastConfigView {
 }
 
 
-// --- POST /api/chat  (body: { question: string }) --------------------------
-// Provenance: un-classed at the envelope; provenance lives inline in the answer
-// prose + citations (doc 10 M7). A register-safe deterministic responder; a
-// draft carrying a banned register is REFUSED (refused:true). Only mounted when
-// chat is wired (p.Chat != nil) — otherwise the route 404s.
-// NOTE: request key is "question", NOT "claim".
-// Source: obsd/internal/api/chat.go (ChatResponse)
-export interface ChatRequest {
-  question: string;
-}
-
-export interface ChatResponse {
-  answer: string;               // "" when refused
-  citations: string[];          // Go nil slice => may serialize as null; tolerate null
-  refused: boolean;
-  refusedReason?: string;       // omitempty: present only when refused
-}
-
-// ---------------------------------------------------------------------------
-// REFERENCE ONLY — NOT wire types. ChatSnapshot/ChatMatch/ChatWarning in
-// chat.go carry NO json tags; they are server-side input to AnswerChat and are
-// never serialized to the client. Do not consume these from /api/chat.
-// (Listed so a dev does not mistake them for the response shape.)
-// ---------------------------------------------------------------------------
-// type ChatMatch    = { Phenomenon; Label; Entity; Quality; AuthoredNote; Precursors[] }  // server-internal
-// type ChatWarning  = { Entity; Metric; EarliestAt; LatestAt; OpenEnded; Confidence }     // server-internal
-// type ChatSnapshot = { GraphRelease; Matches[]; Warnings[]; UnexplainedN; CoverageTierA; CoverageNote } // server-internal
-
 
 // ╔══ GROUP 5 — MCP JSON-RPC client + data-fetch layer + vite proxy ══╗
 
@@ -1089,15 +1061,12 @@ export interface UseApiState<T> {
 export interface PostJson {
   // POST /api/validate-claim  body {claim}  -> ClaimVerdict
   validateClaim(body: ValidateClaimBody): Promise<ClaimVerdict>;
-  // POST /api/chat            body {question} -> (chat view, separate group)
-  chat(body: ChatBody): Promise<unknown>;
   // POST /api/context-windows body ContextWindow -> ContextWindow (separate group)
   addContextWindow(body: unknown): Promise<unknown>;
   // POST /mcp                 body McpRequest    -> McpResponse (then double-parse)
   mcp<R = McpToolResult>(req: McpRequest): Promise<McpResponse<R>>;
 }
 export interface ValidateClaimBody { claim: string; }   // required, non-empty
-export interface ChatBody { question: string; }
 
 // Recommended upgrade (per useApi.ts + vite.config.ts + techstack §10):
 // replace the 15s poll with an SSE finding-stream or the Connect-Web typed

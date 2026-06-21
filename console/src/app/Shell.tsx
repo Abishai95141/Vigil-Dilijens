@@ -2,7 +2,7 @@ import { useConfig } from "@/api/client";
 import { Icon } from "@/components/ui/icons";
 import { Mono } from "@/components/ui/primitives";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
-import { ASK, NAV, NavIcon } from "./nav";
+import { NAV, NavIcon } from "./nav";
 
 function GateBanner() {
   const { data } = useConfig();
@@ -98,10 +98,6 @@ export function Shell() {
               </div>
             </div>
           ))}
-        </div>
-
-        <div className="border-t border-rule p-3">
-          <SidebarLink to={ASK.to} label={ASK.label} icon={ASK.icon} />
         </div>
       </nav>
 

@@ -39,14 +39,6 @@ export const Icon = {
       <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
     </Svg>
   ),
-  node: (p: P) => (
-    <Svg {...p}>
-      <rect x="4" y="4" width="7" height="7" rx="1" />
-      <rect x="13" y="4" width="7" height="7" rx="1" />
-      <rect x="4" y="13" width="7" height="7" rx="1" />
-      <rect x="13" y="13" width="7" height="7" rx="1" />
-    </Svg>
-  ),
   pod: (p: P) => (
     <Svg {...p}>
       <rect x="4.5" y="6" width="15" height="12" rx="1.5" />
@@ -78,18 +70,6 @@ export const Icon = {
       <path d="M3 12h18" />
       <circle cx="8" cy="12" r="1.6" />
       <circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" />
-    </Svg>
-  ),
-  ask: (p: P) => (
-    <Svg {...p}>
-      <path d="M5 5h14v10H10l-4 4v-4H5z" />
-    </Svg>
-  ),
-  storage: (p: P) => (
-    <Svg {...p}>
-      <ellipse cx="12" cy="6" rx="7" ry="2.5" />
-      <path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6" />
-      <path d="M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     </Svg>
   ),
   schema: (p: P) => (
@@ -162,11 +142,6 @@ export const Icon = {
     <Svg {...p}>
       <path d="M4 9v6h4l5 4V5L8 9z" />
       <path d="M16 9l4 6M20 9l-4 6" />
-    </Svg>
-  ),
-  dot: (p: P) => (
-    <Svg {...p}>
-      <circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />
     </Svg>
   ),
   logo: (p: P) => (

@@ -1037,43 +1037,8 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				return vapi.BuildTimeline(time.Now().UTC(), fr, ur, pw, laneOn), nil
 			}
 		}
-		// Context windows (doc 10 M6, begun) + register-guarded chat (10 M7, begun).
+		// Context windows (doc 10 M6, begun).
 		providers.ContextWindows = cwStore
-		providers.Chat = func() *vapi.ChatSnapshot {
-			snap := &vapi.ChatSnapshot{CoverageNote: "see /api/coverage for the full visibility map"}
-			if cv := coverage.Load(); cv != nil {
-				snap.GraphRelease = cv.GraphRelease
-				snap.CoverageTierA = cv.Summary.TierA
-				snap.CoverageNote = fmt.Sprintf("%d full / %d partial / %d none phenomena observable.",
-					cv.Summary.PhenomenaFull, cv.Summary.PhenomenaPartial, cv.Summary.PhenomenaNone)
-			}
-			if iv := insightsView.Load(); iv != nil {
-				for _, f := range iv.Findings {
-					m := vapi.ChatMatch{Phenomenon: f.Phenomenon, Label: f.Label, Entity: f.Name, Quality: f.Quality}
-					if len(f.Members) > 0 {
-						m.AuthoredNote = f.Members[0].Note
-					}
-					// NOTE: blast radius is the DOWNSTREAM (T0+) at-risk set, not
-					// precursors (T0-) — feeding it into Precursors would mislabel a
-					// consequence as a cause. Precursors are an authored T0- relation
-					// the insight card does not currently carry; left empty (the chat
-					// then cites the authored note, never an invented precursor).
-					snap.Matches = append(snap.Matches, m)
-				}
-			}
-			if wv := warningsView.Load(); wv != nil && wv.Enabled {
-				for _, c := range wv.Warnings {
-					snap.Warnings = append(snap.Warnings, vapi.ChatWarning{
-						Entity: c.Name, Metric: c.Metric, EarliestAt: c.EarliestAt, LatestAt: c.LatestAt,
-						OpenEnded: c.LatestBeyondHorizon, Confidence: c.Confidence,
-					})
-				}
-			}
-			if uv := unexpView.Load(); uv != nil {
-				snap.UnexplainedN = len(uv.OpenCards)
-			}
-			return snap
-		}
 		// Config (doc 10 M6): runtime configuration + the forecast lane's gate
 		// posture, so an operator can read the system's settings (and WHY the
 		// soon-lane is dark) without inferring it from the warnings tab.
@@ -1107,8 +1072,8 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					"Detection runs every evaluation tick regardless of the forecast lane (non-gating, doc 01).",
 			}
 		}
-		logger.Info("operator surfacing API enabled (doc 10 M1–M7-begun + doc 15 F)",
-			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/cross-service /api/context-windows /api/chat /api/config")
+		logger.Info("operator surfacing API enabled (doc 10 M1–M6 + doc 15 F)",
+			"routes", "/api/coverage /api/findings /api/insights /api/topology /api/unexplained /api/timeline /api/warnings /api/cross-service /api/context-windows /api/config")
 	}
 	var mcpHandler http.Handler
 	if mcpEnabled && providers != nil {
@@ -1271,7 +1236,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // inventoryLoop periodically surfaces the identity inventory: the operational health
 // summary + Phase-0a gate verdict to the logger (stderr), and the live, correctly-
 // joined per-service entity inventory table to out (stdout) — "prerequisite zero,
-// observable" (doc 03 §6, CLAUDE.md demo target). It renders once as soon as the
+// observable" (doc 03 §6, DEVELOPMENT.md demo target). It renders once as soon as the
 // informers sync, then on every evaluation tick.
 func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], transitiveChainView *atomic.Pointer[[]flow.Chain], projectedTransitiveView *atomic.Pointer[[]flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration,
 	eventsEnabled bool, eventsConds []events.Corroboration, eventsDets []events.Detection, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView],

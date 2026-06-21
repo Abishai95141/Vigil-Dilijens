@@ -44,9 +44,6 @@ type Providers struct {
 	// ContextWindows is the operator-defined context-window store (doc 10 M6,
 	// begun); nil = the routes are not mounted.
 	ContextWindows *ContextWindowStore
-	// Chat returns the read-only snapshot the register-guarded chat answers from
-	// (doc 10 M7, begun); nil = the route is not mounted.
-	Chat func() *ChatSnapshot
 	// Config returns the runtime configuration view (doc 10 M6) — cadences,
 	// graph release, and the forecast lane's gate posture; nil = not mounted.
 	Config func() *ConfigView
@@ -653,26 +650,6 @@ func Register(mux *http.ServeMux, p Providers) {
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
-		})
-	}
-
-	// Chat (doc 10 M7, begun): POST a question; the register-guarded responder
-	// answers ONLY from the structured snapshot, refusing any draft that would
-	// cross the charter.
-	if p.Chat != nil {
-		mux.HandleFunc("/api/chat", func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			var req struct {
-				Question string `json:"question"`
-			}
-			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody)).Decode(&req); err != nil {
-				http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
-				return
-			}
-			writeJSON(w, AnswerChat(req.Question, p.Chat()))
 		})
 	}
 

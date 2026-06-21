@@ -6,7 +6,6 @@ import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import type {
   CausalDirectionResult,
   CausalHypothesesView,
-  ChatResponse,
   ClaimVerdict,
   ConfigView,
   CoverageView,
@@ -127,7 +126,6 @@ export const previewGovernance = (candidateId: string) =>
   getJson<GovernancePreviewResult>(
     `/api/governance/preview?candidateId=${encodeURIComponent(candidateId)}`,
   );
-export const askChat = (question: string) => postJson<ChatResponse>("/api/chat", { question });
 
 // ── MCP JSON-RPC client ──────────────────────────────────────────────────────
 // One POST /mcp endpoint. A tools/call result wraps the view JSON as a STRING
@@ -159,10 +157,6 @@ export async function mcpListTools(): Promise<McpToolsListResult> {
   });
   if (env.error) throw new Error(env.error.message);
   return env.result!;
-}
-
-export function isLaneOff(x: unknown): x is McpLaneOff {
-  return !!x && typeof x === "object" && "available" in x && (x as McpLaneOff).available === false;
 }
 
 export async function mcpCall<T>(

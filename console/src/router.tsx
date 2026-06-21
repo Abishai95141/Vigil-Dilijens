@@ -2,7 +2,6 @@ import { createRootRoute, createRoute, createRouter } from "@tanstack/react-rout
 import { Shell } from "./app/Shell";
 import { AnomaliesPage } from "./routes/anomalies";
 import { CausalHypothesesPage } from "./routes/causal-hypotheses";
-import { ChatPage } from "./routes/chat";
 import { ConfigPage } from "./routes/config";
 import { CoveragePage } from "./routes/coverage";
 import { EventsPage } from "./routes/events";
@@ -44,7 +43,6 @@ const routeTree = root.addChildren([
   // (a direct GET there returns 405). The page lives at /integrations; the MCP
   // client still POSTs to /mcp via the proxy.
   r("/integrations", McpPage),
-  r("/chat", ChatPage),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: "intent" });
