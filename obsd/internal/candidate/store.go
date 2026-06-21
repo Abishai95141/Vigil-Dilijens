@@ -515,6 +515,13 @@ func sortedEvidence(e []EvidenceRef) []EvidenceRef {
 // here at the one chokepoint every producer flows through.
 var nonIdentityPayloadKeys = map[string]struct{}{
 	"rationale": {}, // the model's free-text explanation for the proposal
+	// doc 22 C3: a co-onset hypothesis is identified by its PAIR (the Subject "a ~ b"). The
+	// onset timestamps, coefficient, delta, step magnitudes and observed order all change
+	// every cycle as fresh onsets arrive, so including them in the id would mint a new row for
+	// the SAME pair each cycle (defeating dedup, growing the surface unbounded). They are
+	// shown for context, never identity.
+	"aOnsetTs": {}, "bOnsetTs": {}, "aStepZ": {}, "bStepZ": {},
+	"coefficient": {}, "deltaSeconds": {}, "observedFirst": {}, "windowSeconds": {},
 }
 
 // identityPayload returns a copy of p with the non-identity (model-prose) keys

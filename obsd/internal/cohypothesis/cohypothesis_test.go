@@ -1,12 +1,40 @@
 package cohypothesis
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/onset"
 )
+
+// The same pair re-staged across cycles (with LATER onsets + a slightly different coefficient)
+// must DEDUP to one row — the content id is the PAIR, not the per-cycle timestamps (the
+// live-found unbounded-growth fix).
+func TestCoOnset_DedupsSamePairAcrossCycles(t *testing.T) {
+	s, err := candidate.Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a, b := "i|cl|ns|Pod|x|u1|m", "i|cl|ns|Pod|y|u2|m"
+	if _, err := HypothesizeAndStage(s, t0, []onset.Onset{ons(a, 0, "up"), ons(b, 5, "up")},
+		[]CoupledPair{{A: a, B: b, Coefficient: 0.90}}, 90*time.Second, "v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HypothesizeAndStage(s, t0.Add(time.Minute), []onset.Onset{ons(a, 1000, "up"), ons(b, 1005, "up")},
+		[]CoupledPair{{A: a, B: b, Coefficient: 0.92}}, 90*time.Second, "v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.List(candidate.Filter{Kind: candidate.KindCausalHypothesis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("same pair across cycles must dedup to 1 row (pair-stable id), got %d", len(rows))
+	}
+}
 
 var t0 = time.Date(2026, 6, 21, 12, 0, 0, 0, time.UTC)
 
@@ -75,6 +103,14 @@ func TestCoOnset_SkipsSameEntityPairs(t *testing.T) {
 	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0); len(got) != 1 {
 		t.Fatalf("cross-entity co-onset must be staged, got %d", len(got))
 	}
+	// the SAME physical pod as both a Container CEI and a Pod CEI (shared pod UID) is NOT a
+	// cross-workload lead (the live-found self-correlation leak) — must be skipped.
+	pc := "i|cl|ns|Container|s|POD123/s|container_memory_working_set_bytes"
+	pp := "i|cl|ns|Pod|costep-y|POD123|container_memory_working_set_bytes"
+	on2 := []onset.Onset{ons(pc, 0, "up"), ons(pp, 5, "up")}
+	if got := Hypothesize(on2, []CoupledPair{{A: pc, B: pp, Coefficient: 1.0}}, 90*time.Second, "v1", 0); len(got) != 0 {
+		t.Fatalf("same-pod Container~Pod views (shared UID) must be skipped, got %d", len(got))
+	}
 }
 
 func TestCoOnset_CapsToStrongestLeads(t *testing.T) {
@@ -82,8 +118,9 @@ func TestCoOnset_CapsToStrongestLeads(t *testing.T) {
 	var onsets []onset.Onset
 	var pairs []CoupledPair
 	for i, coef := range []float64{0.70, 0.99, 0.80, 0.95, 0.60} {
-		a := "i|cl|ns|Pod|p" + string(rune('a'+i)) + "|u|m"
-		b := "i|cl|ns|Pod|q" + string(rune('a'+i)) + "|u|m"
+		c := string(rune('a' + i))
+		a := "i|cl|ns|Pod|p" + c + "|u" + c + "|m" // distinct pod UIDs (different physical pods)
+		b := "i|cl|ns|Pod|q" + c + "|v" + c + "|m"
 		onsets = append(onsets, ons(a, 0, "up"), ons(b, 5, "up"))
 		pairs = append(pairs, CoupledPair{A: a, B: b, Coefficient: coef})
 	}

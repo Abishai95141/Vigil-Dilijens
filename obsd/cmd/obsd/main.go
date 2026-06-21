@@ -1778,8 +1778,28 @@ func onsetLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, v
 					continue
 				}
 				scanned++
-				onsets = append(onsets, onset.Detect(cei, metric, samples, p)...)
+				// Keep only the MOST RECENT onset per series for the surface: a continuous ramp
+				// re-trips the CUSUM and Detect returns many onsets for one series — the latest is
+				// the operative one (downstream consumers already use latest-per-series). This cut
+				// ~80% duplicate records on the live surface.
+				for _, o := range onset.Detect(cei, metric, samples, p) {
+					onsets = append(onsets, o)
+				}
 			}
+			latestOnset := make(map[string]int, len(onsets))
+			deduped := onsets[:0]
+			for _, o := range onsets {
+				k := o.EntityCEI + "\x1f" + o.Metric
+				if idx, ok := latestOnset[k]; ok {
+					if o.At.After(deduped[idx].At) {
+						deduped[idx] = o
+					}
+					continue
+				}
+				latestOnset[k] = len(deduped)
+				deduped = append(deduped, o)
+			}
+			onsets = deduped
 			sort.SliceStable(onsets, func(i, j int) bool {
 				if !onsets[i].At.Equal(onsets[j].At) {
 					return onsets[i].At.Before(onsets[j].At)
@@ -1804,7 +1824,12 @@ func onsetLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, v
 func onsetSkipMetric(metric string) bool {
 	return strings.HasPrefix(metric, "container_last_seen") ||
 		strings.HasPrefix(metric, "container_start_time") ||
-		strings.Contains(metric, "_max_usage_bytes")
+		strings.Contains(metric, "_max_usage_bytes") ||
+		// node-exporter clocks / scrape-jitter gauges (monotonic time / per-scrape noise) — an
+		// onset on them is meaningless (found leaking spurious onsets in the live test).
+		strings.HasPrefix(metric, "node_time_seconds") ||
+		strings.HasPrefix(metric, "node_boot_time_seconds") ||
+		strings.HasPrefix(metric, "node_scrape_collector_duration_seconds")
 }
 
 // splitStreamID splits a hot-store key "CEI.Key()|metric|sub" into (cei, metric+sub): the

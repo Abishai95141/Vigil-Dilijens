@@ -22,9 +22,9 @@
 package cohypothesis
 
 import (
-	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
@@ -68,8 +68,10 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 		if absDur(oa.At.Sub(ob.At)) > window {
 			continue // stepped too far apart ⇒ not a co-onset
 		}
-		if entityOf(p.A) == entityOf(p.B) {
-			continue // same entity (two facets of one workload's state) ⇒ trivial, not a CROSS-workload lead
+		if entityOf(p.A) == entityOf(p.B) || samePod(p.A, p.B) {
+			// same entity, OR the SAME physical pod seen as both a Pod CEI and a Container CEI
+			// (shared pod UID) — two facets of one workload, not a CROSS-workload lead.
+			continue
 		}
 		// Sort the pair so the subject + content id are stable and DIRECTION-FREE.
 		a, oA, b, oB := p.A, oa, p.B, ob
@@ -97,11 +99,14 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 				"observedFirst": first, // MEASURED observed order — explicitly NOT a cause
 				"windowSeconds": int64(window / time.Second),
 			},
+			// Evidence is STABLE per pair (no per-cycle timestamps/coefficient in the refs) so the
+			// content id is the PAIR — re-staging the same pair updates in place, never floods. The
+			// changing values (onset times, r, delta) live in the payload + the surfaced row.
 			Evidence: []candidate.EvidenceRef{
-				{Kind: "measured-changepoint", Ref: a + "@" + oA.At.UTC().Format(time.RFC3339Nano), Detail: "stepped " + oA.Direction},
-				{Kind: "measured-changepoint", Ref: b + "@" + oB.At.UTC().Format(time.RFC3339Nano), Detail: "stepped " + oB.Direction},
-				{Kind: "associated-with", Ref: fmt.Sprintf("r=%.3g", p.Coefficient), Detail: "MEASURED correlation (undirected, never causal)"},
-				{Kind: "co-occurrence", Ref: fmt.Sprintf("delta=%ds", deltaSec), Detail: "both stepped within the co-onset window; the observed order is not a cause"},
+				{Kind: "measured-changepoint", Ref: a, Detail: "stepped " + oA.Direction},
+				{Kind: "measured-changepoint", Ref: b, Detail: "stepped " + oB.Direction},
+				{Kind: "associated-with", Ref: "correlated", Detail: "MEASURED correlation (undirected, never causal)"},
+				{Kind: "co-occurrence", Ref: "co-stepped", Detail: "both stepped within the co-onset window; the observed order is not a cause"},
 			},
 			Lineage: candidate.Lineage{
 				Source: "co-onset", Method: "associated-co-onset", GraphVersion: graphVersion,
@@ -160,6 +165,27 @@ func entityOf(streamKey string) string {
 		}
 	}
 	return streamKey
+}
+
+// samePod reports whether two "CEI|metric" stream keys belong to the same physical pod. The
+// CEI's uid field (index 5 of "i|cluster|ns|Kind|name|uid|metric…") is the pod UID, or
+// "podUID/container" for a Container CEI — so the same pod appears as both a Pod CEI and a
+// Container CEI with the SAME pod UID; those are not a cross-workload lead.
+func samePod(a, b string) bool {
+	ua, ub := podUID(a), podUID(b)
+	return ua != "" && ua == ub
+}
+
+func podUID(streamKey string) string {
+	parts := strings.Split(streamKey, "|")
+	if len(parts) < 6 {
+		return ""
+	}
+	uid := parts[5]
+	if s := strings.IndexByte(uid, '/'); s >= 0 {
+		uid = uid[:s] // strip the "/container" suffix on a Container CEI
+	}
+	return uid
 }
 
 func absDur(d time.Duration) time.Duration {
