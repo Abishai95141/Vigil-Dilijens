@@ -409,6 +409,12 @@ console-build:
 console-check:
     cd console && pnpm lint && pnpm typecheck
 
+# --- Failure simulator (Streamlit chaos console, simulator/) -----------------
+# Self-serve, transparent failure-injection console for abb-genix, observed in Vigil.
+# Opens on http://localhost:8501. See simulator/README.md.
+simulator:
+    cd simulator && uv run streamlit run app.py
+
 # --- Dev cluster (kind — runs on the Linux box) -----------------------------
 
 # Create the 3-node kind cluster (1 control-plane + 2 workers, doc 14 §3.1).
