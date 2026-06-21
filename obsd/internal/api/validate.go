@@ -16,8 +16,14 @@ import (
 // statement is worse than none, so every check biases to UNDER-flag.
 //
 // Two backstops (doc 14 §T-D):
-//   1. SUBSTRING — the charter denylist (CharterViolations): banned causal /
-//      future-certainty / fusion phrasings. A blunt instrument; it knows no graph.
+//   1. SUBSTRING + REGISTER — the charter denylist (CharterViolations): banned causal /
+//      future-certainty / fusion phrasings. A blunt instrument; it knows no graph. For
+//      future certainty it is augmented by a REGISTER-LEVEL matcher (futureCertainty-
+//      RegisterMatches): a future modal (will / shall / going to / about to) bound to a
+//      crossing/failure predicate ("will crash", "will fill up", "is about to fall
+//      over") is the promise register a flat substring list cannot enumerate — it
+//      catches the bare phrasings the denylist misses, negation-aware so a negated
+//      future ("will not crash", "won't fill up") never flags.
 //   2. STRUCTURAL — graph-aware. It extracts (trigger -> downstream) causal pairs from
 //      the prose and checks them against the AUTHORED phenomenon relations: a causal
 //      claim WITH an authored basis is a (clumsy) surfacing of a real relation, NOT a
@@ -92,7 +98,7 @@ type ClaimOpts struct {
 	DisableSubstring bool
 }
 
-const validateNote = "Best-effort referee (doc 01): flags generated causation, class fusion, and future certainty; NEVER blocks. A causal claim with an AUTHORED relation behind it is not flagged — but should be surfaced AS authored, verbatim. Absence of a flag is not a guarantee of correctness."
+const validateNote = "This is a best-effort LABELLER, not a gate (doc 01): it is ADVISORY ONLY — it NEVER blocks and has no veto. A flag is a labelling instruction, not a rejection. It flags generated causation, class fusion, and future certainty (a projection stated as a certainty). A causal claim with an AUTHORED relation behind it is not flagged — surface it AS authored, verbatim. Detection is best-effort and incomplete: the absence of a flag is NOT a guarantee of correctness."
 
 // cue is a causal connective with its DIRECTION. reverse=true means the cue is
 // passive/effect-first ("B was caused by A" ⇒ trigger=A is AFTER the cue, downstream=B
@@ -152,6 +158,79 @@ const subjectWindow = 55
 
 // negationTokens precede an assertion to negate it; a negated assertion is not a claim.
 var negationTokens = []string{"not ", "n't", "never ", "neither ", "no longer", "isn't", "aren't", "hasn't", "haven't"}
+
+// futureModals are the auxiliaries that put a clause in the future-CERTAINTY register —
+// a promise about what WILL happen. The modal ALONE is never enough to flag (the system
+// makes plenty of benign promises about its OWN behaviour: "detection will produce
+// identical results"); the register is the modal BOUND to a crossing/failure predicate
+// (futurePredicates) within a short window. Note "won't" is deliberately absent: it is a
+// NEGATED future ("won't crash") and carries no certainty to flag, and it does not
+// contain "will" so it never matches by accident.
+var futureModals = []string{"will", "shall", "going to", "about to", "gonna"}
+
+// futurePredicates are the crossing / failure / depletion verbs that, after a future
+// modal, assert a bar will be crossed or a thing will fail — the promise a forecast must
+// never make. Curated (whole-word matched, so "fill" never fires inside "backfill"/
+// "fulfill" and "fail" never inside "failover") rather than a flat substring list, so
+// "asset-api will crash soon" and "the disk will fill up" — neither on the charter
+// denylist — are caught by REGISTER, not by enumerated phrase.
+var futurePredicates = []string{
+	// threshold / capacity crossings
+	"cross", "crosses", "crossing", "reach", "reaches", "breach", "breaches",
+	"exceed", "exceeds", "surpass", "surpasses", "overflow", "overflows",
+	"fill", "fills", "saturate", "saturates", "exhaust", "exhausts",
+	"deplete", "depletes", "fill up", "run out", "run dry", "go over", "max out", "blow past",
+	"hit the limit", "hit the cap", "hit the ceiling",
+	// failure / outage
+	"crash", "crashes", "crashing", "fail", "fails", "failing", "die", "dies",
+	"flatline", "flatlines", "restart", "restarts", "restarting", "reboot", "reboots",
+	"freeze", "freezes", "hang", "hangs", "oom", "be killed", "get killed",
+	"be evicted", "get evicted", "be oom-killed", "get oom-killed",
+	"go down", "fall over", "stop responding", "lock up", "run out of",
+}
+
+// futureWindow bounds how far AFTER a future modal a crossing/failure predicate may sit
+// to count as one future-certainty register claim (one clause's worth).
+const futureWindow = 40
+
+// futureCertaintyRegisterMatches returns deduped, sorted human-readable details for every
+// future-certainty REGISTER match in the (lowercased) claim: a future modal followed,
+// within futureWindow chars and not negated, by a crossing/failure predicate. It is the
+// register-level companion to the charter denylist — it catches "will crash"/"will fill
+// up"/"is about to fall over", which the denylist (a fixed phrase list) cannot. Biased to
+// UNDER-flag for the FALSE-BLOCK==0 floor: a negation before the modal OR between the
+// modal and the predicate suppresses the match.
+func futureCertaintyRegisterMatches(low string) []string {
+	matched := map[string]bool{}
+	var out []string
+	for _, modal := range futureModals {
+		for _, mstart := range allIndexWord(low, modal) {
+			if negatedBefore(low, mstart) {
+				continue
+			}
+			end := mstart + len(modal)
+			stop := end + futureWindow
+			if stop > len(low) {
+				stop = len(low)
+			}
+			win := low[end:stop]
+			for _, pred := range futurePredicates {
+				ci := firstIndexWord(win, pred)
+				if ci < 0 || negatedIn(win[:ci]) {
+					continue
+				}
+				detail := fmt.Sprintf("future certainty (register): the modal %q + %q states a future crossing/failure as a certainty — a projection is modal (a band), never a promise; soften to a band", modal, pred)
+				if !matched[detail] {
+					matched[detail] = true
+					out = append(out, detail)
+				}
+				break // one predicate per modal occurrence is enough to flag the clause
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // ValidateClaim is the pure referee. Deterministic in (claim, ctx, opts).
 func ValidateClaim(claim string, ctx ClaimContext, opts ClaimOpts) ClaimVerdict {
@@ -219,6 +298,14 @@ func ValidateClaim(claim string, ctx ClaimContext, opts ClaimOpts) ClaimVerdict 
 				Class:  cvio.Class,
 				Detail: fmt.Sprintf("banned %s register (denylist): %q", cvio.Class, cvio.Phrase),
 			})
+		}
+		// 3b. Future-certainty REGISTER backstop (companion to the denylist above). A
+		// future modal bound to a crossing/failure predicate is the promise register a
+		// fixed phrase list cannot enumerate — this is the same register family as the
+		// denylist (not graph-aware), so like the denylist it is OFF in mutation mode.
+		for _, detail := range futureCertaintyRegisterMatches(low) {
+			v.Flagged = true
+			v.Reasons = append(v.Reasons, ClaimFinding{Class: "future-certainty", Detail: detail})
 		}
 	}
 
@@ -373,6 +460,27 @@ func allIndexWord(s, sub string) []int {
 		}
 	}
 	return out
+}
+
+// firstIndexWord returns the first start offset where sub occurs in s on WORD boundaries
+// (both ends), or -1. Whole-word so a predicate "fill" never matches inside "backfill"
+// and "fail" never inside "failover".
+func firstIndexWord(s, sub string) int {
+	if sub == "" {
+		return -1
+	}
+	from := 0
+	for {
+		i := strings.Index(s[from:], sub)
+		if i < 0 {
+			return -1
+		}
+		p := from + i
+		if wordBoundary(s, p, p+len(sub)) {
+			return p
+		}
+		from = p + 1
+	}
 }
 
 func wordBoundary(s string, a, b int) bool {

@@ -139,6 +139,23 @@
     {"id": "fab-rescue-bleed", "category": "relation-absent", "expectFlagged": true,
      "claim": "The memory leak led to the oom kill; separately the network impairment caused the memory leak.",
      "projected": [], "measured": [],
-     "note": "HARDENING (rescue-bleed + all-occurrences): clause 1 is the authored leak→oom (rescued) but clause 2 fabricates NETWORK→LEAK — the fabrication must still flag; the per-cue rescue + all-occurrence indexing closes this"}
+     "note": "HARDENING (rescue-bleed + all-occurrences): clause 1 is the authored leak→oom (rescued) but clause 2 fabricates NETWORK→LEAK — the fabrication must still flag; the per-cue rescue + all-occurrence indexing closes this"},
+
+    {"id": "fab-future-will-bare", "category": "future-certainty", "expectFlagged": true,
+     "claim": "asset-api will crash soon.",
+     "projected": [], "measured": [],
+     "note": "REGISTER (the live-adversarial gap): bare future-certainty — modal 'will' + a failure predicate ('crash'), NOT on the charter denylist; caught only by register-level matching, NOT by the structural backstop (future certainty is a register concern)"},
+    {"id": "fab-future-will-fill", "category": "future-certainty", "expectFlagged": true,
+     "claim": "the disk will fill up.",
+     "projected": [], "measured": [],
+     "note": "REGISTER: modal 'will' + a crossing predicate ('fill'), with NO temporal cue at all — proves the predicate path stands alone; denylist-absent, register-caught"},
+    {"id": "legit-will-benign", "category": "legit", "expectFlagged": false,
+     "claim": "Detection will produce identical results whether the clock is present, degraded, or absent.",
+     "projected": [], "measured": [],
+     "note": "FALSE-BLOCK lock for the register matcher: a bare modal 'will' WITHOUT a crossing/failure predicate (a benign promise about the system's own behaviour) must never flag"},
+    {"id": "legit-will-negated", "category": "legit", "expectFlagged": false,
+     "claim": "asset-api will not crash; the disk will not fill up.",
+     "projected": [], "measured": [],
+     "note": "FALSE-BLOCK lock: a NEGATED future ('will not crash') carries no certainty — the register matcher is negation-aware and must not flag"}
   ]
 }

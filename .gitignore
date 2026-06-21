@@ -46,3 +46,7 @@ deploy/flow/conntrack-agent
 
 # Local run scratch: replay/findings SQLite DBs from manual cluster testing
 _run/
+
+# Personal capture artifacts (screenshots / recordings — not source)
+captures/
+captures.zip

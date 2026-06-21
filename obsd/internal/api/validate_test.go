@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -93,6 +94,62 @@ func TestFutureCertaintyFlagged(t *testing.T) {
 	v := verdict(t, "currencyservice will cross its memory limit in ten minutes.")
 	if !v.Flagged {
 		t.Fatalf("a future certainty must be flagged: %+v", v)
+	}
+}
+
+// TestFutureCertaintyBareWillRegister pins the gap the live adversarial validation found:
+// a bare future-certainty phrasing using the modal "will" + a crossing/failure predicate
+// is NOT on the charter denylist, so it slipped through ("flagged:false"). The register
+// matcher closes it — "will crash" (with or without a temporal cue) and "will fill up"
+// (no temporal cue at all) must both flag class future-certainty.
+func TestFutureCertaintyBareWillRegister(t *testing.T) {
+	bare := []string{
+		"asset-api will crash soon.",         // modal + failure predicate + temporal cue
+		"The disk will fill up.",             // modal + crossing predicate, NO temporal cue
+		"memory will run out in a moment.",   // multi-word predicate
+		"the node is about to fall over.",    // "about to" + failure predicate
+		"latency is going to exceed the SLO", // "going to" + crossing predicate
+	}
+	for _, c := range bare {
+		v := verdict(t, c)
+		if !v.Flagged {
+			t.Errorf("bare future certainty must be flagged: %q\n  reasons: %+v", c, v.Reasons)
+		}
+		if !hasClass(v, "future-certainty") {
+			t.Errorf("expected a future-certainty finding for %q, got %+v", c, v.Reasons)
+		}
+	}
+}
+
+// TestFutureCertaintyBenignWillNotFlagged is the FALSE-BLOCK==0 lock for the register
+// matcher: a bare modal WITHOUT a crossing/failure predicate (a benign promise about the
+// system's own behaviour), and a NEGATED future, must never flag.
+func TestFutureCertaintyBenignWillNotFlagged(t *testing.T) {
+	benign := []string{
+		"Detection will produce identical results whether the clock is present, degraded, or absent.",
+		"The referee will surface the authored relation verbatim.",
+		"The band will widen per hop and never collapse.",
+		"asset-api will not crash; the disk will not fill up.", // negated future
+		"the pod won't crash and memory won't run out.",        // contracted negation
+	}
+	for _, c := range benign {
+		v := verdict(t, c)
+		if v.Flagged {
+			t.Errorf("FALSE-BLOCK: a benign/negated 'will' claim was flagged: %q\n  reasons: %+v", c, v.Reasons)
+		}
+	}
+}
+
+// TestValidateClaimNoteStatesAdvisoryOnly pins that the limitation — best-effort labeller,
+// NOT a gate — is explicit in the tool OUTPUT (the verdict Note), not only the MCP tool
+// description.
+func TestValidateClaimNoteStatesAdvisoryOnly(t *testing.T) {
+	v := verdict(t, "the storage saturation is matching now.")
+	low := strings.ToLower(v.Note)
+	for _, want := range []string{"labeller", "not a gate", "never blocks", "best-effort"} {
+		if !strings.Contains(low, want) {
+			t.Errorf("verdict Note must state %q explicitly; got %q", want, v.Note)
+		}
 	}
 }
 
