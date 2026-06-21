@@ -58,6 +58,25 @@ func TestCoOnset_DirectionFreeRegardlessOfInputOrder(t *testing.T) {
 	}
 }
 
+func TestCoOnset_SkipsSameEntityPairs(t *testing.T) {
+	// two memory facets of the SAME container (same 6-field CEI) co-step — a trivial
+	// within-workload pair, NOT a cross-workload lead. Must be skipped.
+	a := "i|cl|ns|Pod|influx|uid|container_memory_mapped_file"
+	b := "i|cl|ns|Pod|influx|uid|container_memory_active_file"
+	onsets := []onset.Onset{ons(a, 0, "up"), ons(b, 10, "up")}
+	pairs := []CoupledPair{{A: a, B: b, Coefficient: 0.95}}
+	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1"); len(got) != 0 {
+		t.Fatalf("same-entity pair must be skipped (not a cross-workload lead), got %d", len(got))
+	}
+	// a CROSS-entity pair (different pods) co-stepping IS staged.
+	c := "i|cl|ns|Pod|other|uid2|container_memory_working_set_bytes"
+	onsets = append(onsets, ons(c, 5, "up"))
+	pairs = []CoupledPair{{A: a, B: c, Coefficient: 0.9}}
+	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1"); len(got) != 1 {
+		t.Fatalf("cross-entity co-onset must be staged, got %d", len(got))
+	}
+}
+
 func TestCoOnset_NoHypothesisWhenStepsTooFarApart(t *testing.T) {
 	onsets := []onset.Onset{ons("podA|mem", 0, "up"), ons("podB|mem", 300, "up")} // 300s apart
 	pairs := []CoupledPair{{A: "podA|mem", B: "podB|mem", Coefficient: 0.91}}

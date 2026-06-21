@@ -121,7 +121,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		histQuantiles      = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
 		assocEnabled       = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
 		onsetEnabled       = fs.Bool("onset-enabled", false, "doc 22 C2: compute MEASURED changepoint ONSETS over the hot gauge series (off-digest EWMA-residual CUSUM with sustained-shift confirmation) and surface the step TIMES at /api/onsets — including sub-threshold shifts the three primitives leave unmarked; the temporal-adjacency substrate for the direction-free hypotheses tab. OFF by default; off = byte-identical (no onset computed). Off-digest; never feeds detection/forecasting/governance.")
-		coHypEnabled       = fs.Bool("cohypothesis-enabled", false, "doc 22 C3: stage DIRECTION-FREE causal hypotheses — a coupled pair (an associated-with edge) whose BOTH series stepped (a C2 onset) within a window — into the candidate store, surfaced at /api/causal-hypotheses for a human to author the DIRECTION (the system never infers it). Needs --onset-enabled + --assoc-enabled + --dgx-enabled. OFF by default; off = byte-identical. Off-digest; never feeds detection (the candidate firewall enforces it).")
+		coHypEnabled       = fs.Bool("cohypothesis-enabled", false, "doc 22 C3: stage DIRECTION-FREE causal hypotheses — a CROSS-WORKLOAD pair whose both series stepped (a C2 onset) within a window AND are correlated (association computed over the recently-onsetting subset, so cross-workload pairs are not lost to the assoc lane's cluster-wide cap) — into the candidate store, surfaced at /api/causal-hypotheses for a human to author the DIRECTION (the system never infers it). Needs --onset-enabled + --dgx-enabled. OFF by default; off = byte-identical. Off-digest; never feeds detection (the candidate firewall enforces it).")
 		dgxAgentEnabled    = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
 		logsEnabled        = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
 		auditEnabled       = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
@@ -497,11 +497,11 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// co-occurrence candidate for every coupled pair that co-stepped. The candidate store is
 	// firewalled (the deterministic path can never read it); a human authors the direction.
 	if coHypEnabled {
-		if candStore == nil || !onsetEnabled || !assocEnabled {
-			logger.Warn("cohypothesis: --cohypothesis-enabled needs --dgx-enabled + --onset-enabled + --assoc-enabled; lane idle",
-				"dgx", candStore != nil, "onset", onsetEnabled, "assoc", assocEnabled)
+		if candStore == nil || !onsetEnabled {
+			logger.Warn("cohypothesis: --cohypothesis-enabled needs --dgx-enabled + --onset-enabled; lane idle",
+				"dgx", candStore != nil, "onset", onsetEnabled)
 		} else {
-			go coHypothesisLoop(ctx, logger, candStore, &depView, &onsetView, graphVersion,
+			go coHypothesisLoop(ctx, logger, candStore, ingestor, &onsetView, graphVersion,
 				envDuration("COHYP_INTERVAL", time.Minute), envDuration("COHYP_WINDOW", 90*time.Second))
 		}
 	}
@@ -838,10 +838,15 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		providers = &vapi.Providers{
 			Coverage:      func() *vapi.CoverageView { return coverage.Load() },
 			SilenceLedger: func() *vapi.SilenceLedgerView { return silenceView.Load() },
-			Unexplained:   func() *vapi.UnexplainedView { return unexpView.Load() },
-			Insights:      func() *vapi.InsightsView { return insightsView.Load() },
-			Topology:      func() *vapi.TopologyView { return topoView.Load() },
-			Warnings:      func() *vapi.WarningsView { return warningsView.Load() },
+			Unexplained: func() *vapi.UnexplainedView {
+				// doc 22 C2 follow-up: join each loud-but-unexplained (scope, metric) with its
+				// MEASURED onset time ("loud since ~T") at the surfacing layer — off-digest, a
+				// join (both MEASURED) that never changes WHAT is loud.
+				return annotateLoudSince(unexpView.Load(), onsetView.Load())
+			},
+			Insights: func() *vapi.InsightsView { return insightsView.Load() },
+			Topology: func() *vapi.TopologyView { return topoView.Load() },
+			Warnings: func() *vapi.WarningsView { return warningsView.Load() },
 			// v2 cross-service cascade surface (doc 15 phase F): the warm-path chain,
 			// or the honest OFF/quiet state. flowEnabled drives the OFF-vs-quiet split.
 			CrossService: func() *vapi.CrossServiceView {
@@ -1813,12 +1818,24 @@ func splitStreamID(id string) (cei, metric string) {
 	return id, ""
 }
 
-// coHypothesisLoop pairs the latest associated-with edges (assoc) with the latest onsets (C2)
-// and stages a DIRECTION-FREE co-occurrence candidate for every coupled pair that co-stepped
-// (doc 22 C3). Off the deterministic path: it reads two off-digest views and writes only the
-// firewalled candidate store; a human authors the direction. Never feeds detection.
+// coOnsetRecency bounds which onsets count as "stepping together NOW": only onsets within
+// this span of the most recent onset seed the co-onset search. This keeps the lane focused on
+// the current disturbance (not every step in the ~1h ring) and bounds the work.
+const coOnsetRecency = 5 * time.Minute
+
+// coOnsetMaxStreams caps the onsetting subset fed to the O(n²) association (a far smaller,
+// far more relevant set than the whole cluster — only series that actually stepped recently).
+const coOnsetMaxStreams = 512
+
+// coHypothesisLoop stages DIRECTION-FREE co-occurrence candidates for CROSS-WORKLOAD pairs
+// that stepped together (doc 22 C3). Cross-workload reach (the C3 follow-up): instead of
+// reading the capped cluster-wide assoc lane (whose 256-stream cap excluded most workloads),
+// it computes the association over JUST the recently-onsetting streams — a sparse, relevant
+// subset — so a pair of different workloads that co-stepped is actually correlated and staged.
+// Off the deterministic path: reads the hot store + the onset view, writes only the firewalled
+// candidate store; a human authors the direction. Never feeds detection.
 func coHypothesisLoop(ctx context.Context, logger *slog.Logger, candStore *candidate.Store,
-	depView *atomic.Pointer[vapi.DependencyView], onsetView *atomic.Pointer[vapi.OnsetView],
+	in *observe.Ingestor, onsetView *atomic.Pointer[vapi.OnsetView],
 	graphVersion string, every, window time.Duration) {
 	if every <= 0 {
 		every = time.Minute
@@ -1833,26 +1850,91 @@ func coHypothesisLoop(ctx context.Context, logger *slog.Logger, candStore *candi
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			dv := depView.Load()
 			ov := onsetView.Load()
-			if dv == nil || ov == nil {
-				continue // assoc / onset views not populated yet
+			if ov == nil || len(ov.Onsets) == 0 {
+				continue
 			}
-			pairs := make([]cohypothesis.CoupledPair, 0, len(dv.Edges))
-			for _, e := range dv.Edges {
+			recent := recentOnsets(ov.Onsets, coOnsetRecency)
+			keys := onsettingStreamKeys(recent, coOnsetMaxStreams)
+			if len(keys) < 2 {
+				continue // need at least two distinct recently-onsetting series to pair
+			}
+			// Correlate ONLY the onsetting subset (cross-workload, no cluster-wide cap), reusing
+			// the assoc primitive so the coupling is the SAME MEASURED associated-with edge.
+			series := snapshotSeriesForKeys(in, keys)
+			edges := assoc.Associate(time.Now().UTC(), series, assoc.DefaultParams)
+			pairs := make([]cohypothesis.CoupledPair, 0, len(edges))
+			for _, e := range edges {
 				pairs = append(pairs, cohypothesis.CoupledPair{A: e.A, B: e.B, Coefficient: e.Coefficient})
 			}
-			n, err := cohypothesis.HypothesizeAndStage(candStore, time.Now().UTC(), ov.Onsets, pairs, window, graphVersion)
+			n, err := cohypothesis.HypothesizeAndStage(candStore, time.Now().UTC(), recent, pairs, window, graphVersion)
 			if err != nil {
 				logger.Error("cohypothesis: stage", "err", err)
 				continue
 			}
 			if n > 0 {
-				logger.Info("cohypothesis: staged direction-free co-onset hypotheses (doc 22 C3)",
-					"count", n, "associated_pairs", len(pairs), "onsets", len(ov.Onsets))
+				logger.Info("cohypothesis: staged direction-free cross-workload co-onset hypotheses (doc 22 C3)",
+					"count", n, "onsetting_streams", len(keys), "associated_pairs", len(pairs))
 			}
 		}
 	}
+}
+
+// recentOnsets keeps only onsets within `span` of the most recent onset — the current
+// disturbance, not every step in the ring.
+func recentOnsets(onsets []onset.Onset, span time.Duration) []onset.Onset {
+	var newest time.Time
+	for _, o := range onsets {
+		if o.At.After(newest) {
+			newest = o.At
+		}
+	}
+	if newest.IsZero() {
+		return nil
+	}
+	cutoff := newest.Add(-span)
+	out := make([]onset.Onset, 0, len(onsets))
+	for _, o := range onsets {
+		if !o.At.Before(cutoff) {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// onsettingStreamKeys returns the distinct "CEI|metric" stream keys of the onsets, sorted and
+// capped (deterministic). These are the series fed to the pairwise association.
+func onsettingStreamKeys(onsets []onset.Onset, max int) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for _, o := range onsets {
+		k := o.EntityCEI + "|" + o.Metric
+		if !seen[k] {
+			seen[k] = true
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if max > 0 && len(keys) > max {
+		keys = keys[:max]
+	}
+	return keys
+}
+
+// snapshotSeriesForKeys reads the hot series for an explicit key set (the onsetting subset) as
+// assoc Points — the same shape snapshotSeries uses, restricted to the keys of interest.
+func snapshotSeriesForKeys(in *observe.Ingestor, keys []string) map[string][]assoc.Point {
+	hot := in.Hot()
+	out := make(map[string][]assoc.Point, len(keys))
+	for _, id := range keys {
+		samples := hot.LastN(id, qss.HotCapacity())
+		pts := make([]assoc.Point, 0, len(samples))
+		for _, smp := range samples {
+			pts = append(pts, assoc.Point{At: smp.At, Value: smp.Value})
+		}
+		out[id] = pts
+	}
+	return out
 }
 
 // mapCausalHypothesisRows adapts firewalled candidate.Candidate rows to the api surface (main
@@ -1931,6 +2013,47 @@ func authorCausalDirection(cs *candidate.Store, graphVersion string, now time.Ti
 		return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID,
 			Message: "direction must be a-to-b, b-to-a, or not-causal"}
 	}
+}
+
+// annotateLoudSince joins each loud-but-unexplained (scope, metric) with its most-recent
+// MEASURED onset time (doc 22 C2 follow-up). Off-digest, at the surfacing layer: it returns a
+// COPY with LoudSince populated, never mutating the stored view, and never changes which
+// states are loud (loudness stays bar-crossing + rate-excursion). Empty onset ⇒ the view
+// unchanged (honest: no onset lane, no annotation).
+func annotateLoudSince(uv *vapi.UnexplainedView, ov *vapi.OnsetView) *vapi.UnexplainedView {
+	if uv == nil || ov == nil || len(ov.Onsets) == 0 {
+		return uv
+	}
+	latest := make(map[string]onset.Onset, len(ov.Onsets))
+	for _, o := range ov.Onsets {
+		k := o.EntityCEI + "\x1f" + o.Metric
+		if e, ok := latest[k]; !ok || o.At.After(e.At) {
+			latest[k] = o
+		}
+	}
+	var ann []vapi.LoudSinceAnnotation
+	for _, card := range uv.OpenCards {
+		for _, ls := range card.LoudStates {
+			if o, ok := latest[card.Scope+"\x1f"+ls.Metric]; ok {
+				ann = append(ann, vapi.LoudSinceAnnotation{
+					Scope: card.Scope, Metric: ls.Metric, OnsetAt: o.At.UTC(),
+					Direction: o.Direction, StepZ: o.StepZ,
+				})
+			}
+		}
+	}
+	if len(ann) == 0 {
+		return uv
+	}
+	sort.Slice(ann, func(i, j int) bool {
+		if ann[i].Scope != ann[j].Scope {
+			return ann[i].Scope < ann[j].Scope
+		}
+		return ann[i].Metric < ann[j].Metric
+	})
+	cp := *uv
+	cp.LoudSince = ann
+	return &cp
 }
 
 func anyStr(v any) string {

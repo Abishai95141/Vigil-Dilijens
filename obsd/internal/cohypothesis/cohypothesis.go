@@ -60,6 +60,9 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 		if absDur(oa.At.Sub(ob.At)) > window {
 			continue // stepped too far apart ⇒ not a co-onset
 		}
+		if entityOf(p.A) == entityOf(p.B) {
+			continue // same entity (two facets of one workload's state) ⇒ trivial, not a CROSS-workload lead
+		}
 		// Sort the pair so the subject + content id are stable and DIRECTION-FREE.
 		a, oA, b, oB := p.A, oa, p.B, ob
 		if b < a {
@@ -113,6 +116,22 @@ func HypothesizeAndStage(s *candidate.Store, now time.Time, onsets []onset.Onset
 		n++
 	}
 	return n, nil
+}
+
+// entityOf returns the entity (CEI) of a "CEI|metric" stream key: the first 6 "|"-separated
+// fields (layer|cluster|ns|kind|name|uid). Two streams of the SAME entity (e.g. two memory
+// facets of one container) are NOT a cross-workload lead, so the producer skips them.
+func entityOf(streamKey string) string {
+	n := 0
+	for i := 0; i < len(streamKey); i++ {
+		if streamKey[i] == '|' {
+			n++
+			if n == 6 {
+				return streamKey[:i]
+			}
+		}
+	}
+	return streamKey
 }
 
 func absDur(d time.Duration) time.Duration {

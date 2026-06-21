@@ -132,6 +132,21 @@ type UnexplainedView struct {
 	OpenCards    []unexplained.Finding         `json:"openCards"`
 	Candidates   []unexplained.CandidateReport `json:"candidates"`
 	BlindSpot    string                        `json:"blindSpot"`
+	// LoudSince is the off-digest JOIN (doc 22 C2 follow-up) of a loud-but-unexplained
+	// (scope, metric) with its MEASURED changepoint onset: "loud since ~T". Both sides are
+	// MEASURED (the loud state and the onset time), joined at the surfacing layer, never
+	// fused — it does NOT change what is loud (loudness stays bar-crossing + rate-excursion),
+	// it only pins WHEN the loud signal stepped. Empty when onset is off or nothing matches.
+	LoudSince []LoudSinceAnnotation `json:"loudSince,omitempty"`
+}
+
+// LoudSinceAnnotation pins the onset time of a loud-but-unexplained (scope, metric). MEASURED.
+type LoudSinceAnnotation struct {
+	Scope     string    `json:"scope"`
+	Metric    string    `json:"metric"`
+	OnsetAt   time.Time `json:"onsetAt"`
+	Direction string    `json:"direction"`
+	StepZ     float64   `json:"stepZ"`
 }
 
 // Register mounts the surfacing routes on mux under /api.

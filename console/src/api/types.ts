@@ -1130,6 +1130,16 @@ export interface UnexplainedView {
   openCards: UnexplainedCard[] | null;   // loud-but-unmatched, lifecycle-tracked
   candidates: CurationCandidate[] | null; // recurring patterns proposed for human curation
   blindSpot: string;            // the verbatim stated blind-spot notice (always present)
+  loudSince?: LoudSinceAnnotation[] | null; // doc 22 C2: onset time per loud (scope, metric)
+}
+
+// MEASURED join (doc 22 C2 follow-up): the onset TIME a loud (scope, metric) stepped.
+export interface LoudSinceAnnotation {
+  scope: string;
+  metric: string;
+  onsetAt: string;    // RFC3339
+  direction: string;  // up | down
+  stepZ: number;
 }
 
 // MEASURED — one loud-but-unmatched entity, lifecycle-tracked. Source: unexplained.go

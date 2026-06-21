@@ -7,7 +7,7 @@
 // never a fabricated numeric severity.
 
 import { useDepartures, useFindings, useUnexplained } from "@/api/client";
-import type { Departure, FindingRow, UnexplainedCard } from "@/api/types";
+import type { Departure, FindingRow, LoudSinceAnnotation, UnexplainedCard } from "@/api/types";
 import { Icon } from "@/components/ui/icons";
 import { LaneNote, ProvChip, SectionHead, StateDot } from "@/components/ui/primitives";
 import { DataState, Page, Tag } from "@/components/ui/widgets";
@@ -77,7 +77,14 @@ function DepartureCard({ d }: { d: Departure }) {
 }
 
 /* 3 — unexplained (MEASURED, blind spot) ------------------------------------ */
-function UnexplainedRow({ c }: { c: UnexplainedCard }) {
+function UnexplainedRow({
+  c,
+  loudSince,
+}: { c: UnexplainedCard; loudSince?: LoudSinceAnnotation[] | null }) {
+  // doc 22 C2: the earliest matching onset for this card's (scope, metric) — "loud since ~T".
+  const onset = (loudSince ?? [])
+    .filter((a) => a.scope === c.scope)
+    .sort((a, b) => a.onsetAt.localeCompare(b.onsetAt))[0];
   return (
     <div className="flex items-center gap-3 px-3 py-2.5">
       <StateDot sev="info" size={8} />
@@ -87,6 +94,13 @@ function UnexplainedRow({ c }: { c: UnexplainedCard }) {
           {(c.loudStates ?? []).map((l) => l.metric).join(", ")}
         </div>
       </div>
+      {onset && (
+        <Tag
+          title={`MEASURED changepoint: stepped ${onset.direction} (${onset.stepZ.toFixed(1)}σ)`}
+        >
+          loud since {relTime(onset.onsetAt)}
+        </Tag>
+      )}
       <Tag>{c.status}</Tag>
       <Tag>×{c.occurrences}</Tag>
       <ProvChip kind="MEASURED" />
@@ -174,7 +188,7 @@ export function AnomaliesPage() {
                 {(d.openCards?.length ?? 0) > 0 && (
                   <div className="v-panel divide-y divide-[var(--color-rule)]">
                     {d.openCards?.map((c, i) => (
-                      <UnexplainedRow key={i} c={c} />
+                      <UnexplainedRow key={i} c={c} loudSince={d.loudSince} />
                     ))}
                   </div>
                 )}
