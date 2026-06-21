@@ -202,6 +202,52 @@ func Open(path string) (*Store, error) {
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// ExpireStale deletes status=candidate rows of the given kinds whose updated_at is older than
+// now-ttl. A co-occurrence/onset candidate is only "live" while it keeps being re-observed —
+// re-staging the same content refreshes updated_at (Put's ON CONFLICT), so a pair that stops
+// co-stepping ages out instead of accumulating forever (the unbounded co-onset flood). DECIDED
+// rows (promoted/rejected/shadow — the audit trail) are NEVER expired. Off the deterministic
+// path; ttl<=0 or no kinds disables. Returns the number of rows deleted.
+func (s *Store) ExpireStale(now time.Time, ttl time.Duration, kinds ...Kind) (int, error) {
+	if ttl <= 0 || len(kinds) == 0 {
+		return 0, nil
+	}
+	cutoff := now.Add(-ttl).UTC().Format(sqlTime)
+	ph := make([]string, len(kinds))
+	args := make([]any, 0, len(kinds)+2)
+	args = append(args, string(StatusCandidate), cutoff)
+	for i, k := range kinds {
+		ph[i] = "?"
+		args = append(args, string(k))
+	}
+	res, err := s.db.Exec(
+		"DELETE FROM candidates WHERE status = ? AND updated_at < ? AND kind IN ("+strings.Join(ph, ",")+")",
+		args...)
+	if err != nil {
+		return 0, fmt.Errorf("candidate: expire stale: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// CapKind keeps only the `max` most-recently-updated status=candidate rows of `kind`, deleting
+// the rest — a backstop against unbounded accumulation when many distinct items stay live
+// within the TTL window. DECIDED rows are untouched. max<=0 disables. Returns rows deleted.
+func (s *Store) CapKind(kind Kind, max int) (int, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+	res, err := s.db.Exec(`
+DELETE FROM candidates WHERE status = ? AND kind = ? AND id NOT IN (
+  SELECT id FROM candidates WHERE status = ? AND kind = ? ORDER BY updated_at DESC, id LIMIT ?
+)`, string(StatusCandidate), string(kind), string(StatusCandidate), string(kind), max)
+	if err != nil {
+		return 0, fmt.Errorf("candidate: cap kind: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // Put stages a candidate, returning its content-derived ID. `now` is injected (the
 // package never reads the wall clock). A new candidate is inserted with
 // status=candidate and created_at=now; re-proposing identical content refreshes the
@@ -522,6 +568,11 @@ var nonIdentityPayloadKeys = map[string]struct{}{
 	// shown for context, never identity.
 	"aOnsetTs": {}, "bOnsetTs": {}, "aStepZ": {}, "bStepZ": {},
 	"coefficient": {}, "deltaSeconds": {}, "observedFirst": {}, "windowSeconds": {},
+	// doc 29 §B: an OFFLINE causal-discovery (PCMCI) lead is also identified by its PAIR.
+	// The lag, the PROJECTED direction hint, the lead-lag hint and the contemporaneous flag are
+	// per-run projected values shown for context, never identity — so re-running the harness
+	// updates the pair in place instead of minting a new row each run.
+	"lagBins": {}, "directionHint": {}, "leadlagHintBins": {}, "contemporaneous": {},
 }
 
 // identityPayload returns a copy of p with the non-identity (model-prose) keys

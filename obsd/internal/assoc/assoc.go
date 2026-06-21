@@ -93,6 +93,95 @@ func Associate(now time.Time, series map[string][]Point, p Params) []Edge {
 	return edges
 }
 
+// PruneConfounders applies an ORDER-1 conditional-independence test (the PC algorithm's first
+// conditioning step, the Go in-line form of the offline PCMCI prune in doc 29 §B) to MEASURED
+// association edges: it REMOVES an edge a~b when conditioning on a single neighbouring node c
+// drops the partial correlation below indepFloor — i.e. c "explains" the co-movement (a common
+// driver, or a transitive a–c–b path), so a~b is not a DIRECT association. This cuts the
+// confounded/transitive co-occurrences at the source instead of staging them (the cause of the
+// co-onset flood). Pure + deterministic; indepFloor is a DECLARED constant, never fit to data —
+// the result derives nothing stronger than the MEASURED associations it filters (it only
+// removes edges, never adds or directs one). The candidate-graph node set bounds the work, so
+// it is cheap on the small recently-onsetting subset. indepFloor<=0 returns edges unchanged.
+func PruneConfounders(now time.Time, series map[string][]Point, edges []Edge, p Params, indepFloor float64) []Edge {
+	if indepFloor <= 0 || len(edges) == 0 {
+		return edges
+	}
+	windowStart := now.Add(-p.Window)
+	// bin only the candidate-graph nodes (edge endpoints) + record adjacency for the separators
+	binned := make(map[string]map[int]float64)
+	adj := make(map[string]map[string]struct{})
+	add := func(id string) {
+		if _, ok := binned[id]; ok {
+			return
+		}
+		if pts, has := series[id]; has {
+			if b := binSeries(pts, windowStart, now, p.Bin); len(b) > 0 {
+				binned[id] = b
+			}
+		}
+	}
+	for _, e := range edges {
+		add(e.A)
+		add(e.B)
+		if adj[e.A] == nil {
+			adj[e.A] = map[string]struct{}{}
+		}
+		if adj[e.B] == nil {
+			adj[e.B] = map[string]struct{}{}
+		}
+		adj[e.A][e.B] = struct{}{}
+		adj[e.B][e.A] = struct{}{}
+	}
+	corr := func(x, y string) (float64, bool) {
+		bx, by := binned[x], binned[y]
+		if bx == nil || by == nil {
+			return 0, false
+		}
+		r, n, ok := pearsonOverlap(bx, by)
+		if !ok || n < p.MinOverlap {
+			return 0, false
+		}
+		return r, true
+	}
+	kept := edges[:0:0] // new backing array, preserves Associate's |r|-desc order
+	for _, e := range edges {
+		a, b, rab := e.A, e.B, e.Coefficient
+		// candidate separators: nodes adjacent to a OR b (excluding a, b themselves)
+		seps := make(map[string]struct{})
+		for c := range adj[a] {
+			if c != b {
+				seps[c] = struct{}{}
+			}
+		}
+		for c := range adj[b] {
+			if c != a {
+				seps[c] = struct{}{}
+			}
+		}
+		confounded := false
+		for c := range seps {
+			rac, ok1 := corr(a, c)
+			rbc, ok2 := corr(b, c)
+			if !ok1 || !ok2 {
+				continue
+			}
+			denom := math.Sqrt((1 - rac*rac) * (1 - rbc*rbc))
+			if denom <= 1e-9 {
+				continue
+			}
+			if pc := (rab - rac*rbc) / denom; math.Abs(pc) < indepFloor {
+				confounded = true // c separates a and b ⇒ the edge is explained away
+				break
+			}
+		}
+		if !confounded {
+			kept = append(kept, e)
+		}
+	}
+	return kept
+}
+
 // binSeries maps a series to bin index -> last (latest-timestamp) value in that bin,
 // within [start, end]. Sorting by time first makes "last in bin" deterministic
 // regardless of input order; non-finite values are excluded.
