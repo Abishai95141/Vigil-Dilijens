@@ -1,4 +1,4 @@
-# CLAUDE.md — Vigil
+# Development Instructions — Vigil
 
 Kubernetes-native AI Observability. One curated, versioned **ontology graph**
 (type-level knowledge) compiled per cluster into a **bound customer graph**, a
@@ -81,10 +81,10 @@ the docs. `clockd` is the only separate process (different language/lifecycle,
 deliberately replaceable per the clock contract).
 
 ```
-docs/        blueprint 00–14 + techstack          proto/       buf-managed contracts (gen/ committed)
+docs/        blueprint 00–14 core + 15–30 tracks proto/       buf-managed contracts (gen/ committed)
 ontology/    schema/ · graph/ (YAML) · releases/  obsd/        Go monolith (cmd/ + internal/)
 clockd/      Python TimesFM clock (uv)            harness/     Python backtests/falsification (uv)
-web/         Vite/React surfaces                  deploy/      kind · RBAC · helm · workloads
+console/     Vite/React surfaces                  deploy/      kind · RBAC · helm · workloads
 corpus/      chaos · flags · bundles · labels     tools/graphlint  ontology lints
 artifacts/   task.md (status)
 ```

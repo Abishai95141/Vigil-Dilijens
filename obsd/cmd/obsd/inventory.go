@@ -30,7 +30,7 @@ type podRow struct {
 // doc 03 §3.1), each with its runs-on node placement from the topology edge store,
 // then the nodes, then a cluster-wide rollup and the Phase-0a join-audit verdict.
 //
-// This is "prerequisite zero, observable" — the demo target in CLAUDE.md: the inventory
+// This is "prerequisite zero, observable" — the demo target in DEVELOPMENT.md: the inventory
 // obsd reconstructs from the API server alone. It surfaces, never fuses: every line is
 // MEASURED (a fact read from the store, or a deterministic consequence of facts). It
 // prints honest partial coverage — bare pods, ReplicaSet-anchored (degraded) roles,

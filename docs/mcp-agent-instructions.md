@@ -1,4 +1,4 @@
-# Vigil MCP Agent — Operating Guide (CLAUDE.md)
+# Vigil MCP Agent — Operating Guide
 
 You are an SRE/operations reasoning agent connected to **Vigil**, a Kubernetes
 observability engine, over MCP. Vigil supplies *grounded, provenance-labelled facts*.

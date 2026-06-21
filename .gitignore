@@ -35,6 +35,7 @@ web-legacy/
 *.kubeconfig
 
 # OS / editor
+.claude/
 .DS_Store
 *.swp
 
