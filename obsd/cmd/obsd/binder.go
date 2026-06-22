@@ -43,6 +43,11 @@ type binder struct {
 	// as scrapable, not out-of-scope. Off ⇒ coverage is byte-identical to before.
 	kubeletMetricsScraped bool
 
+	// controlPlaneMetricsScraped mirrors --controlplane-metrics-enabled (docs/33 build 1):
+	// when true, the obtainability gate treats apiserver_* / coredns_* signals as scrapable,
+	// not out-of-scope. Off ⇒ coverage is byte-identical to before.
+	controlPlaneMetricsScraped bool
+
 	// assertedCaps mirrors --assert-capabilities (docs/33 P5): operator-verified node
 	// capabilities (CONFIG_PSI, cgroup v2, …) obsd cannot derive from the k8s API.
 	assertedCaps map[string]bool
@@ -208,7 +213,8 @@ func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecor
 		// docs/31 Step 2b: surface the kubelet-/metrics lane state so volume_stats
 		// gate obtainable when the lane is on (off ⇒ no change).
 		facts.KubeletMetricsScraped = b.kubeletMetricsScraped
-		facts.AssertedCapabilities = b.assertedCaps // docs/33 P5: operator-verified node caps
+		facts.ControlPlaneMetricsScraped = b.controlPlaneMetricsScraped // docs/33 build 1: apiserver/coredns lane
+		facts.AssertedCapabilities = b.assertedCaps                     // docs/33 P5: operator-verified node caps
 		avail = binding.GateSignals(b.graph, facts)
 	}
 

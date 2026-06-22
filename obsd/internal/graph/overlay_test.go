@@ -69,8 +69,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 21 {
-		t.Fatalf("rules = %d, want 21 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE)", len(g.Rules))
+	if len(g.Rules) != 25 {
+		t.Fatalf("rules = %d, want 25 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE + 4 controlplane-metrics)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -135,8 +135,9 @@ func TestOverlayVersionPinning(t *testing.T) {
 	// triggers downgraded, the EQG_OOM_EVENTS false-equivalence pattern removed), so 20.
 	// v0.14.0 (PSI): + psi-pressure-v1 (the PSI saturation lane), so 21.
 	// v0.15.0 (PVC-fill): + pvc-filling-v1 (the per-PVC fill lane), so 22.
-	if len(merged.Overlays) != 22 {
-		t.Fatalf("overlay provenance records = %d, want 22 (… + init-container-failure-v1, detection-status-v1, corrections-v1, psi-pressure-v1, pvc-filling-v1)", len(merged.Overlays))
+	// v0.16.0 (control-plane): + controlplane-metrics-v1 (the apiserver + CoreDNS lane), so 23.
+	if len(merged.Overlays) != 23 {
+		t.Fatalf("overlay provenance records = %d, want 23 (… + init-container-failure-v1, detection-status-v1, corrections-v1, psi-pressure-v1, pvc-filling-v1, controlplane-metrics-v1)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

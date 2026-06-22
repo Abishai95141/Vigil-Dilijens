@@ -33,6 +33,20 @@ func (p *ProxyFetcher) NodeMetrics(ctx context.Context, nodeName, path string) (
 	return body, receivedAt, nil
 }
 
+// APIServerMetrics GETs the kube-apiserver's OWN root /metrics via an absolute-path
+// request on the API REST client (docs/33 build 1) — the same endpoint `kubectl get
+// --raw /metrics` reads. Unlike NodeMetrics/PodMetrics this is NOT a proxy subresource:
+// the API server reports its own APF / admission / inflight metrics directly. RBAC
+// grants get on the nonResourceURL /metrics. Same receive-time stamping.
+func (p *ProxyFetcher) APIServerMetrics(ctx context.Context) ([]byte, time.Time, error) {
+	body, err := p.cs.CoreV1().RESTClient().Get().AbsPath("/metrics").DoRaw(ctx)
+	receivedAt := time.Now().UTC()
+	if err != nil {
+		return nil, receivedAt, fmt.Errorf("apiserver /metrics: %w", err)
+	}
+	return body, receivedAt, nil
+}
+
 // PodMetrics GETs namespaces/<ns>/pods/<name>:<port>/proxy/<path> — the pods/proxy
 // subresource, the sibling of nodes/proxy (doc 15 cap. A). The port is qualified
 // onto the pod name (the kubelet pod-proxy URL form); <path> is the metrics suffix.

@@ -35,6 +35,16 @@ const (
 	// fill: used/available/capacity), which ride here and NOT on /metrics/cadvisor.
 	// Off by default (--kubelet-metrics-enabled); off = byte-identical (lane never scrapes).
 	FamilyKubelet Family = "kubelet"
+	// FamilyControlPlane is the cluster control plane's OWN /metrics (docs/33 build 1):
+	// the kube-apiserver root /metrics (APF/admission/inflight) and CoreDNS :9153/metrics
+	// (rcode/cache/forward). Two identity models ride this one dialect, routed by metric
+	// prefix: apiserver_* describe the API server, which in k3s IS the control-plane
+	// node's own process → the control-plane Node CEI (scrape-target identity, like
+	// node-exporter); coredns_* are served BY the CoreDNS pod → that pod's CEI
+	// (scrape-target identity, like an app's /metrics). Both reuse already-modelled
+	// entity kinds (Node, Pod) — no new identity layer. Off by default
+	// (--controlplane-metrics-enabled); off = byte-identical (the lane never scrapes).
+	FamilyControlPlane Family = "control-plane"
 
 	// OTel semconv is deliberately the FOURTH lane, added in Phase 0b–1 after the
 	// first maps work, to prove the machinery is not single-dialect-shaped
@@ -49,6 +59,7 @@ var mapVersions = map[Family]string{
 	FamilyNodeExporter: "0.1.0",
 	FamilyApp:          "0.1.0",
 	FamilyKubelet:      "0.1.0",
+	FamilyControlPlane: "0.1.0",
 }
 
 // MapVersion returns the current normalization-map version for a family.
@@ -200,8 +211,47 @@ func (n *Normalizer) Normalize(s Series) Result {
 		return n.app(s)
 	case FamilyKubelet:
 		return n.kubeletMetrics(s)
+	case FamilyControlPlane:
+		return n.controlPlane(s)
 	default:
 		return n.quarantine(s.Family, ReasonUnknownFamily)
+	}
+}
+
+// controlPlane implements the control-plane-/metrics dialect (docs/33 build 1). It
+// routes by metric prefix to the entity that genuinely emits the series, reusing the
+// already-modelled instance kinds (so no new identity layer is introduced):
+//
+//   - apiserver_*  → the control-plane NODE. The kube-apiserver in k3s is the
+//     control-plane node's own embedded process, so its self-reported metrics attribute
+//     to that Node's CEI via the time-aware node lookup — scrape-target identity exactly
+//     like node-exporter (the SourceNode the scraper set, never a series label). The
+//     fetch hits the apiserver root /metrics (not a node proxy), so the scraper stamps
+//     SourceNode = the control-plane node it attributes the singleton view to.
+//   - coredns_*    → the CoreDNS POD that served the scrape. CoreDNS exposes :9153/metrics
+//     per replica, so identity is the scrape-target pod (SourcePodNS/SourcePodName),
+//     exactly like an app's own /metrics — resolved through the same time-aware control
+//     plane lookup, never guessed from a series label.
+//
+// Anything else on these endpoints quarantines with a stated reason (never guessed).
+func (n *Normalizer) controlPlane(s Series) Result {
+	switch {
+	case strings.HasPrefix(s.Metric, "coredns_"):
+		if s.SourcePodNS == "" || s.SourcePodName == "" {
+			return n.quarantine(FamilyControlPlane, ReasonMissingSource)
+		}
+		uid, ok := n.lookup.PodUID(s.SourcePodNS, s.SourcePodName, s.joinTime())
+		if !ok {
+			return n.quarantine(FamilyControlPlane, ReasonUnknownPod)
+		}
+		return n.pod(FamilyControlPlane, s.SourcePodNS, s.SourcePodName, uid, s.At)
+	case strings.HasPrefix(s.Metric, "apiserver_"):
+		if s.SourceNode == "" {
+			return n.quarantine(FamilyControlPlane, ReasonMissingSource)
+		}
+		return n.node(FamilyControlPlane, s.SourceNode, s.joinTime(), s.At)
+	default:
+		return n.quarantine(FamilyControlPlane, ReasonUnmappedMetric)
 	}
 }
 

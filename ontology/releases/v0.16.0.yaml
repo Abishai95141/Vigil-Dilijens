@@ -1,0 +1,62 @@
+# Graph release v0.16.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.16.0
+graph_version: "sha256:d2282218ba72ea18fc6502523f408f85817af1e84bcf30969ef27c9de369a5d9"
+created: "2026-06-23"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - controlplane-metrics-v1.yaml
+  - corrections-v1.yaml
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - detection-status-v1.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - psi-pressure-v1.yaml
+  - pvc-filling-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Adds the control-plane scrape lane (docs/33 build 1) — the kube-apiserver root /metrics
+  and CoreDNS :9153/metrics, the first control-plane modality obsd ingests. The new overlay
+  controlplane-metrics-v1.yaml authors 4 threshold rules + 4 member-checks (+ a Pod anchor
+  for the two first-order DNS phenomena) that wire FOUR previously-dark phenomena —
+  PHEN_DNS_FAILURE (critical), PHEN_DNS_CACHE_THRASH, PHEN_APISERVER_OVERLOAD_APF (critical),
+  PHEN_WEBHOOK_LATENCY — whose required members were authored in the base KG but were
+  UNOBTAINABLE (obsd scraped no control-plane endpoint). The companion CODE change (NOT in the
+  graph) adds: a flag-gated control-plane scrape lane (observe.FetchControlPlaneMetrics +
+  --controlplane-metrics-enabled), a kube.ProxyFetcher.APIServerMetrics absolute-path fetch
+  (the apiserver root /metrics, the kubectl get --raw /metrics endpoint), a FamilyControlPlane
+  normalizer that routes apiserver_* → the control-plane NODE CEI and coredns_* → the
+  scrape-target CoreDNS POD CEI (both already-modelled instance kinds — no new identity layer),
+  an ingest-time AGGREGATION that sums the label-dimensioned families into clean single-series
+  derived metrics (the deriveKSM disambiguation idiom — a deterministic MEASURED sum, never a
+  learned value), and an obtainability fact (PlatformFacts.ControlPlaneMetricsScraped) that
+  lifts the apiserver/coredns unscraped-endpoint override when the lane is on. ALL of that is
+  OFF by default: the flag is false, the lane never scrapes, the fact is false, the override
+  applies exactly as before → byte-identical replay + byte-identical coverage until an operator
+  turns it on. CHARTER-CLEAN: every derived series is an honest sum of honest control-plane
+  counters/gauges vs config-relative / FLAGGED-default bars → IN-DIGEST legitimate (deterministic,
+  replay-byte-identical); no new kind, no agent write path. BEHAVIOURAL governance class
+  (doc 12): the now-obtainable signals bump the hash v0.15.0→v0.16.0; the base KG and every
+  prior release stay byte-identical and loadable. EMISSION (verified live on the AWS k3s
+  cluster): coredns_dns_responses_total{rcode} and coredns_cache_{hits,misses}_total are
+  always present; apiserver_flowcontrol_rejected_requests_total appears only once APF rejects
+  (fires on the real fault, never a fabricated healthy zero); apiserver_admission_webhook_* is
+  dark on a webhook-less cluster (honestly out-of-scope). APISERVER_OVERLOAD_APF additionally
+  requires CAP_APF_ENABLED (asserted: APF is on by default in k8s >= 1.20).

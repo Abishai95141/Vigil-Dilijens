@@ -177,6 +177,51 @@ func FetchKubeletMetrics(ctx context.Context, f Fetcher, nodes []string) []NodeP
 	return out
 }
 
+// ControlPlaneFetcher fetches the kube-apiserver's OWN root /metrics (docs/33 build 1) —
+// the absolute-path endpoint `kubectl get --raw /metrics` reads, NOT a node/pod proxy.
+// Separate from Fetcher/PodFetcher so existing fixtures stay unaffected.
+type ControlPlaneFetcher interface {
+	APIServerMetrics(ctx context.Context) (body []byte, receivedAt time.Time, err error)
+}
+
+// FetchControlPlaneMetrics fetches the control-plane lane (docs/33 build 1), network
+// only. Two sources, one Family (FamilyControlPlane, prefix-routed by the normalizer):
+//   - the kube-apiserver root /metrics, attributed to the lexically-first control-plane
+//     node (a cluster-singleton view; multi-apiserver HA is one logical API surface and
+//     is never summed across nodes — deterministic single attribution).
+//   - each CoreDNS replica's :9153/metrics, attributed to its own pod (scrape-target
+//     identity, the pods/proxy sibling of the app lane).
+// The caller gates this behind --controlplane-metrics-enabled; off ⇒ never fetched
+// (byte-identical replay). Per-source failures are carried, never fatal.
+func FetchControlPlaneMetrics(ctx context.Context, api ControlPlaneFetcher, controlPlaneNodes []string, pf PodFetcher, corednsTargets []PodTarget) []NodePayload {
+	out := make([]NodePayload, 0, len(corednsTargets)+1)
+	if api != nil && len(controlPlaneNodes) > 0 {
+		nodes := append([]string(nil), controlPlaneNodes...)
+		sort.Strings(nodes)
+		body, receivedAt, err := api.APIServerMetrics(ctx)
+		out = append(out, NodePayload{Node: nodes[0], Family: identity.FamilyControlPlane, Body: body, ReceivedAt: receivedAt, Err: err})
+	}
+	cd := append([]PodTarget(nil), corednsTargets...)
+	sort.Slice(cd, func(i, j int) bool {
+		if cd[i].Namespace != cd[j].Namespace {
+			return cd[i].Namespace < cd[j].Namespace
+		}
+		return cd[i].Name < cd[j].Name
+	})
+	for _, t := range cd {
+		path := t.Path
+		if path == "" {
+			path = "metrics"
+		}
+		body, receivedAt, err := pf.PodMetrics(ctx, t.Namespace, t.Name, t.Port, path)
+		out = append(out, NodePayload{
+			Node: t.Namespace + "/" + t.Name, Family: identity.FamilyControlPlane,
+			PodNS: t.Namespace, PodName: t.Name, Body: body, ReceivedAt: receivedAt, Err: err,
+		})
+	}
+	return out
+}
+
 // PodFetcher fetches one pod's /metrics endpoint through the API server's
 // pods/proxy subresource (doc 15 cap. A — the sibling of nodes/proxy). Separate
 // from Fetcher so node-scoped fixtures stay unaffected.
@@ -268,6 +313,16 @@ func (in *Ingestor) IngestPayloads(payloads []NodePayload) IngestSummary {
 		family := p.Family
 		if family == "" {
 			family = identity.FamilyCAdvisor
+		}
+		// Control-plane families are AGGREGATED at ingest (docs/33 build 1): their raw
+		// series are heavily label-dimensioned (apiserver_*{flow_schema,priority_level},
+		// coredns_dns_responses_total{rcode}) — many per (entity, metric), which the
+		// fingerprint matcher cannot bind (it needs exactly one). The control-plane
+		// ingest sums them into clean single-series derived metrics, the same
+		// disambiguation deriveKSM does for multi-dimensional KSM gauges.
+		if family == identity.FamilyControlPlane {
+			in.ingestControlPlane(p.Body, p.Node, p.PodNS, p.PodName, p.ReceivedAt, &sum)
+			continue
 		}
 		in.ingestExposition(p.Body, family, p.Node, p.PodNS, p.PodName, p.ReceivedAt, &sum)
 	}
@@ -522,6 +577,166 @@ func (in *Ingestor) deriveKSM(orig identity.Series, typ string, sampleAt, receiv
 				ID: streamID, CEIKey: res.CEI.Key(), UID: res.CEI.UID, Kind: res.CEI.Kind,
 				Metric: d.derived, Type: typ, Node: ds.SourceNode, Cadence: "scrape",
 			}, receivedAt, sample)
+		}
+	}
+}
+
+// --- control-plane lane (docs/33 build 1) -----------------------------------
+
+// cpSumTerm is one summand of a control-plane derivation: a raw metric family,
+// optionally filtered to rows whose labels satisfy labelIn (every named key's value
+// must be in its set). An empty labelIn sums the whole family.
+type cpSumTerm struct {
+	source  string
+	labelIn map[string][]string
+}
+
+// cpDerivation projects one or more label-dimensioned control-plane families into a
+// single clean series the fingerprint matcher can bind. The value is the SUM of every
+// matching row across the summed terms — a deterministic MEASURED projection (a sum,
+// like a rate), NOT a learned anything; the BAR stays authored in the overlay. The
+// derived name keeps its apiserver_/coredns_ prefix so controlPlane() routes it to the
+// SAME entity CEI (node / coredns pod) as its parent. typ stamps the stream's exposition
+// type so the materializer rate/ratio path treats counters and gauges correctly.
+type cpDerivation struct {
+	derived string
+	typ     string // "counter" | "gauge"
+	sum     []cpSumTerm
+}
+
+// cpDerivations is the authored projection set: exactly the series the four
+// control-plane phenomena's overlay rules bind to. Each keeps its source prefix.
+var cpDerivations = []cpDerivation{
+	// DNS_FAILURE: the SERVFAIL/REFUSED response rate, and the total response rate it
+	// is a fraction of (the overlay ratio rule = failed/all).
+	{derived: "coredns_dns_responses_failed", typ: "counter", sum: []cpSumTerm{
+		{source: "coredns_dns_responses_total", labelIn: map[string][]string{"rcode": {"SERVFAIL", "REFUSED"}}},
+	}},
+	{derived: "coredns_dns_responses_all", typ: "counter", sum: []cpSumTerm{
+		{source: "coredns_dns_responses_total"},
+	}},
+	// DNS_CACHE_THRASH: the cache-miss rate, and total lookups (hits+misses) it is a
+	// fraction of (the overlay ratio rule = misses/lookups).
+	{derived: "coredns_cache_misses", typ: "counter", sum: []cpSumTerm{
+		{source: "coredns_cache_misses_total"},
+	}},
+	{derived: "coredns_cache_lookups", typ: "counter", sum: []cpSumTerm{
+		{source: "coredns_cache_misses_total"}, {source: "coredns_cache_hits_total"},
+	}},
+	// APISERVER_OVERLOAD_APF: APF rejections (a rejection IS the overload symptom) and the
+	// concurrent inflight-request count (corroborating "near limits" gauge).
+	{derived: "apiserver_flowcontrol_rejected", typ: "counter", sum: []cpSumTerm{
+		{source: "apiserver_flowcontrol_rejected_requests_total"},
+	}},
+	{derived: "apiserver_inflight_requests", typ: "gauge", sum: []cpSumTerm{
+		{source: "apiserver_current_inflight_requests"},
+	}},
+	// WEBHOOK_LATENCY: admission-webhook rejections (dark until an admission webhook is
+	// registered — honest: the family carries zero series on a webhook-less cluster, so
+	// nothing is emitted and the phenomenon cannot false-fire).
+	{derived: "apiserver_admission_webhook_rejections", typ: "counter", sum: []cpSumTerm{
+		{source: "apiserver_admission_webhook_rejection_count"},
+	}},
+}
+
+// cpLabelMatch reports whether a metric row satisfies a label filter (every named
+// label's value must be in its allowed set). An empty filter matches every row.
+func cpLabelMatch(m *dto.Metric, labelIn map[string][]string) bool {
+	if len(labelIn) == 0 {
+		return true
+	}
+	lv := make(map[string]string, len(m.GetLabel()))
+	for _, lp := range m.GetLabel() {
+		lv[lp.GetName()] = lp.GetValue()
+	}
+	for k, set := range labelIn {
+		got, ok := lv[k], false
+		v := got
+		for _, want := range set {
+			if v == want {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// ingestControlPlane parses one control-plane /metrics payload and emits the authored
+// aggregated derivations (cpDerivations) as clean single-series streams keyed by the
+// payload's entity CEI (apiserver_*→control-plane node, coredns_*→the scrape-target
+// CoreDNS pod, via normalize.controlPlane). A derivation whose source family is ABSENT
+// on this payload emits NOTHING — no fabricated zero, no stream until the metric truly
+// appears (e.g. APF rejections only exist once a rejection happens). Mirrors the
+// resolved-store path (meta + replay tap) so detection over the derived series stays
+// deterministic. Off-digest until --controlplane-metrics-enabled is set.
+func (in *Ingestor) ingestControlPlane(body []byte, node, podNS, podName string, receivedAt time.Time, sum *IngestSummary) {
+	receivedAt = receivedAt.UTC()
+	parser := expfmt.NewTextParser(model.UTF8Validation)
+	families, err := parser.TextToMetricFamilies(bytes.NewReader(body))
+	if err != nil {
+		sum.NodeErrors = append(sum.NodeErrors, fmt.Sprintf("%s: parse: %v", node, err))
+		return
+	}
+	for _, d := range cpDerivations {
+		var total float64
+		any := false
+		for _, term := range d.sum {
+			mf := families[term.source]
+			if mf == nil {
+				continue
+			}
+			if _, ok := scalarType(mf); !ok {
+				continue
+			}
+			for _, m := range mf.GetMetric() {
+				if !cpLabelMatch(m, term.labelIn) {
+					continue
+				}
+				v, ok := scalarValue(mf, m)
+				if !ok || math.IsNaN(v) || math.IsInf(v, 0) {
+					continue
+				}
+				total += v
+				any = true
+			}
+		}
+		if !any {
+			continue
+		}
+		ds := identity.Series{
+			Family: identity.FamilyControlPlane, Metric: d.derived,
+			SourceNode: node, SourcePodNS: podNS, SourcePodName: podName, At: receivedAt,
+		}
+		res := in.norm.Normalize(ds)
+		switch res.Outcome {
+		case identity.OutcomeResolved:
+			// Aggregated → no label sub-id: exactly one stream per (entity, derived metric),
+			// which is what the matcher's unambiguous (uid, metric) lookup requires.
+			streamID := res.CEI.Key() + "|" + d.derived
+			sample := qss.Sample{At: receivedAt, Value: total}
+			in.hot.Append(streamID, sample)
+			in.mu.Lock()
+			if _, seen := in.meta[streamID]; !seen {
+				in.meta[streamID] = StreamMeta{
+					CEIKey: res.CEI.Key(), UID: res.CEI.UID, Kind: res.CEI.Kind,
+					Metric: d.derived, Type: d.typ, Node: node, Cadence: "scrape",
+				}
+			}
+			in.mu.Unlock()
+			if in.tap != nil {
+				in.tap(qss.StreamDef{
+					ID: streamID, CEIKey: res.CEI.Key(), UID: res.CEI.UID, Kind: res.CEI.Kind,
+					Metric: d.derived, Type: d.typ, Node: node, Cadence: "scrape",
+				}, receivedAt, sample)
+			}
+			sum.SeriesResolved++
+			sum.SamplesStored++
+		case identity.OutcomeQuarantined:
+			sum.SeriesQuarantine[string(res.Reason)]++
 		}
 	}
 }

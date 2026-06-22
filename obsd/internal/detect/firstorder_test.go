@@ -298,9 +298,10 @@ func TestSnapshotRoundTripIdenticalFindings(t *testing.T) {
 func TestSpannedCensus(t *testing.T) {
 	m := NewMatcher(loadGraph(t))
 	// v0.2.0: four first-order; v0.3.0: +OOM_KILL_CGROUP (5); v0.7.0 (DISK):
-	// +DISK_PID_INODE_PRESSURE (6); v0.8.0 (PVC): +VOLUME_MOUNT_FAILURE PVC-anchor check (7).
-	if m.FirstOrderCount() != 7 {
-		t.Errorf("first-order phenomena with checks = %d, want 7", m.FirstOrderCount())
+	// +DISK_PID_INODE_PRESSURE (6); v0.8.0 (PVC): +VOLUME_MOUNT_FAILURE PVC-anchor check (7);
+	// v0.16.0 (control-plane): +DNS_FAILURE +DNS_CACHE_THRASH Pod-anchor checks (9).
+	if m.FirstOrderCount() != 9 {
+		t.Errorf("first-order phenomena with checks = %d, want 9", m.FirstOrderCount())
 	}
 	if m.SecondOrderCount() != 1 {
 		t.Errorf("second-order phenomena with checks = %d, want 1 (STORAGE_SATURATION)", m.SecondOrderCount())

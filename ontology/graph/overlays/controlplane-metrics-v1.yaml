@@ -1,0 +1,186 @@
+# Control-plane metrics phenomena — authored overlay v1 (doc 02 §3.5, doc 04 §3.3,
+# doc 07 §3.1; docs/33 build 1 — the control-plane scrape lane).
+#
+# Wires four phenomena whose required members were authored in the base KG but were
+# UNOBTAINABLE because obsd scraped no control-plane /metrics endpoint (the API is used
+# for identity/watch, never metric scrape). The companion CODE change adds the
+# FetchControlPlaneMetrics lane (--controlplane-metrics-enabled) + a FamilyControlPlane
+# normalizer that routes apiserver_* → the control-plane NODE CEI and coredns_* → the
+# scrape-target CoreDNS POD CEI (both already-modelled instance kinds — no new identity
+# layer), and flips the apiserver/coredns signals obtainable when the lane is on.
+#
+# The raw control-plane families are heavily label-dimensioned (apiserver_*{flow_schema,
+# priority_level}, coredns_dns_responses_total{rcode}) — many series per (entity, metric),
+# which the fingerprint matcher cannot bind (it needs exactly one). The lane AGGREGATES
+# them at ingest into clean single-series derived metrics (the same disambiguation
+# deriveKSM does for multi-dimensional KSM gauges) — a deterministic MEASURED projection
+# (a sum, like a rate), NEVER a learned value; the BARS below stay authored:
+#   coredns_dns_responses_failed  = Σ coredns_dns_responses_total{rcode∈SERVFAIL,REFUSED}
+#   coredns_dns_responses_all     = Σ coredns_dns_responses_total
+#   coredns_cache_misses          = Σ coredns_cache_misses_total
+#   coredns_cache_lookups         = Σ (coredns_cache_misses_total + coredns_cache_hits_total)
+#   apiserver_flowcontrol_rejected= Σ apiserver_flowcontrol_rejected_requests_total
+#   apiserver_inflight_requests   = Σ apiserver_current_inflight_requests
+#   apiserver_admission_webhook_rejections = Σ apiserver_admission_webhook_rejection_count
+#
+# BORROWED NORMATIVITY / honest bars: the control plane has no customer-declared SLO, so
+# each bar is a FLAGGED conservative ontology default with a falsifiable rationale (below).
+# A derivation whose source family is ABSENT emits no stream (no fabricated zero): APF
+# rejections only exist once a rejection happens, and admission-webhook metrics carry zero
+# series on a webhook-less cluster, so those phenomena cannot false-fire — they light up
+# exactly when the fault is real.
+#
+# CHARTER: every derived series is an honest sum of honest control-plane counters/gauges →
+# borrowed-normativity clean, IN-DIGEST legitimate (point-in-time scalars vs config-relative
+# bars, deterministic, replay-byte-identical). No new kind. The new SCRAPE lane is
+# flag-gated OFF by default, so replay is byte-identical until an operator turns it on.
+#
+# BEHAVIOURAL governance class (doc 12): wiring now-obtainable signals bumps the graph hash
+# (v0.15.0 -> v0.16.0). DETECTION surfaces immediately when the lane is on (non-gating);
+# forecast WARNING for these classes stays gate-pending until each backtest gate runs.
+overlay: controlplane-metrics
+version: 1
+author: vigil-engineering
+status: proposed-v1 (docs/33 build 1 — apiserver + CoreDNS /metrics wired to the control-plane node / CoreDNS pod CEIs)
+
+# No `phenomena:` / `members:` blocks: all four phenomena and their participates_in
+# required members already live in the base KG. This overlay only adds the rules + checks
+# (+ the Pod anchor for the first-order DNS phenomena) that make them metric-detectable,
+# now that the lane emits their series. Spans are already declared in spans-v1.yaml.
+
+anchors:
+  # The first-order DNS phenomena are evaluated AT the CoreDNS pod's CONTAINER fingerprint.
+  # Identity subtlety (doc 04): the compiler keys a pod's CONTAINER bindings by the POD's CEI
+  # (it "fans out per container but anchors on the pod instance"), so a CoreDNS pod that runs a
+  # container has ONE fingerprint keyed by the pod CEI with Kind=Container — and that is where
+  # the Pod-scoped coredns_* derived variables land (same pod CEI key). The anchor must
+  # therefore be Container to match that fingerprint's Kind; the finding's EntityCEI is still
+  # the pod CEI (correct attribution). The rcode/cache members are on the anchor itself;
+  # conntrack corroboration sits one declared runs-on hop away (named, not yet checked).
+  PHEN_DNS_FAILURE: Container
+  PHEN_DNS_CACHE_THRASH: Container
+
+rules:
+  # --- DNS_FAILURE: recent SERVFAIL/REFUSED fraction of all responses --------------
+  - id: THR_COREDNS_SERVFAIL_RATIO
+    signal: SIG_coredns_dns_response_rcode_count_total_d781492b
+    metric: coredns_dns_responses_failed
+    divisor_metric: coredns_dns_responses_all
+    kind: absolute
+    default: 0.05
+    direction: above
+    entity_scope: Pod
+    window: 5m
+    rationale: >-
+      A healthy resolver answers well under 1% SERVFAIL/REFUSED; a sustained recent
+      failure fraction above 5% of all responses is a real DNS outage (broken upstream,
+      NXDOMAIN storm, plugin error). The ratio is Δfailed/Δall over the 5m window — the
+      RECENT failure fraction, not lifetime — so a long-healthy resolver that starts
+      failing crosses promptly. No customer config bar exists for resolver error rate;
+      FLAGGED conservative ontology default. coredns_dns_responses_failed has no stream
+      until a SERVFAIL/REFUSED actually occurs (the lane emits no fabricated zero), so a
+      perfectly healthy cluster never binds it — out-of-scope, never a false "healthy".
+
+  # --- DNS_CACHE_THRASH: cache-miss fraction of all lookups ------------------------
+  - id: THR_COREDNS_CACHE_MISS_RATIO
+    signal: SIG_coredns_cache_misses_total_14b26ecc
+    metric: coredns_cache_misses
+    divisor_metric: coredns_cache_lookups
+    kind: absolute
+    default: 0.60
+    direction: above
+    entity_scope: Pod
+    window: 5m
+    rationale: >-
+      Cache thrash is a miss RATIO, not a miss count (misses always climb on a busy
+      resolver). A recent miss fraction above 60% of all lookups (Δmisses/Δ(hits+misses)
+      over 5m) means the cache is no longer absorbing the working set — TTL too low, a
+      churning record set, or a poisoned/cleared cache — pushing load to upstream. No
+      customer config bar exists; FLAGGED conservative ontology default.
+
+  # --- APISERVER_OVERLOAD_APF: APF actually rejecting requests ----------------------
+  - id: THR_APISERVER_APF_REJECTED
+    signal: SIG_apiserver_flowcontrol_priority_fairness_12_metrics_f0448076
+    metric: apiserver_flowcontrol_rejected
+    kind: rate-of-change
+    default: 1
+    direction: above
+    entity_scope: Node
+    window: 5m
+    rationale: >-
+      An APF rejection IS the overload symptom: the API server's priority-and-fairness
+      gate shed load because a priority level's concurrency was saturated. Any sustained
+      rejection rate (>=1 rejected request accruing in the 5m window) is a real
+      control-plane overload, so the bar is the smallest material count. No customer
+      config bar exists; FLAGGED ontology default. apiserver_flowcontrol_rejected has no
+      stream until APF rejects something, so a healthy API server never binds it.
+
+  # --- WEBHOOK_LATENCY: admission webhooks rejecting/failing ------------------------
+  - id: THR_APISERVER_WEBHOOK_REJECTIONS
+    signal: SIG_apiserver_admission_6_metrics_bc70f8dd
+    metric: apiserver_admission_webhook_rejections
+    kind: rate-of-change
+    default: 1
+    direction: above
+    entity_scope: Node
+    window: 5m
+    rationale: >-
+      An admission webhook rejecting (or failing closed) blocks writes cluster-wide — a
+      common, high-blast control-plane fault. Any sustained rejection rate (>=1 in the 5m
+      window) is material. No customer config bar exists; FLAGGED ontology default. The
+      admission-webhook family carries ZERO series on a cluster with no admission webhook
+      registered, so apiserver_admission_webhook_rejections has no stream there and the
+      phenomenon stays honestly dark (out-of-scope) until a webhook exists — never a false
+      "healthy". p99 admission DURATION (the latency member proper) is a histogram-quantile
+      follow-up; this v1 fires on the rejection/fail counter the same endpoint emits.
+
+checks:
+  PHEN_DNS_FAILURE:
+    - signal: SIG_coredns_dns_response_rcode_count_total_d781492b
+      metric: coredns_dns_responses_failed
+      facet: ratio
+      expect: at-or-above
+      on: anchor
+      note: >-
+        recent SERVFAIL/REFUSED fraction at/over the 5% bar (THR_COREDNS_SERVFAIL_RATIO),
+        on the CoreDNS pod. The second required member (coredns_forward_healthcheck_failures_total,
+        upstream health) and conntrack corroboration (one runs-on hop) are named members
+        without a v1 check — surfaced as a single-member DEGRADED match, never fabricated.
+        Requires the --controlplane-metrics-enabled lane.
+
+  PHEN_DNS_CACHE_THRASH:
+    - signal: SIG_coredns_cache_misses_total_14b26ecc
+      metric: coredns_cache_misses
+      facet: ratio
+      expect: at-or-above
+      on: anchor
+      note: >-
+        recent cache-miss fraction at/over the 60% bar (THR_COREDNS_CACHE_MISS_RATIO), on
+        the CoreDNS pod. Request-latency and conntrack corroboration are named members
+        without a v1 check — surfaced as a DEGRADED match, never fabricated. Requires the
+        --controlplane-metrics-enabled lane.
+
+  PHEN_APISERVER_OVERLOAD_APF:
+    - signal: SIG_apiserver_flowcontrol_priority_fairness_12_metrics_f0448076
+      metric: apiserver_flowcontrol_rejected
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: >-
+        APF rejections accruing at/over 1/5m (THR_APISERVER_APF_REJECTED), on the
+        control-plane node. The inflight-near-limits gauge (apiserver_inflight_requests)
+        and client-side 429 logs are corroborating members without a v1 check — surfaced
+        as a DEGRADED match, never fabricated. Requires the --controlplane-metrics-enabled
+        lane AND CAP_APF_ENABLED (asserted: APF is on by default in k8s >= 1.20).
+
+  PHEN_WEBHOOK_LATENCY:
+    - signal: SIG_apiserver_admission_6_metrics_bc70f8dd
+      metric: apiserver_admission_webhook_rejections
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: >-
+        admission-webhook rejections accruing at/over 1/5m (THR_APISERVER_WEBHOOK_REJECTIONS),
+        on the control-plane node. p99 admission duration (the latency member) is a
+        histogram-quantile follow-up; dark on a webhook-less cluster (no series emitted).
+        Requires the --controlplane-metrics-enabled lane.

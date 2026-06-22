@@ -24,8 +24,8 @@ func loadGraph(t *testing.T) *graph.Graph {
 	if err != nil {
 		t.Fatalf("LoadWithOverlays: %v", err)
 	}
-	if len(g.Rules) != 21 {
-		t.Fatalf("rules = %d, want 21 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE)", len(g.Rules))
+	if len(g.Rules) != 25 {
+		t.Fatalf("rules = %d, want 25 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE + 4 controlplane-metrics: THR_COREDNS_SERVFAIL_RATIO/THR_COREDNS_CACHE_MISS_RATIO/THR_APISERVER_APF_REJECTED/THR_APISERVER_WEBHOOK_REJECTIONS)", len(g.Rules))
 	}
 	return g
 }

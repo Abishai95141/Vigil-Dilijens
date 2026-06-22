@@ -135,9 +135,10 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// + detection-status-v1 (v0.12.0, the membership-structuring escape hatch) = 19;
 	// + corrections-v1 (v0.13.0, the governed base-content overrides) = 20;
 	// + psi-pressure-v1 (v0.14.0, the PSI saturation lane) = 21;
-	// + pvc-filling-v1 (v0.15.0, the PVC-fill lane) = 22.
-	if len(ovls) != 22 {
-		t.Fatalf("overlays = %d, want 22", len(ovls))
+	// + pvc-filling-v1 (v0.15.0, the PVC-fill lane) = 22;
+	// + controlplane-metrics-v1 (v0.16.0, the apiserver + CoreDNS lane) = 23.
+	if len(ovls) != 23 {
+		t.Fatalf("overlays = %d, want 23", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {
@@ -165,9 +166,10 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// 8 v1 + 2 v2 + 2 v3 + 1 v4 (THR_POD_EVICTED) + 1 v5 (THR_NODE_DISK_PRESSURE) + 1 v6
 	// (THR_PVC_PENDING) + 1 disk-filling (THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT) = 16;
 	// + 1 init-container (THR_INIT_CONTAINER_RESTARTS_RATE) = 17; + 3 PSI rate guards
-	// (v0.14.0) = 20; + 1 PVC-fill bar (v0.15.0, THR_PVC_USED_VS_REQUESTED_STORAGE) = 21.
-	if g.ThresholdRulesStructured != 21 {
-		t.Errorf("structured rules = %d, want 21", g.ThresholdRulesStructured)
+	// (v0.14.0) = 20; + 1 PVC-fill bar (v0.15.0, THR_PVC_USED_VS_REQUESTED_STORAGE) = 21;
+	// + 4 control-plane bars (v0.16.0: SERVFAIL/cache-miss ratios + APF/webhook rate guards) = 25.
+	if g.ThresholdRulesStructured != 25 {
+		t.Errorf("structured rules = %d, want 25", g.ThresholdRulesStructured)
 	}
 	if g.hasGaps() {
 		t.Error("no gaps should remain with overlays applied (-strict must pass)")

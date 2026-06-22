@@ -42,6 +42,14 @@ type PlatformFacts struct {
 	// (byte-identical). Set from the runtime flag where GateSignals is called.
 	KubeletMetricsScraped bool
 
+	// ControlPlaneMetricsScraped reports whether the control-plane lane is on
+	// (--controlplane-metrics-enabled, docs/33 build 1): obsd scraping the kube-apiserver
+	// root /metrics and CoreDNS :9153/metrics. When true, Metric signals whose only
+	// emitting tool is the apiserver or CoreDNS are NO LONGER auto-out-of-scope (the
+	// unscraped-endpoint override below) — they are genuinely obtainable. Default false:
+	// the lane is off, so those signals stay out-of-scope exactly as before (byte-identical).
+	ControlPlaneMetricsScraped bool
+
 	// AssertedCapabilities are node-level capabilities the OPERATOR has verified out-of-band
 	// (docs/33 P5 emission win) — e.g. the docs/32 preflight proving CONFIG_PSI=y + cgroup v2,
 	// which obsd cannot derive from the k8s API (they default to Indeterminate "needs node
@@ -434,6 +442,14 @@ func GateSignals(g *graph.Graph, facts PlatformFacts) *AvailabilityReport {
 					// on (--kubelet-metrics-enabled) → its metrics (kubelet_volume_stats_* …)
 					// are no longer unscraped. Off ⇒ this never triggers (byte-identical).
 					if tool == "kubelet" && facts.KubeletMetricsScraped {
+						allUnscraped = false
+						break
+					}
+					// The kube-apiserver and CoreDNS /metrics ARE scraped when the docs/33
+					// control-plane lane is on (--controlplane-metrics-enabled) → their
+					// metrics (apiserver_*, coredns_*) are no longer unscraped. Off ⇒ this
+					// never triggers (byte-identical).
+					if (tool == "kube-apiserver" || tool == "k8s-api" || tool == "coredns") && facts.ControlPlaneMetricsScraped {
 						allUnscraped = false
 						break
 					}

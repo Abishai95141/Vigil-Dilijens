@@ -121,6 +121,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		departureOn         = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
 		ksmEnabled          = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
 		kubeletMetricsOn    = fs.Bool("kubelet-metrics-enabled", false, "docs/31 Step 2b: scrape the kubelet's OWN /metrics endpoint (nodes/<n>/proxy/metrics, distinct from /metrics/cadvisor) in the SAME gated scrape cycle as cAdvisor, and ingest kubelet_volume_stats_* (per-PVC fill: used/available/capacity) as PVC-CEI streams. OFF by default; off = byte-identical (no kubelet-/metrics scrape => no volume-stats streams => the PVC-fill bar stays unobservable, the per-tick digest is unchanged). The pvc-filling overlay's bar is in the RELEASED graph (governance); this flag gates only the scrape + the obtainability that make it observable.")
+		controlPlaneMetricsOn = fs.Bool("controlplane-metrics-enabled", false, "docs/33 build 1: scrape the cluster control plane's OWN /metrics — the kube-apiserver root /metrics (APF/admission/inflight) and CoreDNS :9153/metrics (rcode/cache) — in the SAME gated cycle, aggregating their label-dimensioned families into clean single-series derived streams (apiserver_flowcontrol_rejected, coredns_dns_responses_failed, …) bound to the control-plane node / CoreDNS pod CEI. Unlocks DNS_FAILURE, DNS_CACHE_THRASH, APISERVER_OVERLOAD_APF (+assert CAP_APF_ENABLED), WEBHOOK_LATENCY. OFF by default; off = byte-identical (no control-plane scrape => no apiserver_*/coredns_* streams => those phenomena stay unobservable, the per-tick digest is unchanged). The controlplane-metrics overlay's rules are in the RELEASED graph (governance); this flag gates only the scrape + obtainability that make them observable.")
 		dgxEnabled          = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
 		histQuantiles       = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
 		assocEnabled        = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
@@ -219,7 +220,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn, *rightSizingOn, *filterNonOpStrays, parseAssertedCaps(*assertCaps))
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *controlPlaneMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn, *rightSizingOn, *filterNonOpStrays, parseAssertedCaps(*assertCaps))
 }
 
 // parseAssertedCaps turns the comma-separated --assert-capabilities flag into a set
@@ -314,7 +315,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled, rightSizingEnabled, filterNonOperationalStrays bool, assertedCaps map[string]bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, controlPlaneMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled, rightSizingEnabled, filterNonOperationalStrays bool, assertedCaps map[string]bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -785,8 +786,22 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		logger.Info("ksm lane enabled (G2 telemetry expansion)",
 			"discovery", "kube-state-metrics workload", "ingest", "kube_* object-state gauges -> CEI streams (in-digest)")
 	}
+	// docs/33 build 1 control-plane lane: with --controlplane-metrics-enabled, the scrape
+	// cycle ALSO fetches the kube-apiserver root /metrics + each CoreDNS replica's
+	// :9153/metrics, in the SAME gated cycle (whole-cycle = the replay guarantee). CoreDNS
+	// pods are discovered by their own workload identity (cluster-agnostic); the control-plane
+	// node(s) by the standard control-plane role label.
+	var corednsTargets func(context.Context) []observe.PodTarget
+	var controlPlaneNodesFn func() []string
+	if controlPlaneMetricsEnabled {
+		corednsTargets = func(c context.Context) []observe.PodTarget { return discoverCoreDNSTargets(c, client, logger) }
+		controlPlaneNodesFn = func() []string { return discoverControlPlaneNodes(ctx, client, logger) }
+		logger.Info("control-plane lane enabled (docs/33 build 1)",
+			"discovery", "kube-apiserver /metrics + CoreDNS workload :9153", "ingest", "apiserver_*/coredns_* aggregated -> node/pod CEI streams (in-digest)")
+	}
 	go scrapeLoop(ctx, logger, &gate, ingestor, proxyFetcher, watcher, p.Scrape.Interval.Duration(),
-		appMetricsEnabled, proxyFetcher, appTargets, ksmEnabled, ksmTargets, kubeletMetricsEnabled)
+		appMetricsEnabled, proxyFetcher, appTargets, ksmEnabled, ksmTargets, kubeletMetricsEnabled,
+		controlPlaneMetricsEnabled, proxyFetcher, corednsTargets, controlPlaneNodesFn)
 
 	// v2 flow lane (doc 15): observe conntrack from the per-node agent and assert
 	// observed-flow edges into the same EdgeStore the tick snapshots. Off by default;
@@ -1218,7 +1233,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers, mcpHandler)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
-		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings, kubeletMetricsScraped: kubeletMetricsEnabled, assertedCaps: assertedCaps},
+		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings, kubeletMetricsScraped: kubeletMetricsEnabled, controlPlaneMetricsScraped: controlPlaneMetricsEnabled, assertedCaps: assertedCaps},
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView, &transitiveChainView, &projectedTransitiveView,
 		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
@@ -1797,6 +1812,75 @@ func discoverKSMTargets(ctx context.Context, cs kubernetes.Interface, logger *sl
 			path = "metrics"
 		}
 		out = append(out, observe.PodTarget{Namespace: p.Namespace, Name: p.Name, Port: port, Path: path})
+	}
+	return out
+}
+
+// corednsImageNeedle identifies a CoreDNS workload by its container image — the
+// cluster-agnostic identity (the SAME needle obtain.go's tool-detection uses). Any
+// CoreDNS deployment, in any namespace, is found without a hard-coded name.
+const corednsImageNeedle = "coredns"
+
+// corednsMetricsPort is CoreDNS's conventional Prometheus metrics port (the `prometheus`
+// plugin's default). Overridden per-pod by a prometheus.io/port annotation when present.
+const corednsMetricsPort = "9153"
+
+// discoverCoreDNSTargets finds running CoreDNS pods (by container image) and returns their
+// :9153/metrics scrape targets (docs/33 build 1). A failed list degrades the lane this
+// cycle (logged), never fatal — exactly like the KSM lane.
+func discoverCoreDNSTargets(ctx context.Context, cs kubernetes.Interface, logger *slog.Logger) []observe.PodTarget {
+	pods, err := cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Warn("control-plane: coredns discovery failed this cycle (lane degraded, never fatal)", "err", err)
+		return nil
+	}
+	var out []observe.PodTarget
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		isCoreDNS := false
+		for _, c := range p.Spec.Containers {
+			if strings.Contains(strings.ToLower(c.Image), corednsImageNeedle) {
+				isCoreDNS = true
+				break
+			}
+		}
+		if !isCoreDNS {
+			continue
+		}
+		port := p.Annotations["prometheus.io/port"]
+		if port == "" {
+			port = corednsMetricsPort
+		}
+		path := strings.TrimPrefix(p.Annotations["prometheus.io/path"], "/")
+		if path == "" {
+			path = "metrics"
+		}
+		out = append(out, observe.PodTarget{Namespace: p.Namespace, Name: p.Name, Port: port, Path: path})
+	}
+	return out
+}
+
+// discoverControlPlaneNodes returns the names of nodes carrying a control-plane role label
+// (docs/33 build 1) — where the kube-apiserver runs (in k3s, embedded in the control-plane
+// node's process). The apiserver root /metrics is attributed to the lexically-first such
+// node. A failed list degrades the lane this cycle (logged), never fatal.
+func discoverControlPlaneNodes(ctx context.Context, cs kubernetes.Interface, logger *slog.Logger) []string {
+	nodes, err := cs.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Warn("control-plane: node discovery failed this cycle (lane degraded, never fatal)", "err", err)
+		return nil
+	}
+	var out []string
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		_, cp := n.Labels["node-role.kubernetes.io/control-plane"]
+		_, master := n.Labels["node-role.kubernetes.io/master"]
+		if cp || master {
+			out = append(out, n.Name)
+		}
 	}
 	return out
 }
@@ -3927,7 +4011,7 @@ func mapCandidateRows(cs []candidate.Candidate) []vapi.CandidateRow {
 	return out
 }
 
-func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration, appEnabled bool, podFetcher observe.PodFetcher, appTargets func(context.Context) []observe.PodTarget, ksmEnabled bool, ksmTargets func(context.Context) []observe.PodTarget, kubeletMetricsEnabled bool) {
+func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration, appEnabled bool, podFetcher observe.PodFetcher, appTargets func(context.Context) []observe.PodTarget, ksmEnabled bool, ksmTargets func(context.Context) []observe.PodTarget, kubeletMetricsEnabled bool, controlPlaneMetricsEnabled bool, cpFetcher observe.ControlPlaneFetcher, corednsTargets func(context.Context) []observe.PodTarget, controlPlaneNodes func() []string) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -3976,10 +4060,31 @@ func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in
 			payloads = append(payloads, observe.FetchKubeletMetrics(ctx, f, names)...)
 			kubeletCount = len(names)
 		}
+		// control-plane lane (docs/33 build 1): the kube-apiserver root /metrics + each
+		// CoreDNS replica's :9153/metrics, in the SAME gated cycle. Only when the flag is
+		// on; off ⇒ this block never runs and obsd is byte-identical.
+		cpCount := 0
+		if controlPlaneMetricsEnabled && cpFetcher != nil {
+			var cpNodes []string
+			if controlPlaneNodes != nil {
+				cpNodes = controlPlaneNodes()
+			}
+			var cd []observe.PodTarget
+			if corednsTargets != nil {
+				cd = corednsTargets(ctx)
+			}
+			if len(cpNodes) > 0 || len(cd) > 0 {
+				payloads = append(payloads, observe.FetchControlPlaneMetrics(ctx, cpFetcher, cpNodes, podFetcher, cd)...)
+				cpCount = len(cd)
+				if len(cpNodes) > 0 {
+					cpCount++ // the apiserver singleton payload
+				}
+			}
+		}
 		gate.Lock()
 		sum := in.IngestPayloads(payloads)
 		gate.Unlock()
-		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d app:%d ksm:%d kubelet:%d", len(names), len(neNodes), appCount, ksmCount, kubeletCount),
+		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d app:%d ksm:%d kubelet:%d controlplane:%d", len(names), len(neNodes), appCount, ksmCount, kubeletCount, cpCount),
 			"summary", sum.String(), "streams", in.Hot().Streams())
 	}
 	if waitForSync(ctx, watcher, every) {
