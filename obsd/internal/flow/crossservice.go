@@ -29,10 +29,11 @@ type DegradedWorkload struct {
 // JOIN, never FUSE: MEASURED degradation (the finding) + MEASURED observed-flow edge
 // + AUTHORED why + structural position — each labelled, never a causal sentence.
 // Returns ok=false when no degraded callee has any caller over a valid flow edge.
-func CrossServiceChain(edges *identity.EdgeStore, degraded []DegradedWorkload, rel Relation, window identity.TimeWindow, now time.Time) (Chain, bool) {
+func CrossServiceChain(edges *identity.EdgeStore, degraded []DegradedWorkload, rel Relation, window identity.TimeWindow, now time.Time, specific ...EntityCausalRelation) (Chain, bool) {
 	if len(degraded) == 0 {
 		return Chain{}, false
 	}
+	spec := entityCausalIndex(specific)
 	byKey := make(map[string]DegradedWorkload, len(degraded))
 	keys := make([]string, 0, len(degraded))
 	for _, d := range degraded {
@@ -61,7 +62,7 @@ func CrossServiceChain(edges *identity.EdgeStore, degraded []DegradedWorkload, r
 
 	var links []Link
 	for _, sl := range sc.Links {
-		links = append(links, Link{
+		l := Link{
 			Impacted:      labelByKey[sl.Impacted],
 			Degraded:      labelByKey[sl.Degraded],
 			EdgeClass:     "MEASURED observed flow",
@@ -71,7 +72,21 @@ func CrossServiceChain(edges *identity.EdgeStore, degraded []DegradedWorkload, r
 			Temporal:      rel.Temporal,
 			Author:        rel.Author,
 			Version:       rel.Version,
-		})
+		}
+		// docs/33 build 3 bridge: if a NAMED operator authored a SPECIFIC cause→effect for
+		// this exact role-pair (cause == degraded callee, effect == impacted caller, agreeing
+		// with the observed flow direction), surface THAT authored relation's note + author —
+		// the same cause→effect recognized as the operator's chain on recurrence, never the
+		// generic upstream→downstream why.
+		if s, ok := spec[sl.Degraded+"\x00"+sl.Impacted]; ok {
+			l.Why = s.Why
+			l.WhyClass = "AUTHORED (operator)"
+			l.Author = s.Author
+			if s.Version != "" {
+				l.Version = s.Version
+			}
+		}
+		links = append(links, l)
 	}
 
 	var symptoms []SymptomOut

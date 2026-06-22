@@ -95,50 +95,50 @@ func run(args []string, stdout, stderr *os.File) error {
 	fs := flag.NewFlagSet("obsd", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var (
-		paramsPath          = fs.String("params", "", "path to a parameters override file (overlays embedded dev defaults)")
-		showVersion         = fs.Bool("version", false, "print version and exit")
-		logFormat           = fs.String("log", "json", "log format: json|text")
-		kubeconfig          = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
-		inCluster           = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
-		healthAddr          = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
-		ontology            = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
-		overlays            = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
-		releases            = fs.String("releases", "ontology/releases", "graph release manifests (doc 12 M1); the loaded graph self-identifies its release by hash")
-		storeDir            = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
-		dbPath              = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
-		apiEnabled          = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
-		dumpBindings        = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
-		flowEnabled         = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
-		flowInterval        = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
-		mcpEnabled          = fs.Bool("mcp-enabled", false, "v3 T-A: serve the read-only MCP harness at /mcp (coverage, silence-ledger, warnings, emit_advisory). OFF by default; off = byte-identical to no MCP. Auth is a separate (later) track — do not expose this beyond an isolated cluster.")
-		incidentMem         = fs.Bool("incident-memory", false, "v3 T-B: fold findings into the durable cross-run incident memory (recurrence counting). OFF by default; off = byte-identical. Needs --db (a persistent store) to survive restarts.")
-		eventsOn            = fs.Bool("events-enabled", false, "v3 T-C: ingest discrete k8s Events (OOMKilled, CrashLoopBackOff) as MEASURED findings joined by CEI to gauge phenomena. OFF by default; off = byte-identical (events ride off the digest).")
-		eventsConds         = fs.String("events-conditions", "ontology/graph/overlays/experimental/event-conditions-v1.yaml", "v3 T-C: the authored event-corroboration conditions overlay (experimental until the events-gate promotes it)")
-		appMetrics          = fs.Bool("app-metrics-enabled", false, "doc 15 cap. A: scrape application /metrics endpoints (prometheus.io/scrape pods) + bind to declared SLOs (vigil.io/slo.* annotations). OFF by default; off = byte-identical (the app overlay + app scrape are not loaded).")
-		appConds            = fs.String("app-conditions", "ontology/graph/overlays/experimental/app-conditions-v1.yaml", "doc 15 cap. A: the authored application-signal overlay (experimental until the app-slo-gate promotes it)")
-		eventsInt           = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
-		refereeOn           = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
-		departureOn         = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
-		ksmEnabled          = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
-		kubeletMetricsOn    = fs.Bool("kubelet-metrics-enabled", false, "docs/31 Step 2b: scrape the kubelet's OWN /metrics endpoint (nodes/<n>/proxy/metrics, distinct from /metrics/cadvisor) in the SAME gated scrape cycle as cAdvisor, and ingest kubelet_volume_stats_* (per-PVC fill: used/available/capacity) as PVC-CEI streams. OFF by default; off = byte-identical (no kubelet-/metrics scrape => no volume-stats streams => the PVC-fill bar stays unobservable, the per-tick digest is unchanged). The pvc-filling overlay's bar is in the RELEASED graph (governance); this flag gates only the scrape + the obtainability that make it observable.")
+		paramsPath            = fs.String("params", "", "path to a parameters override file (overlays embedded dev defaults)")
+		showVersion           = fs.Bool("version", false, "print version and exit")
+		logFormat             = fs.String("log", "json", "log format: json|text")
+		kubeconfig            = fs.String("kubeconfig", "", "path to a kubeconfig; when set (or --in-cluster), run the identity layer against the cluster")
+		inCluster             = fs.Bool("in-cluster", false, "use in-cluster config to reach the API server")
+		healthAddr            = fs.String("health-addr", ":9095", "address for the health/metrics server (/metrics, /healthz, /readyz)")
+		ontology              = fs.String("ontology", "ontology/graph/k8s_signal_kg.json", "ontology KG release; with a cluster target, enables the binding compiler (doc 04)")
+		overlays              = fs.String("overlays", "ontology/graph/overlays", "authored overlay dir (spans, threshold rules) merged into the ontology")
+		releases              = fs.String("releases", "ontology/releases", "graph release manifests (doc 12 M1); the loaded graph self-identifies its release by hash")
+		storeDir              = fs.String("store-dir", "", "directory for the qss warm tier + replay bundle (doc 14 §2.3); empty = hot rings only (replay capture off, stated)")
+		dbPath                = fs.String("db", "", "SQLite findings database (doc 14 A7); empty = in-memory (findings reset on restart)")
+		apiEnabled            = fs.Bool("api", true, "serve the operator surfacing API (doc 10) under /api on the health server")
+		dumpBindings          = fs.String("dump-bindings", "", "write the compiled binding.Result to this JSON path once (governance migration exercise, doc 12 M4)")
+		flowEnabled           = fs.Bool("flow-enabled", false, "v2 (doc 15): collect conntrack via the per-node conntrack-agent and assert observed-flow edges (OFF by default; off = byte-identical to no flow)")
+		flowInterval          = fs.Duration("flow-interval", 15*time.Second, "v2: flow collector cadence")
+		mcpEnabled            = fs.Bool("mcp-enabled", false, "v3 T-A: serve the read-only MCP harness at /mcp (coverage, silence-ledger, warnings, emit_advisory). OFF by default; off = byte-identical to no MCP. Auth is a separate (later) track — do not expose this beyond an isolated cluster.")
+		incidentMem           = fs.Bool("incident-memory", false, "v3 T-B: fold findings into the durable cross-run incident memory (recurrence counting). OFF by default; off = byte-identical. Needs --db (a persistent store) to survive restarts.")
+		eventsOn              = fs.Bool("events-enabled", false, "v3 T-C: ingest discrete k8s Events (OOMKilled, CrashLoopBackOff) as MEASURED findings joined by CEI to gauge phenomena. OFF by default; off = byte-identical (events ride off the digest).")
+		eventsConds           = fs.String("events-conditions", "ontology/graph/overlays/experimental/event-conditions-v1.yaml", "v3 T-C: the authored event-corroboration conditions overlay (experimental until the events-gate promotes it)")
+		appMetrics            = fs.Bool("app-metrics-enabled", false, "doc 15 cap. A: scrape application /metrics endpoints (prometheus.io/scrape pods) + bind to declared SLOs (vigil.io/slo.* annotations). OFF by default; off = byte-identical (the app overlay + app scrape are not loaded).")
+		appConds              = fs.String("app-conditions", "ontology/graph/overlays/experimental/app-conditions-v1.yaml", "doc 15 cap. A: the authored application-signal overlay (experimental until the app-slo-gate promotes it)")
+		eventsInt             = fs.Duration("events-interval", 15*time.Second, "v3 T-C: discrete-event collector cadence")
+		refereeOn             = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
+		departureOn           = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
+		ksmEnabled            = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
+		kubeletMetricsOn      = fs.Bool("kubelet-metrics-enabled", false, "docs/31 Step 2b: scrape the kubelet's OWN /metrics endpoint (nodes/<n>/proxy/metrics, distinct from /metrics/cadvisor) in the SAME gated scrape cycle as cAdvisor, and ingest kubelet_volume_stats_* (per-PVC fill: used/available/capacity) as PVC-CEI streams. OFF by default; off = byte-identical (no kubelet-/metrics scrape => no volume-stats streams => the PVC-fill bar stays unobservable, the per-tick digest is unchanged). The pvc-filling overlay's bar is in the RELEASED graph (governance); this flag gates only the scrape + the obtainability that make it observable.")
 		controlPlaneMetricsOn = fs.Bool("controlplane-metrics-enabled", false, "docs/33 build 1: scrape the cluster control plane's OWN /metrics — the kube-apiserver root /metrics (APF/admission/inflight) and CoreDNS :9153/metrics (rcode/cache) — in the SAME gated cycle, aggregating their label-dimensioned families into clean single-series derived streams (apiserver_flowcontrol_rejected, coredns_dns_responses_failed, …) bound to the control-plane node / CoreDNS pod CEI. Unlocks DNS_FAILURE, DNS_CACHE_THRASH, APISERVER_OVERLOAD_APF (+assert CAP_APF_ENABLED), WEBHOOK_LATENCY. OFF by default; off = byte-identical (no control-plane scrape => no apiserver_*/coredns_* streams => those phenomena stay unobservable, the per-tick digest is unchanged). The controlplane-metrics overlay's rules are in the RELEASED graph (governance); this flag gates only the scrape + obtainability that make them observable.")
-		dgxEnabled          = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
-		histQuantiles       = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
-		assocEnabled        = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
-		onsetEnabled        = fs.Bool("onset-enabled", false, "doc 22 C2: compute MEASURED changepoint ONSETS over the hot gauge series (off-digest EWMA-residual CUSUM with sustained-shift confirmation) and surface the step TIMES at /api/onsets — including sub-threshold shifts the three primitives leave unmarked; the temporal-adjacency substrate for the direction-free hypotheses tab. OFF by default; off = byte-identical (no onset computed). Off-digest; never feeds detection/forecasting/governance.")
-		coHypEnabled        = fs.Bool("cohypothesis-enabled", false, "doc 22 C3: stage DIRECTION-FREE causal hypotheses — a CROSS-WORKLOAD pair whose both series stepped (a C2 onset) within a window AND are correlated (association computed over the recently-onsetting subset, so cross-workload pairs are not lost to the assoc lane's cluster-wide cap) — into the candidate store, surfaced at /api/causal-hypotheses for a human to author the DIRECTION (the system never infers it). Needs --onset-enabled + --dgx-enabled. OFF by default; off = byte-identical. Off-digest; never feeds detection (the candidate firewall enforces it).")
-		dgxAgentEnabled     = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
-		logsEnabled         = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
-		auditEnabled        = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
-		auditLogPath        = fs.String("audit-log-path", "", "doc 20 P4 AUDIT lane: path to the apiserver audit log in JSONL (audit.k8s.io/v1 Event per line). The apiserver audit policy is OFF by default on kind; this is config-dependent (mount the audit log to obsd). Empty ⇒ the audit lane stays off even with --audit-enabled.")
-		tracesEnabled       = fs.Bool("traces-enabled", false, "doc 20 P4 TRACE lane: read OTel spans (JSONL at --traces-path), build the MEASURED observed service call graph at /api/trace-graph, and stage each discovered call as a STRUCTURAL topology candidate (never causal) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the trace import-firewall). Needs --traces-path; the topology candidates also need --dgx-enabled (the store).")
-		tracesPath          = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
-		assertCaps          = fs.String("assert-capabilities", "", "docs/33 P5 emission win: comma-separated node-level capability IDs the operator has VERIFIED out-of-band (e.g. the docs/32 preflight: CAP_CONFIG_PSI,CAP_CGROUP_V2,CAP_KUBELET_PSI_FG). obsd cannot derive these from the k8s API (they default to Indeterminate 'needs node probe'), leaving PSI/pressure phenomena PARTIAL. Asserting a verified capability makes it Obtainable, flipping those phenomena to full. Empty ⇒ no assertions (byte-identical). Only assert what you have actually verified.")
-		causalDiscoveryPath = fs.String("causal-discovery-path", "", "doc 29 §B: path to the OFFLINE causal-discovery harness JSON shortlist (harness/causal-discovery/ — fixed-lag + PCMCI-pruned candidate links). Each interval the file is read and its links are staged as DIRECTION-FREE causal-hypothesis candidates (PCMCI's direction is a PROJECTED hint; a named operator authors the arrow at /api/causal-hypotheses/author). Empty ⇒ off. Needs --dgx-enabled (the candidate store). Off-digest; never feeds detection (the candidate firewall enforces it).")
-		forecastRoleSeries  = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin worst-member-toward-bar of its live member pods — max below an `above` bar, so it stays comparable to the per-pod bar; OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default (opt-in); off = byte-identical (the forecast feeds per-pod targets unchanged). CERTIFIED against real TimesFM — `just role-series-gate` passes 3/3 churn-leak crossing events (band coverage in [0.65,0.98] + per-event advance-warning recall).")
-		alertsOn            = fs.Bool("alerts-enabled", false, "docs/30: the off-digest email alert lane — mail CLASSED facts (cascade chain forms, OOM/crash fires, forecast crossing) with fatigue controls (edge-trigger + per-key cooldown + coalesce + quiet hours + rate limit). OFF by default; off = byte-identical (the lane is never constructed, never touches the digest). NON-GATING: a send failure is logged + retried, never blocks detection. Needs ALERT_SMTP_USER/ALERT_SMTP_PASSWORD/ALERT_TO env (a Gmail App Password); never hard-coded. Enforced off-digest by the notify import-firewall test.")
-		rightSizingOn       = fs.Bool("rightsizing-enabled", false, "docs/31 §6: the off-digest right-sizing ADVISORY lane — per-workload recommendations comparing SUSTAINED measured usage (p95 over the hot window) to the workload's OWN declared requests/limits, QoS- and stability-gated, surfaced at /api/right-sizing + the get_rightsizing_advice MCP tool. A recommendation a human acts on; NEVER auto-applied, never writes to the cluster, never gates detection, authors nothing in the graph. OFF by default; off = byte-identical (the lane is never constructed; off-digest regardless).")
-		filterNonOpStrays   = fs.Bool("filter-nonoperational-strays", true, "doc 20 P1 follow-up: at the candidate seam, CLASSIFY drained strays by actionability and do NOT stage the non-operational ones — the exporter's own Go/process runtime (go_*/process_*), client-library plumbing (rest_client_*/workqueue_*), and kube control-plane component internals (apiserver_*/etcd_*/scheduler_*). These can never bind to a workload/node/storage entity, so they only flood the governance queue (a full k3s/kubeadm control plane exposes thousands). Counted + surfaced (honest: /api/governance + /api/provisional-coverage state what was excluded). DIGEST-NEUTRAL: strays are off-digest, so this changes no fingerprint and no detection. ON by default; set false to stage every stray (the prior unfiltered behaviour).")
+		dgxEnabled            = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
+		histQuantiles         = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
+		assocEnabled          = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
+		onsetEnabled          = fs.Bool("onset-enabled", false, "doc 22 C2: compute MEASURED changepoint ONSETS over the hot gauge series (off-digest EWMA-residual CUSUM with sustained-shift confirmation) and surface the step TIMES at /api/onsets — including sub-threshold shifts the three primitives leave unmarked; the temporal-adjacency substrate for the direction-free hypotheses tab. OFF by default; off = byte-identical (no onset computed). Off-digest; never feeds detection/forecasting/governance.")
+		coHypEnabled          = fs.Bool("cohypothesis-enabled", false, "doc 22 C3: stage DIRECTION-FREE causal hypotheses — a CROSS-WORKLOAD pair whose both series stepped (a C2 onset) within a window AND are correlated (association computed over the recently-onsetting subset, so cross-workload pairs are not lost to the assoc lane's cluster-wide cap) — into the candidate store, surfaced at /api/causal-hypotheses for a human to author the DIRECTION (the system never infers it). Needs --onset-enabled + --dgx-enabled. OFF by default; off = byte-identical. Off-digest; never feeds detection (the candidate firewall enforces it).")
+		dgxAgentEnabled       = fs.Bool("dgx-agent-enabled", false, "doc 20 P3: enable the DGX agent — an LLM PROPOSES candidate graph extensions from read-only MEASURED context (gated: grounding + evidence floor + the structural causal guard) into the candidate store. Requires --dgx-enabled and a provider key (env GROQ_API_KEY or DGX_API_KEY; DGX_MODEL/DGX_BASE_URL optional for a local OpenAI-compatible model). OFF by default; the agent authors nothing and never touches the deterministic path.")
+		logsEnabled           = fs.Bool("logs-enabled", false, "doc 20 P4: mine MEASURED log templates from pod logs (a Go-native deterministic Drain) and surface them at /api/log-templates. Off-digest; regex stays the authored first layer, this is the measured second layer for the unmapped tail. OFF by default; never feeds detection or forecasting.")
+		auditEnabled          = fs.Bool("audit-enabled", false, "doc 20 P4 AUDIT lane: read the apiserver audit log (JSONL at --audit-log-path) as MEASURED change records and surface them at /api/audit-changes; for each active incident, stage a direction-free co-occurrence hypothesis (arrow-of-time, never a cause) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the audit import-firewall). Needs --audit-log-path; the change→incident hypotheses also need --dgx-enabled (the store) + --incident-memory.")
+		auditLogPath          = fs.String("audit-log-path", "", "doc 20 P4 AUDIT lane: path to the apiserver audit log in JSONL (audit.k8s.io/v1 Event per line). The apiserver audit policy is OFF by default on kind; this is config-dependent (mount the audit log to obsd). Empty ⇒ the audit lane stays off even with --audit-enabled.")
+		tracesEnabled         = fs.Bool("traces-enabled", false, "doc 20 P4 TRACE lane: read OTel spans (JSONL at --traces-path), build the MEASURED observed service call graph at /api/trace-graph, and stage each discovered call as a STRUCTURAL topology candidate (never causal) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the trace import-firewall). Needs --traces-path; the topology candidates also need --dgx-enabled (the store).")
+		tracesPath            = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
+		assertCaps            = fs.String("assert-capabilities", "", "docs/33 P5 emission win: comma-separated node-level capability IDs the operator has VERIFIED out-of-band (e.g. the docs/32 preflight: CAP_CONFIG_PSI,CAP_CGROUP_V2,CAP_KUBELET_PSI_FG). obsd cannot derive these from the k8s API (they default to Indeterminate 'needs node probe'), leaving PSI/pressure phenomena PARTIAL. Asserting a verified capability makes it Obtainable, flipping those phenomena to full. Empty ⇒ no assertions (byte-identical). Only assert what you have actually verified.")
+		causalDiscoveryPath   = fs.String("causal-discovery-path", "", "doc 29 §B: path to the OFFLINE causal-discovery harness JSON shortlist (harness/causal-discovery/ — fixed-lag + PCMCI-pruned candidate links). Each interval the file is read and its links are staged as DIRECTION-FREE causal-hypothesis candidates (PCMCI's direction is a PROJECTED hint; a named operator authors the arrow at /api/causal-hypotheses/author). Empty ⇒ off. Needs --dgx-enabled (the candidate store). Off-digest; never feeds detection (the candidate firewall enforces it).")
+		forecastRoleSeries    = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin worst-member-toward-bar of its live member pods — max below an `above` bar, so it stays comparable to the per-pod bar; OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default (opt-in); off = byte-identical (the forecast feeds per-pod targets unchanged). CERTIFIED against real TimesFM — `just role-series-gate` passes 3/3 churn-leak crossing events (band coverage in [0.65,0.98] + per-event advance-warning recall).")
+		alertsOn              = fs.Bool("alerts-enabled", false, "docs/30: the off-digest email alert lane — mail CLASSED facts (cascade chain forms, OOM/crash fires, forecast crossing) with fatigue controls (edge-trigger + per-key cooldown + coalesce + quiet hours + rate limit). OFF by default; off = byte-identical (the lane is never constructed, never touches the digest). NON-GATING: a send failure is logged + retried, never blocks detection. Needs ALERT_SMTP_USER/ALERT_SMTP_PASSWORD/ALERT_TO env (a Gmail App Password); never hard-coded. Enforced off-digest by the notify import-firewall test.")
+		rightSizingOn         = fs.Bool("rightsizing-enabled", false, "docs/31 §6: the off-digest right-sizing ADVISORY lane — per-workload recommendations comparing SUSTAINED measured usage (p95 over the hot window) to the workload's OWN declared requests/limits, QoS- and stability-gated, surfaced at /api/right-sizing + the get_rightsizing_advice MCP tool. A recommendation a human acts on; NEVER auto-applied, never writes to the cluster, never gates detection, authors nothing in the graph. OFF by default; off = byte-identical (the lane is never constructed; off-digest regardless).")
+		filterNonOpStrays     = fs.Bool("filter-nonoperational-strays", true, "doc 20 P1 follow-up: at the candidate seam, CLASSIFY drained strays by actionability and do NOT stage the non-operational ones — the exporter's own Go/process runtime (go_*/process_*), client-library plumbing (rest_client_*/workqueue_*), and kube control-plane component internals (apiserver_*/etcd_*/scheduler_*). These can never bind to a workload/node/storage entity, so they only flood the governance queue (a full k3s/kubeadm control plane exposes thousands). Counted + surfaced (honest: /api/governance + /api/provisional-coverage state what was excluded). DIGEST-NEUTRAL: strays are off-digest, so this changes no fingerprint and no detection. ON by default; set false to stage every stray (the prior unfiltered behaviour).")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1237,7 +1237,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView, &transitiveChainView, &projectedTransitiveView,
 		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
-		eventsEnabled, eventsConds, eventsDets, &eventsSnap, &eventsView, forecastRoleSeries)
+		eventsEnabled, eventsConds, eventsDets, &eventsSnap, &eventsView, forecastRoleSeries, candStore)
 	if p.Forecast.Enabled {
 		go forecastLoop(ctx, logger, &gate, fcIn, ingestor, graphVersion, graphRelease, p, &warningsView, cwStore, forecastRoleSeries, store)
 	}
@@ -1321,7 +1321,7 @@ func serveHealth(ctx context.Context, logger *slog.Logger, ln net.Listener, regi
 // informers sync, then on every evaluation tick.
 func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate *sync.RWMutex, store *identity.Store, edges *identity.EdgeStore, watcher *identity.Watcher, clusterID, graphVersion, graphRelease string, every time.Duration, bnd *binder, capture *replay.Capture, coverage *atomic.Pointer[vapi.CoverageView], silenceView *atomic.Pointer[vapi.SilenceLedgerView], unexpView *atomic.Pointer[vapi.UnexplainedView], insightsView *atomic.Pointer[vapi.InsightsView], topoView *atomic.Pointer[vapi.TopologyView], findingsStore *fstore.Store, budgets map[identity.EdgeType]time.Duration, fcIn *atomic.Pointer[forecastInputs], tierBBudget int, warningsView *atomic.Pointer[vapi.WarningsView], flowEnabled bool, flowRel flow.Relation, crossSvcView *atomic.Pointer[flow.Chain], projectedCrossSvcView *atomic.Pointer[flow.Chain], transitiveChainView *atomic.Pointer[[]flow.Chain], projectedTransitiveView *atomic.Pointer[[]flow.Chain], incidentEnabled bool, incidentResolveGap, incidentBucket time.Duration,
 	eventsEnabled bool, eventsConds []events.Corroboration, eventsDets []events.Detection, eventsSnap *atomic.Pointer[eventsSnapshot], eventsView *atomic.Pointer[vapi.EventsView],
-	forecastRoleSeries bool) {
+	forecastRoleSeries bool, candStore *candidate.Store) {
 	// Per-edge-type budgets as the topology builder wants them (string-keyed).
 	strBudgets := make(map[string]time.Duration, len(budgets))
 	for k, v := range budgets {
@@ -1498,12 +1498,22 @@ func inventoryLoop(ctx context.Context, out io.Writer, logger *slog.Logger, gate
 						Phenomenon: findings[i].Phenomenon, Detail: findings[i].Phenomenon + " finding (degraded callee)",
 					})
 				}
-				if chain, ok := flow.CrossServiceChain(edges, degraded, flowRel, evalWindow, now); ok {
+				// docs/33 build 3 bridge: operator-authored cross-workload cause→effect
+				// relations (from PROMOTED causal hypotheses) extend the cascade — a matching
+				// degraded role-pair surfaces the operator's authored chain on recurrence.
+				authoredRels := entityCausalRelations(candStore, store, logger)
+				if chain, ok := flow.CrossServiceChain(edges, degraded, flowRel, evalWindow, now, authoredRels...); ok {
 					c := chain
 					crossSvcView.Store(&c)
+					authoredLinks := 0
+					for _, l := range chain.Links {
+						if l.WhyClass == "AUTHORED (operator)" {
+							authoredLinks++
+						}
+					}
 					logger.Info("cross-service cascade (v2 phase D, warm path)",
 						"root", chain.MostUpstreamDegradedNode, "impacted_callers", len(chain.Links),
-						"why_class", "AUTHORED", "edge_class", "MEASURED observed flow")
+						"why_class", "AUTHORED", "edge_class", "MEASURED observed flow", "operator_authored_links", authoredLinks)
 				} else {
 					crossSvcView.Store(nil)
 				}
@@ -2346,7 +2356,7 @@ func authorCausalDirection(cs *candidate.Store, graphVersion string, now time.Ti
 		if req.Direction == "b-to-a" {
 			from, to = b, a
 		}
-		note := fmt.Sprintf("operator-authored causal direction: %s → %s. %s", from, to, req.Note)
+		note := fmt.Sprintf("%s%s → %s. %s", causalDirectionNoteMarker, from, to, req.Note)
 		if err := cs.Decide(now, c.ID, candidate.StatusPromoted, req.DecidedBy, note); err != nil {
 			return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID, Message: err.Error()}
 		}
@@ -2362,6 +2372,104 @@ func authorCausalDirection(cs *candidate.Store, graphVersion string, now time.Ti
 		return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID,
 			Message: "direction must be a-to-b, b-to-a, or not-causal"}
 	}
+}
+
+// causalDirectionNoteMarker is the stable prefix authorCausalDirection writes into a
+// promoted hypothesis's note; entityCausalRelations parses the authored from→to series back
+// out of it (the writer and reader are the same package — a controlled format, not free text).
+const causalDirectionNoteMarker = "operator-authored causal direction: "
+
+// authoredFromTo recovers the operator-authored (fromSeries → toSeries) from a promoted
+// causal hypothesis's note. Series keys carry no spaces, so " → " and the ". " before the
+// operator's free-text note are unambiguous delimiters. ok=false for any note not in shape.
+func authoredFromTo(note string) (from, to string, ok bool) {
+	i := strings.Index(note, causalDirectionNoteMarker)
+	if i < 0 {
+		return "", "", false
+	}
+	rest := note[i+len(causalDirectionNoteMarker):]
+	arrow := strings.Index(rest, " → ")
+	if arrow < 0 {
+		return "", "", false
+	}
+	from = strings.TrimSpace(rest[:arrow])
+	after := rest[arrow+len(" → "):]
+	if dot := strings.Index(after, ". "); dot >= 0 {
+		to = strings.TrimSpace(after[:dot])
+	} else {
+		to = strings.TrimSpace(strings.TrimSuffix(after, "."))
+	}
+	if from == "" || to == "" {
+		return "", "", false
+	}
+	return from, to, true
+}
+
+// seriesRoleKey maps a hot-store series key (CEIKey + "|" + metric, doc 05) to its
+// workload ROLE CEI key — the cross-service cascade's join key (docs/33 build 3). It strips
+// the trailing metric segment to recover the entity CEI, then reads the entity's role from
+// the lifecycle store. A series already on a role CEI is returned as-is; an entity that does
+// not resolve to a role (e.g. a container not Observe()d, a node) yields ok=false (skipped,
+// never guessed).
+func seriesRoleKey(store *identity.Store, seriesKey string) (string, bool) {
+	cut := strings.LastIndex(seriesKey, "|")
+	if cut <= 0 {
+		return "", false
+	}
+	ceiKey := seriesKey[:cut]
+	cei, err := identity.ParseKey(ceiKey)
+	if err != nil {
+		return "", false
+	}
+	if cei.Layer == identity.LayerRole {
+		return ceiKey, true
+	}
+	rec, ok := store.Get(ceiKey)
+	if !ok || rec.RoleCEI.RoleKey == "" {
+		return "", false
+	}
+	return rec.RoleCEI.Key(), true
+}
+
+// entityCausalRelations builds the operator-authored cross-workload cause→effect relations
+// (docs/33 build 3 — the series→phenomenon_relation bridge) from the PROMOTED causal
+// hypotheses. Each authored direction on a cross-workload co-onset becomes a
+// flow.EntityCausalRelation keyed by the two workloads' ROLE CEIs, so the cross-service
+// cascade surfaces the operator's chain (with their note + name) when the same incident
+// recurs. Off-digest (a surfacing-layer join over promoted candidates), so it never perturbs
+// the tick or the replay digest. Unmappable series are skipped, never guessed.
+func entityCausalRelations(cs *candidate.Store, store *identity.Store, logger *slog.Logger) []flow.EntityCausalRelation {
+	if cs == nil || store == nil {
+		return nil
+	}
+	rows, err := cs.List(candidate.Filter{Kind: candidate.KindCausalHypothesis, Status: candidate.StatusPromoted})
+	if err != nil {
+		if logger != nil {
+			logger.Warn("bridge: list promoted causal hypotheses failed", "err", err)
+		}
+		return nil
+	}
+	var out []flow.EntityCausalRelation
+	for i := range rows {
+		c := &rows[i]
+		fromSeries, toSeries, ok := authoredFromTo(c.Note)
+		if !ok {
+			continue
+		}
+		fromRole, ok1 := seriesRoleKey(store, fromSeries)
+		toRole, ok2 := seriesRoleKey(store, toSeries)
+		if !ok1 || !ok2 || fromRole == toRole {
+			continue // same workload, or a series that does not resolve to a role
+		}
+		out = append(out, flow.EntityCausalRelation{
+			FromKey: fromRole, ToKey: toRole,
+			Why:     c.Note,
+			Author:  c.DecidedBy,
+			Basis:   "operator-authored from " + c.ID,
+			Version: c.Lineage.GraphVersion,
+		})
+	}
+	return out
 }
 
 // annotateLoudSince joins each loud-but-unexplained (scope, metric) with its most-recent

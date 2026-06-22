@@ -36,6 +36,47 @@ type relationFile struct {
 	Relation Relation `yaml:"phenomenon_relation"`
 }
 
+// EntityCausalRelation is a SPECIFIC operator-authored cause→effect between two
+// workload ROLES (docs/33 build 3 — the series→phenomenon_relation bridge). It is the
+// committable artifact a NAMED human produces by authoring a direction on a cross-workload
+// co-onset hypothesis (authorCausalDirection): "eX causes eY", retyped to the
+// cascade-readable role-pair shape. When eX (the cause) degrades and eY (the effect)
+// degrades over an observed flow edge, the cross-service cascade surfaces THIS authored
+// relation's note + provenance on the matching link, instead of the generic
+// upstream→downstream why — so the same cause→effect lights up as a recognized AUTHORED
+// chain on recurrence. Provenance is AUTHORED (operator-named); off-digest until released.
+//
+// FromKey/ToKey are the role-CEI KEYS (the cross-service chain's join keys). Direction is
+// load-bearing: it matches a link ONLY when the cause is the degraded callee (FromKey ==
+// the link's Degraded role) and the effect is the impacted caller (ToKey == Impacted) —
+// i.e. the operator's causal arrow agrees with the observed flow direction. An authored
+// arrow that contradicts the flow direction never surfaces (degrade-never-fabricate).
+type EntityCausalRelation struct {
+	FromKey   string // role CEI key of the cause (eX)
+	ToKey     string // role CEI key of the effect (eY)
+	FromLabel string
+	ToLabel   string
+	Why       string // the operator's authored note (the only "why", verbatim)
+	Author    string // the named human who authored it (DecidedBy)
+	Basis     string // e.g. "operator-authored from cohyp:<id>"
+	Version   string // graph version at authoring time
+}
+
+// entityCausalIndex keys authored relations by "fromKey\x00toKey" for O(1) link lookup.
+func entityCausalIndex(rels []EntityCausalRelation) map[string]EntityCausalRelation {
+	if len(rels) == 0 {
+		return nil
+	}
+	idx := make(map[string]EntityCausalRelation, len(rels))
+	for _, r := range rels {
+		if r.FromKey == "" || r.ToKey == "" || r.Why == "" {
+			continue // an incomplete authored relation never participates
+		}
+		idx[r.FromKey+"\x00"+r.ToKey] = r
+	}
+	return idx
+}
+
 // LoadRelation reads the authored relation from a YAML file (experimental overlay
 // or an explicit override). Phase C prefers RelationFromGraph.
 func LoadRelation(path string) (Relation, error) {

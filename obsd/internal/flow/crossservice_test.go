@@ -163,3 +163,60 @@ func TestProjectedCrossServiceChain(t *testing.T) {
 		t.Error("expected no chain for a forecast-degraded callee with no callers")
 	}
 }
+
+// TestEntityCausalBridgeRecurrence is the docs/33 build-3 recurrence proof (the user's
+// #2 ask): once a NAMED operator authors a cross-workload cause→effect, the SAME
+// cause→effect lights up as a recognized AUTHORED chain when the incident recurs — and an
+// authored arrow that contradicts the observed flow direction never fabricates one.
+func TestEntityCausalBridgeRecurrence(t *testing.T) {
+	at := time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
+	edges := identity.NewEdgeStore(func() time.Time { return at },
+		map[identity.EdgeType]time.Duration{EdgeTypeFlow: flowBudget}, time.Hour)
+
+	catalog := roleCEId("ob", "productcatalogservice") // the cause eX (degraded callee)
+	frontend := roleCEId("ob", "frontend")             // the effect eY (impacted caller)
+	edges.Assert(EdgeTypeFlow, frontend, catalog, at)  // frontend calls catalog
+	w := identity.TimeWindow{Start: at, End: at}
+	rel, err := LoadRelation("../../../ontology/graph/overlays/experimental/flow-relation-v0.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	degraded := []DegradedWorkload{{CEI: catalog, Label: "ob/productcatalogservice",
+		Phenomenon: "PHEN_OOM_KILL_CGROUP", Detail: "OOM finding (degraded)"}}
+
+	// Baseline (no authored relation): the link carries the GENERIC upstream→downstream why.
+	base, ok := CrossServiceChain(edges, degraded, rel, w, at)
+	if !ok || len(base.Links) != 1 {
+		t.Fatalf("baseline chain: ok=%v links=%d", ok, len(base.Links))
+	}
+	if base.Links[0].WhyClass != "AUTHORED" || base.Links[0].Why != rel.Why {
+		t.Errorf("baseline link should carry the generic relation: %+v", base.Links[0])
+	}
+
+	// The operator authored "catalog causes frontend" (cause == degraded callee, effect ==
+	// impacted caller — agreeing with the flow direction).
+	authored := EntityCausalRelation{
+		FromKey: catalog.Key(), ToKey: frontend.Key(),
+		Why: "catalog OOM starves frontend's product calls (operator-confirmed)", Author: "alice",
+		Basis: "operator-authored from cohyp:abc123", Version: "v0.17.0",
+	}
+	got, ok := CrossServiceChain(edges, degraded, rel, w, at, authored)
+	if !ok || len(got.Links) != 1 {
+		t.Fatalf("recurrence chain: ok=%v links=%d", ok, len(got.Links))
+	}
+	l := got.Links[0]
+	if l.WhyClass != "AUTHORED (operator)" || l.Why != authored.Why || l.Author != "alice" {
+		t.Errorf("RECURRENCE: the matching link must carry the operator's authored relation, got %+v", l)
+	}
+
+	// Direction guard: an arrow that CONTRADICTS the flow (frontend causes catalog) must NOT
+	// surface — the cause is not the degraded callee. The link falls back to the generic why.
+	contradicting := EntityCausalRelation{
+		FromKey: frontend.Key(), ToKey: catalog.Key(),
+		Why: "WRONG direction", Author: "alice", Version: "v0.17.0",
+	}
+	rev, _ := CrossServiceChain(edges, degraded, rel, w, at, contradicting)
+	if rev.Links[0].Why == "WRONG direction" || rev.Links[0].WhyClass == "AUTHORED (operator)" {
+		t.Errorf("FABRICATION: an authored arrow contradicting the flow direction surfaced: %+v", rev.Links[0])
+	}
+}
