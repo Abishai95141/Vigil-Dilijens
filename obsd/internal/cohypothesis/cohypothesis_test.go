@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/assoc"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/onset"
 )
@@ -20,11 +21,11 @@ func TestCoOnset_DedupsSamePairAcrossCycles(t *testing.T) {
 	defer s.Close()
 	a, b := "i|cl|ns|Pod|x|u1|m", "i|cl|ns|Pod|y|u2|m"
 	if _, err := HypothesizeAndStage(s, t0, []onset.Onset{ons(a, 0, "up"), ons(b, 5, "up")},
-		[]CoupledPair{{A: a, B: b, Coefficient: 0.90}}, 90*time.Second, "v1", 0); err != nil {
+		[]CoupledPair{{A: a, B: b, Coefficient: 0.90}}, nil, 90*time.Second, "v1", 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := HypothesizeAndStage(s, t0.Add(time.Minute), []onset.Onset{ons(a, 1000, "up"), ons(b, 1005, "up")},
-		[]CoupledPair{{A: a, B: b, Coefficient: 0.92}}, 90*time.Second, "v1", 0); err != nil {
+		[]CoupledPair{{A: a, B: b, Coefficient: 0.92}}, nil, 90*time.Second, "v1", 0); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.List(candidate.Filter{Kind: candidate.KindCausalHypothesis})
@@ -50,10 +51,82 @@ func ons(key string, sec int, dir string) onset.Onset {
 	return onset.Onset{EntityCEI: cei, Metric: metric, At: t0.Add(time.Duration(sec) * time.Second), Direction: dir, StepZ: 12}
 }
 
+// TestCoOnset_LeadLagWitnessAttachesAndIsConsistent: a present lead-lag witness attaches its
+// sign-carrying fields to the payload, and lagConsistentWithOnset is true ONLY when the
+// peak-lag sign AGREES with the independent onset-order witness (docs/31 §5). Absent witness =
+// honest silence (no lead-lag fields).
+func TestCoOnset_LeadLagWitnessAttachesAndIsConsistent(t *testing.T) {
+	onsets := []onset.Onset{ons("podA|mem", 0, "up"), ons("podB|mem", 30, "up")} // a (podA) stepped FIRST
+	pairs := []CoupledPair{{A: "podA|mem", B: "podB|mem", Coefficient: 0.91}}
+	key := leadLagKey("podA|mem", "podB|mem")
+
+	// peak lag positive ⇒ a leads; onset says a first ⇒ the two witnesses AGREE.
+	agree := map[string]assoc.LeadLagWitness{key: {LagPeakBins: 2, LagPeakSeconds: 30, LagPeakRDetrended: 0.8, LagP: 0.01, EffectiveN: 20}}
+	got := Hypothesize(onsets, pairs, agree, 90*time.Second, "v1", 0)
+	if len(got) != 1 {
+		t.Fatalf("want 1 hypothesis, got %d", len(got))
+	}
+	p := got[0].Payload
+	if p["lagPeakSeconds"] != int64(30) {
+		t.Errorf("lagPeakSeconds = %v, want 30", p["lagPeakSeconds"])
+	}
+	for _, k := range []string{"lagPeakRDetrended", "lagP", "effectiveN", "lagConsistentWithOnset"} {
+		if _, ok := p[k]; !ok {
+			t.Errorf("payload missing lead-lag field %q", k)
+		}
+	}
+	if p["lagConsistentWithOnset"] != true {
+		t.Errorf("consistency = %v, want true (onset a-first + lag a-leads AGREE)", p["lagConsistentWithOnset"])
+	}
+
+	// peak lag negative ⇒ b leads; onset still says a first ⇒ the witnesses DISAGREE.
+	disagree := map[string]assoc.LeadLagWitness{key: {LagPeakBins: -2, LagPeakSeconds: -30, LagPeakRDetrended: 0.8, LagP: 0.01, EffectiveN: 20}}
+	g2 := Hypothesize(onsets, pairs, disagree, 90*time.Second, "v1", 0)
+	if g2[0].Payload["lagConsistentWithOnset"] != false {
+		t.Errorf("consistency = %v, want false (onset a-first but lag b-leads DISAGREE → 'order unclear')", g2[0].Payload["lagConsistentWithOnset"])
+	}
+
+	// no witness ⇒ honest silence: NO lead-lag fields in the payload.
+	g3 := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0)
+	if _, ok := g3[0].Payload["lagPeakSeconds"]; ok {
+		t.Error("payload carries lead-lag fields with no witness — want honest silence")
+	}
+}
+
+// TestCoOnset_LeadLagIsPayloadOnly: the lead-lag witness is payload-only (excluded from the
+// content id), so the SAME pair re-staged with a DIFFERENT witness still dedups to one row —
+// the §5.3 anti-flood guarantee.
+func TestCoOnset_LeadLagIsPayloadOnly(t *testing.T) {
+	s, err := candidate.Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	a, b := "i|cl|ns|Pod|x|u1|m", "i|cl|ns|Pod|y|u2|m"
+	on := []onset.Onset{ons(a, 0, "up"), ons(b, 5, "up")}
+	pr := []CoupledPair{{A: a, B: b, Coefficient: 0.90}}
+	k := leadLagKey(a, b)
+	ll1 := map[string]assoc.LeadLagWitness{k: {LagPeakBins: 1, LagPeakSeconds: 15, LagPeakRDetrended: 0.7, LagP: 0.02, EffectiveN: 15}}
+	ll2 := map[string]assoc.LeadLagWitness{k: {LagPeakBins: 3, LagPeakSeconds: 45, LagPeakRDetrended: 0.9, LagP: 0.001, EffectiveN: 25}}
+	if _, err := HypothesizeAndStage(s, t0, on, pr, ll1, 90*time.Second, "v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HypothesizeAndStage(s, t0.Add(time.Minute), on, pr, ll2, 90*time.Second, "v1", 0); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.List(candidate.Filter{Kind: candidate.KindCausalHypothesis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("lead-lag is payload-only; same pair must dedup to 1 row regardless of witness, got %d", len(rows))
+	}
+}
+
 func TestCoOnset_StagesDirectionFreeHypothesis(t *testing.T) {
 	onsets := []onset.Onset{ons("podA|mem", 0, "up"), ons("podB|mem", 30, "up")}
 	pairs := []CoupledPair{{A: "podA|mem", B: "podB|mem", Coefficient: 0.91}}
-	got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0)
+	got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 co-onset hypothesis, got %d", len(got))
 	}
@@ -80,7 +153,7 @@ func TestCoOnset_StagesDirectionFreeHypothesis(t *testing.T) {
 func TestCoOnset_DirectionFreeRegardlessOfInputOrder(t *testing.T) {
 	onsets := []onset.Onset{ons("podB|mem", 30, "up"), ons("podA|mem", 0, "up")}
 	pairs := []CoupledPair{{A: "podB|mem", B: "podA|mem", Coefficient: 0.91}} // B,A order
-	got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0)
+	got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0)
 	if len(got) != 1 || got[0].Subject != "podA|mem ~ podB|mem" {
 		t.Fatalf("subject must be sorted/stable regardless of input order, got %+v", got)
 	}
@@ -93,14 +166,14 @@ func TestCoOnset_SkipsSameEntityPairs(t *testing.T) {
 	b := "i|cl|ns|Pod|influx|uid|container_memory_active_file"
 	onsets := []onset.Onset{ons(a, 0, "up"), ons(b, 10, "up")}
 	pairs := []CoupledPair{{A: a, B: b, Coefficient: 0.95}}
-	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0); len(got) != 0 {
+	if got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0); len(got) != 0 {
 		t.Fatalf("same-entity pair must be skipped (not a cross-workload lead), got %d", len(got))
 	}
 	// a CROSS-entity pair (different pods) co-stepping IS staged.
 	c := "i|cl|ns|Pod|other|uid2|container_memory_working_set_bytes"
 	onsets = append(onsets, ons(c, 5, "up"))
 	pairs = []CoupledPair{{A: a, B: c, Coefficient: 0.9}}
-	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0); len(got) != 1 {
+	if got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0); len(got) != 1 {
 		t.Fatalf("cross-entity co-onset must be staged, got %d", len(got))
 	}
 	// the SAME physical pod as both a Container CEI and a Pod CEI (shared pod UID) is NOT a
@@ -108,7 +181,7 @@ func TestCoOnset_SkipsSameEntityPairs(t *testing.T) {
 	pc := "i|cl|ns|Container|s|POD123/s|container_memory_working_set_bytes"
 	pp := "i|cl|ns|Pod|costep-y|POD123|container_memory_working_set_bytes"
 	on2 := []onset.Onset{ons(pc, 0, "up"), ons(pp, 5, "up")}
-	if got := Hypothesize(on2, []CoupledPair{{A: pc, B: pp, Coefficient: 1.0}}, 90*time.Second, "v1", 0); len(got) != 0 {
+	if got := Hypothesize(on2, []CoupledPair{{A: pc, B: pp, Coefficient: 1.0}}, nil, 90*time.Second, "v1", 0); len(got) != 0 {
 		t.Fatalf("same-pod Container~Pod views (shared UID) must be skipped, got %d", len(got))
 	}
 }
@@ -124,7 +197,7 @@ func TestCoOnset_CapsToStrongestLeads(t *testing.T) {
 		onsets = append(onsets, ons(a, 0, "up"), ons(b, 5, "up"))
 		pairs = append(pairs, CoupledPair{A: a, B: b, Coefficient: coef})
 	}
-	got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 2)
+	got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 2)
 	if len(got) != 2 {
 		t.Fatalf("maxOut=2 must keep 2, got %d", len(got))
 	}
@@ -139,7 +212,7 @@ func TestCoOnset_CapsToStrongestLeads(t *testing.T) {
 func TestCoOnset_NoHypothesisWhenStepsTooFarApart(t *testing.T) {
 	onsets := []onset.Onset{ons("podA|mem", 0, "up"), ons("podB|mem", 300, "up")} // 300s apart
 	pairs := []CoupledPair{{A: "podA|mem", B: "podB|mem", Coefficient: 0.91}}
-	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0); len(got) != 0 {
+	if got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0); len(got) != 0 {
 		t.Fatalf("steps 300s apart with a 90s window must NOT co-onset, got %d", len(got))
 	}
 }
@@ -147,7 +220,7 @@ func TestCoOnset_NoHypothesisWhenStepsTooFarApart(t *testing.T) {
 func TestCoOnset_NoHypothesisWhenOnlyOneStepped(t *testing.T) {
 	onsets := []onset.Onset{ons("podA|mem", 0, "up")} // podB never stepped
 	pairs := []CoupledPair{{A: "podA|mem", B: "podB|mem", Coefficient: 0.91}}
-	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0); len(got) != 0 {
+	if got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0); len(got) != 0 {
 		t.Fatalf("only one side stepped ⇒ no co-onset, got %d", len(got))
 	}
 }
@@ -156,7 +229,7 @@ func TestCoOnset_UsesMostRecentOnsetPerSeries(t *testing.T) {
 	// podA stepped long ago AND recently; podB stepped recently. The recent pair co-onsets.
 	onsets := []onset.Onset{ons("podA|mem", -1000, "up"), ons("podA|mem", 10, "up"), ons("podB|mem", 0, "up")}
 	pairs := []CoupledPair{{A: "podA|mem", B: "podB|mem", Coefficient: 0.8}}
-	if got := Hypothesize(onsets, pairs, 90*time.Second, "v1", 0); len(got) != 1 {
+	if got := Hypothesize(onsets, pairs, nil, 90*time.Second, "v1", 0); len(got) != 1 {
 		t.Fatalf("most-recent onsets (10s vs 0s) are within window ⇒ 1 hypothesis, got %d", len(got))
 	}
 }

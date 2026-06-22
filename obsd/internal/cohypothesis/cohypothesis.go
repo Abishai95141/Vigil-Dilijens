@@ -27,9 +27,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/assoc"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/onset"
 )
+
+// leadLagKey is the lookup key for a pair's lead-lag witness: the SORTED pair (the same
+// order Hypothesize sorts a,b), so the caller and the producer agree on which series is "a"
+// (a positive peak lag means a led b).
+func leadLagKey(a, b string) string {
+	if b < a {
+		a, b = b, a
+	}
+	return a + "\x00" + b
+}
 
 // CoupledPair is one MEASURED association (an associated-with edge) between two series. It is
 // the only coupling the producer trusts; a causal direction is NEVER inferred from it. A and
@@ -45,7 +56,12 @@ type CoupledPair struct {
 // step together and many infra metrics co-move — it keeps only the strongest `maxOut`
 // (highest |coefficient|, then tightest co-onset); maxOut ≤ 0 means no cap. Pure +
 // deterministic: same inputs ⇒ identical candidates (the content id dedups re-staging).
-func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration, graphVersion string, maxOut int) []candidate.Candidate {
+// leadlag carries the OPTIONAL rigorous lead-lag witness per sorted pair (docs/31 §5), keyed
+// by leadLagKey(a,b). A present entry attaches sign-carrying lead-lag EVIDENCE to the pair's
+// payload (never a direction); an absent entry is honest silence (no significant lead). It is
+// payload-only — excluded from the content id — so a witness appearing/changing across cycles
+// never re-mints or floods the candidate. nil ⇒ the lane runs without the lead-lag enrichment.
+func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, leadlag map[string]assoc.LeadLagWitness, window time.Duration, graphVersion string, maxOut int) []candidate.Candidate {
 	latest := map[string]onset.Onset{}
 	for _, o := range onsets {
 		k := o.EntityCEI + "|" + o.Metric
@@ -87,18 +103,46 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 			first = b
 		}
 		deltaSec := int64(absDur(oA.At.Sub(oB.At)) / time.Second)
+		payload := map[string]any{
+			"a": a, "aOnsetTs": oA.At.UTC().Format(time.RFC3339Nano), "aDirection": oA.Direction, "aStepZ": oA.StepZ,
+			"b": b, "bOnsetTs": oB.At.UTC().Format(time.RFC3339Nano), "bDirection": oB.Direction, "bStepZ": oB.StepZ,
+			"coefficient":   round3(p.Coefficient), // the lag-0 LEVEL correlation (distinct from lagPeakRDetrended)
+			"deltaSeconds":  deltaSec,
+			"observedFirst": first, // MEASURED observed order — explicitly NOT a cause
+			"windowSeconds": int64(window / time.Second),
+		}
+		// docs/31 §5: attach the rigorous lead-lag witness when one survived (significant,
+		// nonzero, detrended). It is sign-carrying EVIDENCE (positive lag = a appeared to lead
+		// b), NEVER a direction. lagConsistentWithOnset cross-checks the peak-lag sign against
+		// the INDEPENDENT onset-order witness — two witnesses agreeing is a stronger lead to
+		// investigate; disagreeing downgrades to "order unclear" (surfaced, not asserted). All
+		// lead-lag fields are payload-only (excluded from the content id).
+		if w, ok := leadlag[leadLagKey(a, b)]; ok {
+			onsetSign := 0
+			switch first {
+			case a:
+				onsetSign = 1
+			case b:
+				onsetSign = -1
+			}
+			lagSign := 0
+			switch {
+			case w.LagPeakBins > 0:
+				lagSign = 1
+			case w.LagPeakBins < 0:
+				lagSign = -1
+			}
+			payload["lagPeakSeconds"] = w.LagPeakSeconds
+			payload["lagPeakRDetrended"] = round3(w.LagPeakRDetrended)
+			payload["lagP"] = round3(w.LagP)
+			payload["effectiveN"] = int64(w.EffectiveN)
+			payload["lagConsistentWithOnset"] = onsetSign != 0 && onsetSign == lagSign
+		}
 		cand = append(cand, scored{coef: p.Coefficient, delta: deltaSec, c: candidate.Candidate{
 			Kind:     candidate.KindCausalHypothesis,
 			Relation: "co-occurrence",
 			Subject:  a + " ~ " + b,
-			Payload: map[string]any{
-				"a": a, "aOnsetTs": oA.At.UTC().Format(time.RFC3339Nano), "aDirection": oA.Direction, "aStepZ": oA.StepZ,
-				"b": b, "bOnsetTs": oB.At.UTC().Format(time.RFC3339Nano), "bDirection": oB.Direction, "bStepZ": oB.StepZ,
-				"coefficient":   round3(p.Coefficient),
-				"deltaSeconds":  deltaSec,
-				"observedFirst": first, // MEASURED observed order — explicitly NOT a cause
-				"windowSeconds": int64(window / time.Second),
-			},
+			Payload:  payload,
 			// Evidence is STABLE per pair (no per-cycle timestamps/coefficient in the refs) so the
 			// content id is the PAIR — re-staging the same pair updates in place, never floods. The
 			// changing values (onset times, r, delta) live in the payload + the surfaced row.
@@ -140,9 +184,9 @@ func Hypothesize(onsets []onset.Onset, pairs []CoupledPair, window time.Duration
 
 // HypothesizeAndStage runs Hypothesize and stages each candidate into the firewalled store,
 // returning the count staged. now is injected (no time.Now in the package).
-func HypothesizeAndStage(s *candidate.Store, now time.Time, onsets []onset.Onset, pairs []CoupledPair, window time.Duration, graphVersion string, maxOut int) (int, error) {
+func HypothesizeAndStage(s *candidate.Store, now time.Time, onsets []onset.Onset, pairs []CoupledPair, leadlag map[string]assoc.LeadLagWitness, window time.Duration, graphVersion string, maxOut int) (int, error) {
 	n := 0
-	for _, c := range Hypothesize(onsets, pairs, window, graphVersion, maxOut) {
+	for _, c := range Hypothesize(onsets, pairs, leadlag, window, graphVersion, maxOut) {
 		if _, err := s.Put(now, c); err != nil {
 			return n, err
 		}

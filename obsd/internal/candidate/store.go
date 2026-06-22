@@ -573,6 +573,11 @@ var nonIdentityPayloadKeys = map[string]struct{}{
 	// per-run projected values shown for context, never identity — so re-running the harness
 	// updates the pair in place instead of minting a new row each run.
 	"lagBins": {}, "directionHint": {}, "leadlagHintBins": {}, "contemporaneous": {},
+	// docs/31 §5: the ONLINE lead-lag witness is likewise identified by its PAIR. The peak lag,
+	// its detrended r, the permutation p, the effective-N and the onset-consistency flag are
+	// per-cycle MEASURED values (float jitter every cycle) — payload-only, never identity, or
+	// the firewalled store would flood with near-duplicate candidates (the §5.3 hazard).
+	"lagPeakSeconds": {}, "lagPeakRDetrended": {}, "lagP": {}, "effectiveN": {}, "lagConsistentWithOnset": {},
 }
 
 // identityPayload returns a copy of p with the non-identity (model-prose) keys

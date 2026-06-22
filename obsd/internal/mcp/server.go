@@ -375,7 +375,7 @@ func toolDefs() []toolDef {
 		},
 		{
 			Name:        toolCausalHypotheses,
-			Description: "DIRECTION-FREE co-occurrence leads (NOT causal): pairs of series that stepped together in a window, surfaced for a HUMAN OPERATOR to author the direction. This tool carries NO cause and NO direction by design. Present each ONLY as 'these two co-moved — a lead to investigate'; NEVER assign a direction or a cause yourself, and never restate observed order as causation. A direction becomes legitimate only after an operator authors it, at which point it appears in get_authored_relations. Off ⇒ stated honestly (needs --cohypothesis-enabled).",
+			Description: "DIRECTION-FREE co-occurrence leads (NOT causal): pairs of series that stepped together in a window, surfaced for a HUMAN OPERATOR to author the direction. This tool carries NO cause and NO direction by design. Each pair may carry TWO INDEPENDENT lead witnesses, both MEASURED, neither a direction: (1) the onset ORDER (observedFirst — which stepped first), and (2) a detrended lagged cross-correlation (lagPeakSeconds, sign-carrying, with a permutation-test lagP). When lagConsistentWithOnset is true the two witnesses AGREE on the apparent order — a STRONGER lead to investigate; when it is false, or the lead-lag witness is absent, present it as 'co-moved, ORDER UNCLEAR'. Present each ONLY as 'these two co-moved — a lead to investigate'; NEVER assign a direction or a cause yourself, and never restate observed order (or a peak lag) as causation. A direction becomes legitimate only after an operator authors it, at which point it appears in get_authored_relations. Off ⇒ stated honestly (needs --cohypothesis-enabled).",
 			InputSchema: emptyObjectSchema,
 		},
 		{

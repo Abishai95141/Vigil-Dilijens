@@ -1972,7 +1972,23 @@ func coHypothesisLoop(ctx context.Context, logger *slog.Logger, candStore *candi
 			for _, e := range edges {
 				pairs = append(pairs, cohypothesis.CoupledPair{A: e.A, B: e.B, Coefficient: e.Coefficient})
 			}
-			n, err := cohypothesis.HypothesizeAndStage(candStore, now, recent, pairs, window, graphVersion, coHypMaxOut)
+			// docs/31 §5: the rigorous lead-lag witness, computed ONLY on the pruned survivors
+			// (bounded by coHypMaxOut), over the SAME assoc window. Detrended + declared lag grid
+			// + min-overlap + a SEEDED (content-derived) permutation significance test — never the
+			// competitor's argmax→arrow. A witness is attached as sign-carrying EVIDENCE; a pair
+			// with no significant nonzero lead simply has none (honest silence). Off-digest +
+			// deterministic (the candidate firewall + replay are untouched).
+			llWindowStart := now.Add(-strict.Window)
+			llp := assoc.DefaultLeadLagParams()
+			llp.Bin = strict.Bin
+			leadlag := make(map[string]assoc.LeadLagWitness, len(edges))
+			for _, e := range edges {
+				seed := assoc.LeadLagSeed(e.A, e.B, llWindowStart, now)
+				if w, ok := assoc.ComputeLeadLag(series[e.A], series[e.B], llWindowStart, now, seed, llp); ok {
+					leadlag[e.A+"\x00"+e.B] = w
+				}
+			}
+			n, err := cohypothesis.HypothesizeAndStage(candStore, now, recent, pairs, leadlag, window, graphVersion, coHypMaxOut)
 			if err != nil {
 				logger.Error("cohypothesis: stage", "err", err)
 				continue
@@ -2112,6 +2128,17 @@ func mapCausalHypothesisRows(cs []candidate.Candidate) []vapi.CausalHypothesisRo
 			ADirection: anyStr(c.Payload["aDirection"]), BDirection: anyStr(c.Payload["bDirection"]),
 			ObservedFirst: anyStr(c.Payload["observedFirst"]),
 			DeltaSeconds:  anyInt64(c.Payload["deltaSeconds"]), Coefficient: anyFloat(c.Payload["coefficient"]),
+		}
+		// docs/31 §5: the optional second witness (detrended lead-lag), present only when a
+		// significant nonzero lead survived — else omitted (honest silence).
+		if _, has := c.Payload["lagPeakSeconds"]; has {
+			row.LagPeakSeconds = anyInt64(c.Payload["lagPeakSeconds"])
+			row.LagPeakRDetrended = anyFloat(c.Payload["lagPeakRDetrended"])
+			row.LagP = anyFloat(c.Payload["lagP"])
+			row.EffectiveN = anyInt64(c.Payload["effectiveN"])
+			if v, ok := c.Payload["lagConsistentWithOnset"].(bool); ok {
+				row.LagConsistentWithOnset = &v
+			}
 		}
 		for _, e := range c.Evidence {
 			row.Evidence = append(row.Evidence, vapi.EvidenceRow{Kind: e.Kind, Ref: e.Ref, Detail: e.Detail})
