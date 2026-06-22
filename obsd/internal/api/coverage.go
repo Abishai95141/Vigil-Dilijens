@@ -37,6 +37,10 @@ type CoverageSummary struct {
 	PhenomenaFull    int     `json:"phenomenaFull"`
 	PhenomenaPartial int     `json:"phenomenaPartial"`
 	PhenomenaNone    int     `json:"phenomenaNone"`
+	// Coverage-frontier rollup (doc 33 §1): closeable work by class.
+	FrontierCovered      int `json:"frontierCovered"`
+	FrontierEmission     int `json:"frontierEmission"`
+	FrontierCompleteness int `json:"frontierCompleteness"`
 	QAVerified       int     `json:"qaVerified"`
 	QASuspect        int     `json:"qaSuspect"`
 	QAFailed         int     `json:"qaFailed"`
@@ -69,6 +73,9 @@ type PhenomenonRow struct {
 	RequiredTotal  int      `json:"requiredTotal"`
 	RequiredOk     int      `json:"requiredObservable"`
 	MissingReasons []string `json:"missingReasons"`
+	// Coverage frontier (doc 33 §1): how this gap closes.
+	GapClass string `json:"gapClass"` // covered | emission | completeness
+	Closer   string `json:"closer,omitempty"`
 }
 
 // RuleRow is one threshold rule's binding coverage (doc 04 §3.5).
@@ -140,11 +147,15 @@ func BuildCoverage(clusterID, graphVersion, graphRelease string, now time.Time,
 		v.Summary.PhenomenaFull = obs.Full
 		v.Summary.PhenomenaPartial = obs.Partial
 		v.Summary.PhenomenaNone = obs.None
+		v.Summary.FrontierCovered = obs.Covered
+		v.Summary.FrontierEmission = obs.Emission
+		v.Summary.FrontierCompleteness = obs.Completeness
 		for _, pc := range obs.PerPhenomenon {
 			v.Phenomena = append(v.Phenomena, PhenomenonRow{
 				ID: pc.PhenomenonID, Label: pc.Label, Severity: pc.Severity, Observability: pc.Observability,
 				RequiredTotal: pc.RequiredTotal, RequiredOk: pc.RequiredObtainable,
 				MissingReasons: append([]string(nil), pc.MissingReasons...),
+				GapClass:       pc.GapClass, Closer: pc.Closer,
 			})
 		}
 		sort.Slice(v.Phenomena, func(i, j int) bool {

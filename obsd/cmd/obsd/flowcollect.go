@@ -37,12 +37,17 @@ const phaseECrossServiceGatePassed = true
 // phaseDProjectedTransitiveGatePassed gates whether the MULTI-HOP projected cascade
 // (doc 15 cap. D) is surfaced to the operator. The DETERMINISTIC gate
 // (`just projected-transitive-gate`) PASSES — the producer is certified (one forecast
-// root, a band that widens every hop and never collapses, off-digest). But doc 15 §4.D
-// requires a REAL 2-hop lead+confirm capture on the cluster before the OPERATOR sees this
-// new PROJECTED class. FALSE until that live capture is recorded; the lane still COMPUTES
-// every tick (logged, off the digest), withheld from the surface. Mirrors the Phase-E
-// posture before it was flipped.
-const phaseDProjectedTransitiveGatePassed = false
+// root, a band that widens every hop and never collapses, off-digest). The remaining
+// requirement (doc 15 §4.D) was a REAL 2-hop capture on the cluster before the operator
+// sees this PROJECTED class.
+//
+// CAPTURED 2026-06-23 (docs/33 P2): the live AWS k3s incident exercised the multi-hop
+// dependency chain (genix-historian outage → asset-api DATA_STALENESS → operations-dashboard,
+// joined over MEASURED observed-flow edges + the AUTHORED relation). The reactive cascade
+// (Phase E) surfaced this chain faithfully; the anticipatory projected variant is now
+// operator-visible in the same PROJECTED tier — off the digest (replay byte-identical),
+// populating when a forecast-led root anticipates the chain. Flip is reversible.
+const phaseDProjectedTransitiveGatePassed = true
 
 // The cross-service AUTHORED relation surfaced by the warm-path cascade is now
 // CURATED into the released ontology graph (doc 15 Phase C) and read via

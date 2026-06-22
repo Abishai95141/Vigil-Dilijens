@@ -30,9 +30,10 @@ type RootCauseChainView struct {
 	// operator-visible until its own gate is satisfied by a REAL 2-hop lead+confirm capture
 	// (doc 11 §3.5): ProjectedActive stays false (and ProjectedChains nil) while gate-pending,
 	// exactly the Phase-E posture. The lane still COMPUTES every tick (off-digest).
-	ProjectedActive bool         `json:"projectedActive"`
-	ProjectedNote   string       `json:"projectedNote"`
-	ProjectedChains []flow.Chain `json:"projectedChains,omitempty"`
+	ProjectedActive     bool         `json:"projectedActive"`
+	ProjectedGatePassed bool         `json:"projectedGatePassed"` // the live 2-hop gate has flipped (operator-visible)
+	ProjectedNote       string       `json:"projectedNote"`
+	ProjectedChains     []flow.Chain `json:"projectedChains,omitempty"`
 }
 
 const (
@@ -79,6 +80,7 @@ func BuildRootCauseChain(chains []flow.Chain, projected []flow.Chain, enabled, p
 		v.Chains = chains
 	}
 	// The multi-hop PROJECTED lane — gated separately from the MEASURED lane.
+	v.ProjectedGatePassed = projectedGatePassed
 	switch {
 	case !enabled:
 		v.ProjectedNote = rootCauseProjOffNote

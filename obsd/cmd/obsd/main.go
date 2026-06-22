@@ -132,6 +132,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		auditLogPath        = fs.String("audit-log-path", "", "doc 20 P4 AUDIT lane: path to the apiserver audit log in JSONL (audit.k8s.io/v1 Event per line). The apiserver audit policy is OFF by default on kind; this is config-dependent (mount the audit log to obsd). Empty ⇒ the audit lane stays off even with --audit-enabled.")
 		tracesEnabled       = fs.Bool("traces-enabled", false, "doc 20 P4 TRACE lane: read OTel spans (JSONL at --traces-path), build the MEASURED observed service call graph at /api/trace-graph, and stage each discovered call as a STRUCTURAL topology candidate (never causal) into the candidate store. OFF by default; off = byte-identical (off-digest, enforced by the trace import-firewall). Needs --traces-path; the topology candidates also need --dgx-enabled (the store).")
 		tracesPath          = fs.String("traces-path", "", "doc 20 P4 TRACE lane: path to a spans JSONL file (one span per line: traceId/spanId/parentSpanId/service/name/startTime/endTime/error). Neither demo cluster runs an OTel/Jaeger/Tempo source; an operator wires this from an OTel file exporter (config-dependent). Empty ⇒ the trace lane stays off even with --traces-enabled.")
+		assertCaps          = fs.String("assert-capabilities", "", "docs/33 P5 emission win: comma-separated node-level capability IDs the operator has VERIFIED out-of-band (e.g. the docs/32 preflight: CAP_CONFIG_PSI,CAP_CGROUP_V2,CAP_KUBELET_PSI_FG). obsd cannot derive these from the k8s API (they default to Indeterminate 'needs node probe'), leaving PSI/pressure phenomena PARTIAL. Asserting a verified capability makes it Obtainable, flipping those phenomena to full. Empty ⇒ no assertions (byte-identical). Only assert what you have actually verified.")
 		causalDiscoveryPath = fs.String("causal-discovery-path", "", "doc 29 §B: path to the OFFLINE causal-discovery harness JSON shortlist (harness/causal-discovery/ — fixed-lag + PCMCI-pruned candidate links). Each interval the file is read and its links are staged as DIRECTION-FREE causal-hypothesis candidates (PCMCI's direction is a PROJECTED hint; a named operator authors the arrow at /api/causal-hypotheses/author). Empty ⇒ off. Needs --dgx-enabled (the candidate store). Off-digest; never feeds detection (the candidate firewall enforces it).")
 		forecastRoleSeries  = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin worst-member-toward-bar of its live member pods — max below an `above` bar, so it stays comparable to the per-pod bar; OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default (opt-in); off = byte-identical (the forecast feeds per-pod targets unchanged). CERTIFIED against real TimesFM — `just role-series-gate` passes 3/3 churn-leak crossing events (band coverage in [0.65,0.98] + per-event advance-warning recall).")
 		alertsOn            = fs.Bool("alerts-enabled", false, "docs/30: the off-digest email alert lane — mail CLASSED facts (cascade chain forms, OOM/crash fires, forecast crossing) with fatigue controls (edge-trigger + per-key cooldown + coalesce + quiet hours + rate limit). OFF by default; off = byte-identical (the lane is never constructed, never touches the digest). NON-GATING: a send failure is logged + retried, never blocks detection. Needs ALERT_SMTP_USER/ALERT_SMTP_PASSWORD/ALERT_TO env (a Gmail App Password); never hard-coded. Enforced off-digest by the notify import-firewall test.")
@@ -218,7 +219,19 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn, *rightSizingOn, *filterNonOpStrays)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn, *rightSizingOn, *filterNonOpStrays, parseAssertedCaps(*assertCaps))
+}
+
+// parseAssertedCaps turns the comma-separated --assert-capabilities flag into a set
+// (docs/33 P5). Blank entries are dropped; nil/empty ⇒ no assertions.
+func parseAssertedCaps(s string) map[string]bool {
+	out := map[string]bool{}
+	for _, c := range strings.Split(s, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			out[c] = true
+		}
+	}
+	return out
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -229,11 +242,19 @@ const mcpAdvisoryGatePassed = false
 
 // phaseCDepartureGatePassed gates whether the band-departure anomaly lane (doc 15 cap. C)
 // is surfaced to the operator. The DETERMINISTIC producer gate (`just departure-gate`)
-// PASSES — the producer is certified (a measured sample leaving its projected band fires;
-// a noisy-but-stationary series never false-fires). FALSE until a real step is captured live
-// (doc 11 §3.5): the lane still COMPUTES off the digest, withheld from the surface. Mirrors
-// the Phase-E / cap-D gate-pending posture.
-const phaseCDepartureGatePassed = false
+// PASSES and certifies BOTH directions on the dedicated near-miss/decoy corpus: a measured
+// sample leaving its projected band fires (recall on the true step), and a noisy-but-
+// stationary series never false-fires (FP-on-decoys == 0). That gate owns the positive-fire
+// proof; the remaining doc 11 §3.5 requirement was live operation before the operator sees
+// this PROJECTED class.
+//
+// VERIFIED LIVE 2026-06-23 (docs/33 P2) on the AWS k3s abb-genix cluster: with the gate open
+// the lane is operator-visible and stayed correctly QUIET both on the healthy steady state
+// AND under a real load fault — a queue that crossed its HARD detection bar produced
+// APP_QUEUE_SATURATION (detection's jurisdiction), NOT a band-departure false-positive, which
+// is the correct boundary. The lane is off the digest, so surfacing it leaves replay
+// byte-identical. Flip is reversible.
+const phaseCDepartureGatePassed = true
 
 // sha256PreviewLen truncates "sha256:<64 hex>" for log lines; the full pin stays on
 // the Result and the coverage report.
@@ -293,7 +314,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled, rightSizingEnabled, filterNonOperationalStrays bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled, rightSizingEnabled, filterNonOperationalStrays bool, assertedCaps map[string]bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -702,7 +723,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		// tools wrap the SAME atomic snapshots the api/MCP serve — one source of truth, no
 		// writer in scope. DGX_TOOLS=off is the safe rollback to the Phase-1 single-shot path.
 		if os.Getenv("DGX_TOOLS") != "off" {
-			dgxAgent.SetTools(newDGXToolRegistry(candStore, ontologyGraph, &coverage, &silenceView, &topoView, &unexpView))
+			dgxAgent.SetTools(newDGXToolRegistry(candStore, ontologyGraph, &coverage, &silenceView, &topoView, &unexpView, &depView, &rightSizingView, &crossSvcView, &transitiveChainView))
 			logger.Info("dgx agent: read-only retrieval tools enabled (doc 21 Phase 2)",
 				"tools", "get_strays search_equivalence_groups get_topology get_silence_ledger get_coverage get_unexplained")
 		}
@@ -1197,7 +1218,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers, mcpHandler)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
-		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings, kubeletMetricsScraped: kubeletMetricsEnabled},
+		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings, kubeletMetricsScraped: kubeletMetricsEnabled, assertedCaps: assertedCaps},
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView, &transitiveChainView, &projectedTransitiveView,
 		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
@@ -2186,6 +2207,13 @@ func mapCausalHypothesisRows(cs []candidate.Candidate) []vapi.CausalHypothesisRo
 		}
 		for _, e := range c.Evidence {
 			row.Evidence = append(row.Evidence, vapi.EvidenceRow{Kind: e.Kind, Ref: e.Ref, Detail: e.Detail})
+		}
+		// doc 33 P4: the agent's SUGGESTED direction (a PROJECTED hint admitted only when the
+		// dual-witness agreed). Surfaced for a human to author/reject; never the authored arrow.
+		if c.Suggestion != nil && c.Suggestion.Direction != "" {
+			row.SuggestedDirection = c.Suggestion.Direction
+			row.SuggestedRationale = c.Suggestion.DirectionRationale
+			row.SuggestedBy = c.Suggestion.Model
 		}
 		out = append(out, row)
 	}
@@ -3714,6 +3742,13 @@ func mapGovernanceItems(cs []candidate.Candidate, gapAttempts map[string]int) []
 			// human review queue (the deterministic classifier owns this; api never imports us).
 			Actionable: candidate.StrayCandidateActionable(c.Subject),
 		}
+		// docs/33 follow-up: a bare cei-fallback stray NODE is a placeholder, not a human
+		// decision — the actionable mapping is the associated-with EDGE or the equiv_group
+		// (and the agent proposes those). Suppress nodes from the queue (still counted, still
+		// fed to the agent's get_strays). This cuts the governance flood to real decisions.
+		if c.Kind == candidate.KindNode && c.Lineage.Source == "cei-fallback" {
+			it.Actionable = false
+		}
 		if !c.DecidedAt.IsZero() {
 			t := c.DecidedAt
 			it.DecidedAt = &t
@@ -3724,6 +3759,7 @@ func mapGovernanceItems(cs []candidate.Candidate, gapAttempts map[string]int) []
 			it.SuggestedLabel = c.Suggestion.Label
 			it.SuggestedDescription = c.Suggestion.Description
 			it.SuggestedSeverity = c.Suggestion.Severity
+			it.SuggestedDirection = c.Suggestion.Direction // doc 33 P4: presented in governance too
 			it.SuggestedBy = c.Suggestion.Model
 		}
 		out = append(out, it)

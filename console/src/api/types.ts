@@ -58,6 +58,10 @@ export interface CoverageSummary {
   phenomenaFull: number;
   phenomenaPartial: number;
   phenomenaNone: number;
+  // Coverage-frontier rollup (doc 33 §1): closeable work by class.
+  frontierCovered: number;
+  frontierEmission: number;
+  frontierCompleteness: number;
   qaVerified: number;
   qaSuspect: number;
   qaFailed: number;
@@ -73,6 +77,9 @@ export interface PhenomenonRow {
   requiredTotal: number;
   requiredObservable: number; // NOTE: Go field RequiredOk, json tag "requiredObservable"
   missingReasons: string[];
+  // Coverage frontier (doc 33 §1): how this gap closes.
+  gapClass: string;          // "covered" | "emission" | "completeness"
+  closer?: string;           // the concrete deploy/scrape/probe/author step
 }
 
 // MEASURED — one threshold rule's binding coverage. Source: coverage.go RuleRow
@@ -357,6 +364,7 @@ export interface CrossServiceView {
   chain?: Chain;                // omitempty — present only when active (MEASURED ⋈ AUTHORED)
   // --- Phase E: the ANTICIPATORY (PROJECTED) lane, gated separately ---
   projectedActive: boolean;     // stays false while gate-pending
+  projectedGatePassed: boolean; // the live gate has flipped (operator-visible; doc 33 P2)
   projectedNote: string;        // OFF | gate-pending | quiet | active
   projectedChain?: Chain;       // omitempty — withheld until its backtest gate passes
 }
@@ -378,6 +386,7 @@ export interface RootCauseChainView {
   chains?: Chain[];             // omitempty — present only when active
   // --- doc 15 cap. D: the multi-hop PROJECTED cascade, gated separately ---
   projectedActive: boolean;     // stays false while gate-pending
+  projectedGatePassed: boolean; // the live 2-hop gate has flipped (operator-visible; doc 33 P2)
   projectedNote: string;        // OFF | gate-pending | quiet | active
   projectedChains?: Chain[];    // omitempty — withheld until its real 2-hop gate passes
 }
@@ -583,6 +592,7 @@ export interface DepartureView {
   generatedAt: string;     // RFC3339
   class: string;           // "PROJECTED band ⋈ MEASURED sample (joined, never fused)"
   enabled: boolean;        // --departure-enabled is set
+  gatePassed: boolean;     // the live gate has flipped (operator-visible; doc 33 P2)
   active: boolean;         // a departure is surfaced this tick (only once gate-passed)
   note: string;            // honest lane state (off | pending | quiet | active)
   departures?: Departure[]; // omitempty — present only when active=true
@@ -615,6 +625,14 @@ export interface CausalHypothesisRow {
   observedFirst?: string; // MEASURED order — NOT a cause
   deltaSeconds?: number;
   coefficient?: number;
+  // docs/31 §5: the second (lead-lag) witness, present only when significant.
+  lagPeakSeconds?: number;
+  lagConsistentWithOnset?: boolean;
+  // doc 33 P4: the agent's SUGGESTED direction (PROJECTED hint, admitted only when the
+  // dual-witness agreed). Shown beside the witnesses; the operator authors or rejects it.
+  suggestedDirection?: string; // "a-to-b" | "b-to-a"
+  suggestedRationale?: string;
+  suggestedBy?: string;
   evidence?: CausalHypothesisEvidence[];
   createdAt: string;
 }

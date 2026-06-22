@@ -158,10 +158,16 @@ export function AnomaliesPage() {
             {(d) =>
               !d.enabled ? (
                 <LaneNote kind="off" title="Departure lane is not enabled" note={d.note} />
-              ) : !d.active || !d.departures?.length ? (
+              ) : !d.gatePassed ? (
                 <LaneNote
                   kind="pending"
                   title="Computed every tick — withheld until its live gate flips"
+                  note={d.note}
+                />
+              ) : !d.active || !d.departures?.length ? (
+                <LaneNote
+                  kind="empty"
+                  title="Lane live (PROJECTED) — no departure this tick"
                   note={d.note}
                 />
               ) : (

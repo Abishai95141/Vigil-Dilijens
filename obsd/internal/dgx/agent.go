@@ -96,7 +96,10 @@ type Report struct {
 	ToolCalls      int    // tool calls dispatched this run (Phase 2)
 	Iterations     int    // tool-loop turns taken (Phase 2)
 	ThresholdGated int    // proposals rejected by a DECLARED support/capture floor (slice 5 telemetry)
-	Note           string // a non-fatal note (e.g. "tools-unsupported: single-shot fallback")
+	// doc 33 P4 telemetry: directional "why" suggestions on causal hypotheses.
+	DirectionsSuggested int // directions ADMITTED (dual-witness agreed) as a PROJECTED hint for a human
+	DirectionsWithheld  int // directions the model proposed but the dual-witness did NOT support
+	Note                string
 }
 
 // Agent is the propose→verify harness. It holds a provider + the declared gate params,
@@ -285,9 +288,65 @@ func (a *Agent) verifyProposals(doc proposalDoc, c Context, index map[string]Obs
 			rep.Rejected = append(rep.Rejected, Rejection{subj, reason})
 			continue
 		}
+		// doc 33 P4: a SUGGESTED causal direction on a causal_hypothesis is admitted ONLY when the
+		// dual-witness agrees (the cited co-onset hypothesis's lead-lag AGREES with its onset order).
+		// It rides the PROJECTED Suggestion (discarded at promotion); a named human authors the arrow.
+		// A direction the witnesses do not support is WITHHELD — the hypothesis stays direction-free.
+		if cand.Kind == candidate.KindCausalHypothesis && strings.TrimSpace(rp.Direction) != "" {
+			dir, ok := normalizeDirection(rp.Direction)
+			switch {
+			case !ok:
+				rep.DirectionsWithheld++ // unparseable direction — kept direction-free
+			case dir == "not-causal":
+				// A NEGATIVE judgement ("these co-occur but I doubt causation") never invents an
+				// edge, so it is admitted freely — no dual-witness needed. The human ratifies it
+				// (marking the hypothesis not-causal) or overrides.
+				cand.Suggestion = &candidate.Suggestion{Direction: dir, DirectionRationale: rp.Rationale, Model: a.provider.Name()}
+				rep.DirectionsSuggested++
+			case witnessAgrees(rp.Evidence, index):
+				// A POSITIVE direction is admitted ONLY when the dual-witness agrees.
+				cand.Suggestion = &candidate.Suggestion{Direction: dir, DirectionRationale: rp.Rationale, Model: a.provider.Name()}
+				rep.DirectionsSuggested++
+			default:
+				rep.DirectionsWithheld++ // a positive direction the witnesses don't support — withheld
+			}
+		}
 		out = append(out, cand)
 	}
 	return out
+}
+
+// normalizeDirection canonicalises the model's suggested direction to "a-to-b" | "b-to-a"
+// (tolerating arrows / spacing); ok=false for anything else (then the direction is withheld).
+func normalizeDirection(s string) (string, bool) {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(s), " ", "")) {
+	case "a-to-b", "a->b", "a→b", "atob", "ab":
+		return "a-to-b", true
+	case "b-to-a", "b->a", "b→a", "btoa", "ba":
+		return "b-to-a", true
+	case "not-causal", "notcausal", "not_causal", "none", "noncausal":
+		return "not-causal", true
+	}
+	return "", false
+}
+
+// witnessAgrees is the doc-33-P4 dual-witness gate: a suggested direction is admissible ONLY
+// if the proposal cites a causal-hypothesis observation (cohyp:<id>) whose lead-lag witness
+// AGREES with its co-onset order (the get_causal_hypotheses tool prints exactly that phrase
+// when lagConsistentWithOnset is true). Two independent MEASURED witnesses must agree before
+// the agent may even SUGGEST a direction — it can never name one the data does not support twice.
+func witnessAgrees(refs []string, index map[string]Observation) bool {
+	for _, r := range refs {
+		if !strings.HasPrefix(r, "cohyp:") {
+			continue
+		}
+		// Match the parenthesized phrase the get_causal_hypotheses tool emits — "(AGREES …)" —
+		// NOT a bare "AGREES" (which is a substring of "DISAGREES").
+		if o, ok := index[r]; ok && strings.Contains(o.Detail, "(AGREES with onset order)") {
+			return true
+		}
+	}
+	return false
 }
 
 // RunOnce proposes (with the prior-proposal ledger as memory) and stages the survivors.

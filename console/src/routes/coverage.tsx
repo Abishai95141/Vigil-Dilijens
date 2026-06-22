@@ -179,6 +179,19 @@ export function CoveragePage() {
                   ]}
                   height={10}
                 />
+                {/* coverage frontier (doc 33 §1): the closeable work, by class */}
+                <div className="mt-2 border-t border-[var(--color-line)] pt-2 text-[10.5px] text-ink-low">
+                  <span className="v-eyebrow">coverage frontier — what closes it</span>
+                  <span className="ml-2 text-ink">
+                    {d.summary.frontierCovered} covered · {d.summary.frontierEmission} emission
+                    (deploy/scrape/probe) · {d.summary.frontierCompleteness} completeness (author
+                    members)
+                  </span>
+                  <span className="ml-1 text-ink-low">
+                    {" "}
+                    — attribution (“why”) is the inference agent’s domain, never a coverage gap.
+                  </span>
+                </div>
               </div>
 
               <Stat4
@@ -224,7 +237,15 @@ export function CoveragePage() {
                     ))}
                   </div>
                 </div>
-                <Table cols={["phenomenon", "observability", "required", "missing reason"]}>
+                <Table
+                  cols={[
+                    "phenomenon",
+                    "observability",
+                    "required",
+                    "missing reason",
+                    "how it closes",
+                  ]}
+                >
                   {(d.phenomena ?? [])
                     .filter(
                       (p: PhenomenonRow) => obsFilter === "all" || p.observability === obsFilter,
@@ -253,6 +274,25 @@ export function CoveragePage() {
                         </Td>
                         <Td className="text-ink-low">
                           {(p.missingReasons ?? []).join("; ") || "—"}
+                        </Td>
+                        <Td>
+                          {p.gapClass && p.gapClass !== "covered" ? (
+                            <span className="flex flex-col gap-0.5">
+                              <span
+                                className={`v-mono w-fit rounded-[4px] border px-1.5 py-0.5 text-[9.5px] uppercase ${
+                                  p.gapClass === "emission"
+                                    ? "border-[var(--color-warn)] text-[var(--color-warn)]"
+                                    : "border-ink-low text-ink-low"
+                                }`}
+                                title="coverage frontier (doc 33 §1): emission = deploy/scrape/probe; completeness = author members"
+                              >
+                                {p.gapClass}
+                              </span>
+                              <span className="text-[11px] text-ink">{p.closer}</span>
+                            </span>
+                          ) : (
+                            <span className="text-ink-low">—</span>
+                          )}
                         </Td>
                       </Tr>
                     ))}

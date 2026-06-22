@@ -11,6 +11,7 @@ import (
 	vapi "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/api"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/candidate"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/dgx"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/flow"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/graph"
 )
 
@@ -58,6 +59,10 @@ func newDGXToolRegistry(
 	silence *atomic.Pointer[vapi.SilenceLedgerView],
 	topo *atomic.Pointer[vapi.TopologyView],
 	unexp *atomic.Pointer[vapi.UnexplainedView],
+	dep *atomic.Pointer[vapi.DependencyView],
+	rightsizing *atomic.Pointer[vapi.RightSizingView],
+	crossSvc *atomic.Pointer[flow.Chain],
+	transitive *atomic.Pointer[[]flow.Chain],
 ) *dgx.ToolRegistry {
 	return dgx.NewToolRegistry(
 		dgxTool{
@@ -100,6 +105,34 @@ func newDGXToolRegistry(
 			desc: "MEASURED. The loud-but-unmatched channel: signals anomalous against a resolved bar that match NO known phenomenon, plus recurring candidate patterns for curation. Read as 'there is more here than the known patterns explain' — co-occurrences, never causes. Refs: unexplained:<scope>, uxcand:<metrics>.",
 			call: func(context.Context, json.RawMessage) ([]dgx.Observation, error) {
 				return unexplainedObservations(loadView(unexp)), nil
+			},
+		},
+		dgxTool{
+			name: "get_dependency",
+			desc: "MEASURED. The metric-dependency graph (doc 20 P2): pairs of series that move together over the window, as undirected Pearson associations — NOT causal, the candidate INPUT for authoring a causal direction. Ranked by |coefficient|. Refs: dep:<a>~<b>.",
+			call: func(context.Context, json.RawMessage) ([]dgx.Observation, error) {
+				return dependencyObservations(loadView(dep)), nil
+			},
+		},
+		dgxTool{
+			name: "get_causal_hypotheses",
+			desc: "PROJECTION ⋈ ASSOCIATION (direction-free). Cross-workload pairs that BOTH stepped (a co-onset) AND are associated, each with the MEASURED onset order and, when significant, the detrended lead-lag witness (lagPeakSeconds, lagConsistentWithOnset). The strongest evidence for a directed hypothesis — but the system NEVER infers the arrow; a named operator authors it. Refs: cohyp:<id>.",
+			call: func(context.Context, json.RawMessage) ([]dgx.Observation, error) {
+				return causalHypothesisObservations(cs), nil
+			},
+		},
+		dgxTool{
+			name: "get_rightsizing",
+			desc: "MEASURED advisory (docs/31 §6). Per-(workload,resource) right-sizing: sustained p95 usage vs the workload's OWN declared request/limit, with the recommendation (reclaim | resize-up). Stability- and QoS-gated; unstable/churny series yield no number. Refs: rightsizing:<name>/<resource>.",
+			call: func(context.Context, json.RawMessage) ([]dgx.Observation, error) {
+				return rightsizingObservations(loadView(rightsizing)), nil
+			},
+		},
+		dgxTool{
+			name: "get_cross_service",
+			desc: "MEASURED ⋈ AUTHORED (joined, never fused). The cross-service / transitive cascade: degraded callees reaching impacted callers over observed-flow edges, oriented only by the authored relation — independent faults stay separate. Use it to see a fault's blast radius before proposing an attribution. Refs: xsvc:<degraded>~<impacted>, chain:<root>.",
+			call: func(context.Context, json.RawMessage) ([]dgx.Observation, error) {
+				return crossServiceObservations(loadView(crossSvc), loadView(transitive)), nil
 			},
 		},
 	)
@@ -264,6 +297,143 @@ func unexplainedObservations(v *vapi.UnexplainedView) []dgx.Observation {
 		})
 	}
 	sortObsByRef(out) // deterministic tool-result order regardless of the view's card ordering
+	return out
+}
+
+// --- P3 (doc 33 §2.2) inference-signal tools ----------------------------------
+// These widen the agent's INPUT to the inference-grade lanes Vigil already computes:
+// the association graph, the direction-free causal hypotheses (with the lead-lag witness),
+// the right-sizing advisories, and the cross-service / transitive cascade. All read-only;
+// each row carries a stable ref the agent may cite. None is causal — the agent may PROPOSE
+// a direction (a named human authors it), it never asserts one here.
+
+func absf(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// shortCEI renders a long CEI (i|cluster|ns|Kind|name|uid|/metric) as ns/name:metric for
+// readable observation detail; the full key stays in the ref so grounding is exact.
+func shortCEI(s string) string {
+	parts := strings.Split(s, "|")
+	if len(parts) < 3 {
+		return s
+	}
+	ns, name, metric := parts[2], "", parts[len(parts)-1]
+	if len(parts) >= 5 {
+		name = parts[4]
+	}
+	return ns + "/" + name + ":" + metric
+}
+
+func dependencyObservations(v *vapi.DependencyView) []dgx.Observation {
+	if v == nil || len(v.Edges) == 0 {
+		return nil
+	}
+	edges := append([]vapi.DependencyEdge(nil), v.Edges...)
+	sort.Slice(edges, func(i, j int) bool { return absf(edges[i].Coefficient) > absf(edges[j].Coefficient) })
+	const depLimit = 25 // the strongest associations only — keeps the prompt bounded
+	if len(edges) > depLimit {
+		edges = edges[:depLimit]
+	}
+	out := make([]dgx.Observation, 0, len(edges))
+	for _, e := range edges {
+		out = append(out, dgx.Observation{
+			Ref:    "dep:" + e.A + "~" + e.B,
+			Kind:   "association",
+			Detail: fmt.Sprintf("%s ~ %s  r=%.2f overlap=%d (undirected, NOT causal — a candidate input for authoring direction)", shortCEI(e.A), shortCEI(e.B), e.Coefficient, e.Overlap),
+		})
+	}
+	return out
+}
+
+func causalHypothesisObservations(cs *candidate.Store) []dgx.Observation {
+	if cs == nil {
+		return nil
+	}
+	rows, err := cs.List(candidate.Filter{Kind: candidate.KindCausalHypothesis, Status: candidate.StatusCandidate})
+	if err != nil {
+		return nil
+	}
+	hrows := mapCausalHypothesisRows(rows)
+	if len(hrows) > dgxToolRowCap {
+		hrows = hrows[:dgxToolRowCap]
+	}
+	out := make([]dgx.Observation, 0, len(hrows))
+	for _, h := range hrows {
+		witness := "no significant lead-lag witness"
+		if h.LagConsistentWithOnset != nil {
+			agree := "DISAGREES with onset order"
+			if *h.LagConsistentWithOnset {
+				agree = "AGREES with onset order"
+			}
+			witness = fmt.Sprintf("lead-lag %+ds (%s)", h.LagPeakSeconds, agree)
+		}
+		first := h.ObservedFirst
+		if first == "" {
+			first = "n/a"
+		}
+		out = append(out, dgx.Observation{
+			Ref:  "cohyp:" + h.ID,
+			Kind: "causal-hypothesis",
+			Detail: fmt.Sprintf("%s ~ %s  r=%.2f  onset-first=%s Δ%ds  %s — DIRECTION-FREE (operator authors the arrow)",
+				shortCEI(h.A), shortCEI(h.B), h.Coefficient, first, h.DeltaSeconds, witness),
+		})
+	}
+	return out
+}
+
+func rightsizingObservations(v *vapi.RightSizingView) []dgx.Observation {
+	if v == nil || len(v.Advisories) == 0 {
+		return nil
+	}
+	out := make([]dgx.Observation, 0, dgxToolRowCap)
+	for _, a := range v.Advisories {
+		if a.Action != "reclaim" && a.Action != "resize-up" {
+			continue // only the actionable recommendations
+		}
+		if len(out) >= dgxToolRowCap {
+			break
+		}
+		out = append(out, dgx.Observation{
+			Ref:  "rightsizing:" + a.Name + "/" + a.Resource,
+			Kind: "rightsizing-advisory",
+			Detail: fmt.Sprintf("%s %s/%s: p95=%.0f%s vs request=%d limit=%d -> recommend %d (%s, stable=%v)",
+				strings.ToUpper(a.Action), a.Name, a.Resource, a.P95, a.Unit, a.Request, a.Limit, a.Recommended, a.QoS, a.Stable),
+		})
+	}
+	return out
+}
+
+func crossServiceObservations(chain *flow.Chain, transitive *[]flow.Chain) []dgx.Observation {
+	out := make([]dgx.Observation, 0, dgxToolRowCap)
+	seen := map[string]bool{}
+	add := func(ref, kind, detail string) {
+		if seen[ref] || len(out) >= dgxToolRowCap {
+			return
+		}
+		seen[ref] = true
+		out = append(out, dgx.Observation{Ref: ref, Kind: kind, Detail: detail})
+	}
+	if chain != nil && chain.MostUpstreamDegradedNode != "" {
+		add("chain:"+chain.MostUpstreamDegradedNode, "cross-service-root",
+			"most-upstream degraded: "+chain.MostUpstreamDegradedNode+" (STRUCTURAL fan-in position, not a cause)")
+		for _, h := range chain.Links {
+			add("xsvc:"+h.Degraded+"~"+h.Impacted, "cross-service-edge",
+				h.Degraded+" --observed-flow--> "+h.Impacted+" (impact travels against the call arrow; AUTHORED relation)")
+		}
+	}
+	if transitive != nil {
+		for _, c := range *transitive {
+			for _, p := range c.Path {
+				add("xsvc:"+p.Upstream+"~"+p.Downstream, "transitive-chain-edge",
+					fmt.Sprintf("hop %d: %s(%s) -> %s(%s)", p.Hop, p.Upstream, p.UpstreamPhenomenon, p.Downstream, p.DownstreamPhenomenon))
+			}
+		}
+	}
+	sortObsByRef(out)
 	return out
 }
 

@@ -111,8 +111,12 @@ export function RootCausePage() {
                 </div>
               ) : (
                 <LaneNote
-                  kind="pending"
-                  title="Computed every tick — withheld until the live 2-hop gate flips"
+                  kind={d.projectedGatePassed ? "empty" : "pending"}
+                  title={
+                    d.projectedGatePassed
+                      ? "Lane live (PROJECTED) — no multi-hop ripple this tick"
+                      : "Computed every tick — withheld until the live 2-hop gate flips"
+                  }
                   note={d.projectedNote}
                 />
               )
@@ -141,8 +145,12 @@ export function RootCausePage() {
                   <ChainPanel c={d.projectedChain} projected />
                 ) : (
                   <LaneNote
-                    kind="pending"
-                    title="Anticipatory cross-service lane"
+                    kind={d.projectedGatePassed ? "empty" : "pending"}
+                    title={
+                      d.projectedGatePassed
+                        ? "Anticipatory cross-service lane (PROJECTED) — none this tick"
+                        : "Anticipatory cross-service lane"
+                    }
                     note={d.projectedNote}
                   />
                 )}

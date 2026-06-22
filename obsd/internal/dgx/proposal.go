@@ -13,6 +13,10 @@ type rawProposal struct {
 	Relation  string   `json:"relation"`
 	Evidence  []string `json:"evidence"`
 	Rationale string   `json:"rationale"`
+	// Direction (doc 33 P4) — read ONLY when kind=="causal_hypothesis". The model's SUGGESTED
+	// causal direction ("a-to-b" | "b-to-a"); admitted as a PROJECTED hint solely when the
+	// dual-witness agrees, else withheld (the hypothesis stays direction-free).
+	Direction string `json:"direction,omitempty"`
 	// equiv_group fields (doc 21 §5) — read ONLY when kind=="equiv_group", ignored otherwise.
 	Group     string `json:"group,omitempty"`     // target equivalence-group id (existing) or a new EQG_... id
 	Pattern   string `json:"pattern,omitempty"`   // anchored regex that captures the stray metric

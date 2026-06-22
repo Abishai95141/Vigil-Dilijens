@@ -149,9 +149,9 @@ func TestNewDGXToolRegistry(t *testing.T) {
 	s, _ := candidate.Open("")
 	defer s.Close()
 	g := &graph.Graph{EquivalenceGroups: map[string]*graph.EquivalenceGroup{"EQG_X": {ID: "EQG_X", Label: "x", CanonicalOTel: "x"}}}
-	reg := newDGXToolRegistry(s, g, nil, nil, nil, nil)
+	reg := newDGXToolRegistry(s, g, nil, nil, nil, nil, nil, nil, nil, nil)
 	names := reg.Names()
-	want := []string{"get_coverage", "get_silence_ledger", "get_strays", "get_topology", "get_unexplained", "search_equivalence_groups"}
+	want := []string{"get_causal_hypotheses", "get_coverage", "get_cross_service", "get_dependency", "get_rightsizing", "get_silence_ledger", "get_strays", "get_topology", "get_unexplained", "search_equivalence_groups"}
 	if len(names) != len(want) {
 		t.Fatalf("tools = %v, want %v", names, want)
 	}

@@ -64,6 +64,7 @@ type GovernanceItem struct {
 	SuggestedLabel       string     `json:"suggestedLabel,omitempty"`
 	SuggestedDescription string     `json:"suggestedDescription,omitempty"`
 	SuggestedSeverity    string     `json:"suggestedSeverity,omitempty"` // a SUGGESTED harm level (hint, discarded at promotion)
+	SuggestedDirection   string     `json:"suggestedDirection,omitempty"` // doc 33 P4: agent's suggested causal direction (a-to-b|b-to-a|not-causal); a hint, the human authors
 	SuggestedBy          string     `json:"suggestedBy,omitempty"`       // the model that produced the hint (provenance)
 	DecidedBy            string     `json:"decidedBy,omitempty"`
 	Note                 string     `json:"note,omitempty"`
@@ -148,10 +149,11 @@ func NewGovernanceView(now time.Time, graphVersion string, items []GovernanceIte
 		}
 	}
 	if v.SuppressedMetadata > 0 {
-		v.SuppressedNote = "Classified as k8s object-metadata (KSM object inventory — e.g. ReplicaSet generation, " +
-			"Endpoints addresses, ConfigMap/Secret info): non-actionable as an operational signal, so NOT enqueued for " +
-			"review. They stay counted here and in /api/provisional-coverage (coverage stays honest); promote a stray " +
-			"only when it is a real operational series worth binding to an entity."
+		v.SuppressedNote = "Non-actionable proposals kept out of the review queue but still counted (and still fed to " +
+			"the agent): k8s object-metadata strays (KSM inventory — ReplicaSet generation, Endpoints, ConfigMap/Secret " +
+			"info) AND bare cei-fallback stray-NODE placeholders — for a stray the actionable decision is the " +
+			"associated-with EDGE or the equiv_group mapping (the agent proposes those), not the node itself. They stay " +
+			"counted here and in /api/provisional-coverage so coverage stays honest."
 	}
 	return v
 }

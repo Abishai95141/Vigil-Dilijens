@@ -78,6 +78,12 @@ type Suggestion struct {
 	Description string `json:"description,omitempty"` // one line, non-causal — what the recurring pattern may represent
 	Severity    string `json:"severity,omitempty"`    // a SUGGESTED harm level (critical|high|medium|low); a hint, the human authors the real one
 	Model       string `json:"model,omitempty"`       // which provider produced it (provenance)
+	// Direction is the agent's SUGGESTED causal direction on a KindCausalHypothesis (doc 33 P4):
+	// "a-to-b" | "b-to-a". A PROJECTED hint ONLY — admitted by the harness solely when the
+	// dual-witness agrees (co-onset order ∧ detrended lead-lag), surfaced for a NAMED human to
+	// author or reject. It NEVER becomes the authored arrow on its own and never drives detection.
+	Direction          string `json:"direction,omitempty"`
+	DirectionRationale string `json:"directionRationale,omitempty"` // the model's one-line why (discarded at promotion)
 }
 
 // Candidate is one staged proposal. ID is content-derived (deterministic, dedup-

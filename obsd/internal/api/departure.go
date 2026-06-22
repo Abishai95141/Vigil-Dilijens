@@ -21,9 +21,10 @@ import (
 type DepartureView struct {
 	GeneratedAt time.Time             `json:"generatedAt"`
 	Class       string                `json:"class"`   // "PROJECTED band ⋈ MEASURED sample (joined, never fused)"
-	Enabled     bool                  `json:"enabled"` // --departure-enabled is set
-	Active      bool                  `json:"active"`  // a departure is surfaced this tick (only once gate-passed)
-	Note        string                `json:"note"`    // honest lane state
+	Enabled     bool                  `json:"enabled"`    // --departure-enabled is set
+	GatePassed  bool                  `json:"gatePassed"` // the live gate has flipped (operator-visible)
+	Active      bool                  `json:"active"`     // a departure is surfaced this tick (only once gate-passed)
+	Note        string                `json:"note"`       // honest lane state
 	Departures  []departure.Departure `json:"departures,omitempty"`
 }
 
@@ -46,7 +47,7 @@ const (
 // upgrades a class: OFF, gate-pending, quiet, and active are distinct, stated states. The
 // departures are WITHHELD (Active=false, no Departures) until gatePassed.
 func BuildDepartures(deps []departure.Departure, enabled, gatePassed bool, now time.Time) *DepartureView {
-	v := &DepartureView{GeneratedAt: now, Class: departureClass, Enabled: enabled}
+	v := &DepartureView{GeneratedAt: now, Class: departureClass, Enabled: enabled, GatePassed: gatePassed}
 	switch {
 	case !enabled:
 		v.Note = departureOffNote

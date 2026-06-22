@@ -38,9 +38,10 @@ type CrossServiceView struct {
 	// to its callers over the MEASURED flow edge + AUTHORED relation. A NEW PROJECTED
 	// class, so it is NOT operator-visible until its own backtest gate passes (doc 11
 	// §3.5): ProjectedActive stays false (and ProjectedChain nil) while gate-pending.
-	ProjectedActive bool        `json:"projectedActive"`
-	ProjectedNote   string      `json:"projectedNote"`
-	ProjectedChain  *flow.Chain `json:"projectedChain,omitempty"`
+	ProjectedActive     bool        `json:"projectedActive"`
+	ProjectedGatePassed bool        `json:"projectedGatePassed"` // the live gate has flipped (operator-visible)
+	ProjectedNote       string      `json:"projectedNote"`
+	ProjectedChain      *flow.Chain `json:"projectedChain,omitempty"`
 }
 
 const (
@@ -94,6 +95,7 @@ func BuildCrossService(chain *flow.Chain, projected *flow.Chain, enabled, projec
 		v.Chain = chain
 	}
 	// The anticipatory (PROJECTED) lane — gated separately from the MEASURED lane.
+	v.ProjectedGatePassed = projectedGatePassed
 	switch {
 	case !enabled:
 		v.ProjectedNote = projectedOffNote

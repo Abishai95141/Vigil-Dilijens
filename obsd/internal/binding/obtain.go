@@ -41,6 +41,13 @@ type PlatformFacts struct {
 	// the lane is off, so the unscraped-endpoint override applies exactly as before
 	// (byte-identical). Set from the runtime flag where GateSignals is called.
 	KubeletMetricsScraped bool
+
+	// AssertedCapabilities are node-level capabilities the OPERATOR has verified out-of-band
+	// (docs/33 P5 emission win) — e.g. the docs/32 preflight proving CONFIG_PSI=y + cgroup v2,
+	// which obsd cannot derive from the k8s API (they default to Indeterminate "needs node
+	// probe"). An asserted capability is treated as Obtainable, flipping its partial phenomena
+	// to full. Empty/nil ⇒ no assertions (byte-identical to before). Set from --assert-capabilities.
+	AssertedCapabilities map[string]bool
 }
 
 // Obtainability states (the complete set).
@@ -258,6 +265,12 @@ var logAggregatorTools = []string{"loki", "promtail", "fluent-bit", "fluentd", "
 // capabilityMet evaluates one CapabilityPrereq against the facts (facts must
 // already have ToolPresent filled by DetectTools).
 func capabilityMet(capID string, facts PlatformFacts) (Obtainability, string) {
+	// Operator-asserted (docs/33 P5): a node-level capability obsd cannot derive from the k8s
+	// API but the operator verified out-of-band (the docs/32 preflight). An explicit assertion
+	// makes it Obtainable — the same verdict a node probe would return — so its phenomena go full.
+	if facts.AssertedCapabilities[capID] {
+		return Obtainable, ""
+	}
 	if v, ok := kernelCaps[capID]; ok {
 		met, err := kernelAtLeast(facts.KernelVersion, v[0], v[1])
 		if err != nil {

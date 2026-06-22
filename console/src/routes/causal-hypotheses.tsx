@@ -177,6 +177,31 @@ export function CausalHypothesesPage() {
                           </div>
                         )}
 
+                        {/* doc 33 P4 — the inference agent's SUGGESTED direction (PROJECTED). Admitted
+                            only because both witnesses (onset order + lead-lag) agreed; still just a
+                            hint — you author or reject it below. The system never draws this arrow. */}
+                        {h.suggestedDirection && (
+                          <div className="mb-2.5 rounded-[6px] border border-info/40 bg-surface-hi px-3 py-2 text-[11.5px] leading-relaxed">
+                            <span className="v-eyebrow text-[9px] text-info">
+                              agent-suggested direction (PROJECTED · dual-witness agreed)
+                            </span>
+                            <div className="mt-0.5 text-ink-soft">
+                              <Mono>
+                                {h.suggestedDirection === "not-causal"
+                                  ? "not causal (co-occurs, but not a cause)"
+                                  : h.suggestedDirection === "a-to-b"
+                                    ? `${shortSeries(h.a ?? "A")} → ${shortSeries(h.b ?? "B")}`
+                                    : `${shortSeries(h.b ?? "B")} → ${shortSeries(h.a ?? "A")}`}
+                              </Mono>
+                              {h.suggestedRationale ? ` — ${h.suggestedRationale}` : ""}{" "}
+                              <span className="text-ink-low">
+                                (a suggestion from {h.suggestedBy || "the agent"}; you author or
+                                reject it)
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
                         {/* evidence — the MEASURED facts it rests on */}
                         {(h.evidence ?? []).length > 0 && (
                           <div className="mb-3">

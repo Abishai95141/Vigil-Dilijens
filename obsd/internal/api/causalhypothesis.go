@@ -44,6 +44,12 @@ type CausalHypothesisRow struct {
 	LagConsistentWithOnset *bool         `json:"lagConsistentWithOnset,omitempty"`
 	Evidence               []EvidenceRow `json:"evidence,omitempty"`
 	CreatedAt              time.Time     `json:"createdAt"`
+	// doc 33 P4: the agent's SUGGESTED direction (a PROJECTED hint, admitted only when the
+	// dual-witness agreed). Shown beside the witnesses for a NAMED human to author or reject;
+	// it is NOT the authored arrow and is discarded at promotion.
+	SuggestedDirection string `json:"suggestedDirection,omitempty"` // "a-to-b" | "b-to-a"
+	SuggestedRationale string `json:"suggestedRationale,omitempty"`
+	SuggestedBy        string `json:"suggestedBy,omitempty"` // the provider that proposed it (provenance)
 }
 
 // EvidenceRow is one MEASURED fact a hypothesis cites (no score, no causal claim).
