@@ -46,6 +46,12 @@ const SOURCE: Record<string, string> = {
   assoc: "dependency",
   "unexplained-curation": "curation loop",
 };
+// Friendly labels for the non-operational exclusion classes (matches candidate/classify.go).
+const NONOP_LABEL: Record<string, string> = {
+  "runtime-introspection": "runtime/process",
+  "client-library-internal": "client-library",
+  "control-plane-internal": "control-plane",
+};
 const statusSev = (s: string): Severity =>
   s === "promoted" ? "ok" : s === "rejected" ? "neutral" : s === "shadow" ? "neutral" : "info";
 
@@ -482,6 +488,40 @@ export function GovernancePage() {
                     "Pure KSM object inventory (ReplicaSet generation, Endpoints addresses, ConfigMap/Secret info): non-actionable as an operational signal. Counted, never hidden — just not a human decision."
                   }
                 />
+              )}
+
+              {/* Non-operational strays CLASSIFIED and NOT saved as candidates (the exporter's own
+                  runtime, client-library plumbing, control-plane component internals). On a full
+                  control plane these number in the thousands; filtering keeps the queue to map-able
+                  signals. Counted + surfaced — never silently dropped. */}
+              {(d.suppressedNonOperational ?? 0) > 0 && (
+                <div className="v-panel p-4">
+                  <div className="mb-2 flex flex-wrap items-baseline gap-2">
+                    <span className="v-eyebrow text-[10px]">excluded — not saved</span>
+                    <span className="v-mono rounded-[4px] border border-rule bg-surface-hi px-1.5 py-0.5 text-[10px] text-ink-soft">
+                      {d.suppressedNonOperational} series
+                    </span>
+                    <span className="text-[11px] text-ink-low">
+                      classified non-operational · can never bind to a workload/node/storage entity
+                    </span>
+                  </div>
+                  <div className="mb-2.5 flex flex-wrap gap-1.5">
+                    {Object.entries(d.suppressedNonOperationalByClass ?? {})
+                      .sort((a, b) => b[1] - a[1])
+                      .map(([cls, n]) => (
+                        <span
+                          key={cls}
+                          className="v-mono rounded-[5px] border border-rule bg-plane px-2 py-0.5 text-[10.5px] text-ink-soft"
+                        >
+                          {NONOP_LABEL[cls] ?? cls} · {n}
+                        </span>
+                      ))}
+                  </div>
+                  <div className="border-t border-rule pt-2 text-[11px] leading-relaxed text-ink-low">
+                    {d.suppressedNonOperationalNote ??
+                      "Classified non-operational and not saved as mapping candidates. Detection is unaffected (off-digest). Control-plane health is a separate modality — reclaimable."}
+                  </div>
+                </div>
               )}
 
               {err && <div className="text-[12px] text-error">Decision failed: {err}</div>}

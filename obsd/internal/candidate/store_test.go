@@ -51,6 +51,54 @@ func TestPutGetRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPruneNonOperational(t *testing.T) {
+	s := newStore(t)
+	put := func(subject string) string {
+		id, err := s.Put(t0, Candidate{Kind: KindNode, Subject: subject, Lineage: Lineage{Source: "cei-fallback"}})
+		if err != nil {
+			t.Fatalf("Put(%q): %v", subject, err)
+		}
+		return id
+	}
+	// non-operational strays → pruned
+	put("stray:go_gc_duration_seconds/aaaa")
+	put("stray:apiserver_request_total/bbbb")
+	put("stray:apiserver_request_total/bbbb ~> i|c|n|Pod|x|u") // its edge prunes too
+	put("stray:workqueue_depth/cccc")
+	// operational stray → kept
+	opID := put("stray:kube_persistentvolume_capacity_bytes/dddd ~> i|c|n|PVC|x|u")
+	// a non-stray candidate (trace topology) → kept (StrayMetricFromSubject = false)
+	traceID := put("trace-call:a->b")
+	// a DECIDED non-operational stray → NEVER pruned (audit trail)
+	decID := put("stray:etcd_requests_total/eeee")
+	if err := s.Decide(t0, decID, StatusRejected, "alice", "not a real signal"); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+
+	byClass, err := s.PruneNonOperational()
+	if err != nil {
+		t.Fatalf("PruneNonOperational: %v", err)
+	}
+	// runtime(1) + control-plane(1 node + 1 edge) + client(1) = 4 deleted, decided one untouched.
+	total := 0
+	for _, n := range byClass {
+		total += n
+	}
+	if total != 4 {
+		t.Errorf("pruned %d (byClass=%v), want 4 (decided + operational + non-stray kept)", total, byClass)
+	}
+	remaining, _ := s.List(Filter{})
+	keep := map[string]bool{opID: true, traceID: true, decID: true}
+	if len(remaining) != len(keep) {
+		t.Fatalf("remaining = %d, want %d", len(remaining), len(keep))
+	}
+	for _, c := range remaining {
+		if !keep[c.ID] {
+			t.Errorf("unexpected survivor: %s (%s)", c.ID, c.Subject)
+		}
+	}
+}
+
 func TestPutDeterministicIDAndIdempotentUpsert(t *testing.T) {
 	s := newStore(t)
 	c := Candidate{Kind: KindNode, Subject: "cei:x", Payload: map[string]any{"a": 1, "b": 2}}

@@ -41,6 +41,32 @@ func TestClassifyStrayMetric(t *testing.T) {
 		{"kube_persistentvolume_capacity_bytes", StrayOperational},
 		{"kube_pod_container_status_restarts_total", StrayOperational},
 		{"kube_node_status_condition", StrayOperational},
+		// Runtime/process introspection — the exporter's OWN process, never the cluster.
+		{"go_memstats_alloc_bytes", StrayRuntimeIntrospection},
+		{"go_gc_duration_seconds", StrayRuntimeIntrospection},
+		{"process_cpu_seconds_total", StrayRuntimeIntrospection},
+		{"promhttp_metric_handler_requests_total", StrayRuntimeIntrospection},
+		{"scrape_duration_seconds", StrayRuntimeIntrospection},
+		// Client-library / workqueue / leader-election plumbing inside a k8s component.
+		{"rest_client_requests_total", StrayClientInternal},
+		{"workqueue_depth", StrayClientInternal},
+		{"grpc_client_handled_total", StrayClientInternal},
+		{"leader_election_master_status", StrayClientInternal},
+		{"authentication_token_cache_request_total", StrayClientInternal},
+		// Control-plane component internals — no workload/node/storage entity to map to.
+		{"apiserver_request_total", StrayControlPlaneInternal},
+		{"apiserver_watch_cache_events_dispatched_total", StrayControlPlaneInternal},
+		{"etcd_requests_total", StrayControlPlaneInternal},
+		{"scheduler_pending_pods", StrayControlPlaneInternal},
+		{"kubernetes_feature_enabled", StrayControlPlaneInternal},
+		{"k3s_certificate_expiration_seconds", StrayControlPlaneInternal},
+		{"node_ipam_controller_cidrset_usage_cidrs", StrayControlPlaneInternal},
+		// …but genuine operational signals on the SAME providers stay operational (must bind):
+		{"node_cpu_seconds_total", StrayOperational},          // node-exporter, not node_collector_
+		{"node_memory_MemAvailable_bytes", StrayOperational},  // node-exporter
+		{"container_cpu_usage_seconds_total", StrayOperational},
+		{"kubelet_volume_stats_used_bytes", StrayOperational}, // the PVC-fill signal
+		{"container_pressure_memory_waiting_seconds_total", StrayOperational}, // PSI
 		// Defensive: a bare kube_ prefix with no kind, or non-stray noise
 		{"kube_", StrayOperational},
 		{"some_random_metric", StrayOperational},
@@ -49,6 +75,43 @@ func TestClassifyStrayMetric(t *testing.T) {
 		if got := ClassifyStrayMetric(c.metric); got != c.want {
 			t.Errorf("ClassifyStrayMetric(%q) = %q, want %q", c.metric, got, c.want)
 		}
+	}
+}
+
+func TestPartitionStrays(t *testing.T) {
+	mk := func(metric string) StrayObservation {
+		return StrayObservation{Family: "app", Metric: metric, Node: "n1", Labels: map[string]string{"x": "1"}}
+	}
+	strays := []StrayObservation{
+		mk("go_gc_duration_seconds"),                  // runtime → excluded
+		mk("apiserver_request_total"),                 // control-plane → excluded
+		mk("workqueue_depth"),                         // client → excluded
+		mk("kube_persistentvolume_capacity_bytes"),    // operational → staged
+		mk("kube_replicaset_status_observed_generation"), // object-metadata → staged (counted, suppressed from queue)
+		mk("mysqld_global_status_threads_connected"),  // operational → staged
+	}
+	stage, excluded := PartitionStrays(strays)
+	if len(stage) != 3 {
+		t.Errorf("staged = %d, want 3 (PVC + KSM-metadata + mysqld)", len(stage))
+	}
+	if len(excluded) != 3 {
+		t.Fatalf("excluded = %d, want 3 (runtime + control-plane + client)", len(excluded))
+	}
+	byClass := map[string]int{}
+	for _, e := range excluded {
+		byClass[e.Class]++
+		if e.Subject == "" || e.Subject == "stray:" {
+			t.Errorf("excluded subject not minted: %+v", e)
+		}
+	}
+	for _, want := range []string{StrayRuntimeIntrospection, StrayClientInternal, StrayControlPlaneInternal} {
+		if byClass[want] != 1 {
+			t.Errorf("excluded class %q count = %d, want 1", want, byClass[want])
+		}
+	}
+	// The excluded subject must equal the subject Resolve would have minted (dedup parity).
+	if got := StraySubject(mk("go_gc_duration_seconds")); got != excluded[0].Subject {
+		t.Errorf("StraySubject parity: got %q vs excluded %q", got, excluded[0].Subject)
 	}
 }
 

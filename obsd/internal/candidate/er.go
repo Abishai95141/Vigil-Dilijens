@@ -180,6 +180,13 @@ func strayLabelWithValue(labels map[string]string, val string) (string, bool) {
 	return best, found
 }
 
+// StraySubject is the canonical candidate subject a stray observation would map to
+// ("stray:<metric>/<key>") — identical to the subject Resolve mints. Exposed so a caller that
+// EXCLUDES a stray (PartitionStrays) can dedup it by the same key the store would have used.
+func StraySubject(o StrayObservation) string {
+	return "stray:" + o.Metric + "/" + strayKey(o)
+}
+
 // strayKey is a short, deterministic fingerprint of a stray observation's identity
 // (family + node + sorted labels), so the same stray maps to a stable provisional id.
 func strayKey(o StrayObservation) string {

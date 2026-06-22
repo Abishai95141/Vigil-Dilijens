@@ -248,6 +248,56 @@ DELETE FROM candidates WHERE status = ? AND kind = ? AND id NOT IN (
 	return int(n), nil
 }
 
+// PruneNonOperational deletes status=candidate STRAY proposals whose metric classifies
+// non-operational (runtime/process introspection, client-library internals, control-plane
+// component internals) — series that can never bind to a workload/node/storage entity, so they
+// should never have been staged. It is a one-time self-heal for a store populated BEFORE the
+// --filter-nonoperational-strays gate (which stops new ones at the seam): the classification is
+// retroactive, so the existing flood is cleared too. Mirrors ExpireStale/CapKind — status=
+// candidate ONLY; DECIDED rows (promoted/rejected/shadow, the audit trail) are NEVER touched.
+// Both the provisional NODE and its associated-with EDGES are pruned (each subject carries the
+// metric). Returns the count deleted per class. Off the deterministic path.
+func (s *Store) PruneNonOperational() (map[string]int, error) {
+	rows, err := s.List(Filter{Status: StatusCandidate})
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	byClass := map[string]int{}
+	for _, c := range rows {
+		metric, ok := StrayMetricFromSubject(c.Subject)
+		if !ok {
+			continue
+		}
+		class := ClassifyStrayMetric(metric)
+		if !IsNonOperational(class) {
+			continue
+		}
+		ids = append(ids, c.ID)
+		byClass[class]++
+	}
+	// Batch the deletes so a large legacy flood prunes in one statement per chunk.
+	const chunk = 400
+	for i := 0; i < len(ids); i += chunk {
+		end := i + chunk
+		if end > len(ids) {
+			end = len(ids)
+		}
+		ph := make([]string, end-i)
+		args := make([]any, 0, end-i+1)
+		args = append(args, string(StatusCandidate))
+		for j := i; j < end; j++ {
+			ph[j-i] = "?"
+			args = append(args, ids[j])
+		}
+		if _, err := s.db.Exec(
+			"DELETE FROM candidates WHERE status = ? AND id IN ("+strings.Join(ph, ",")+")", args...); err != nil {
+			return byClass, fmt.Errorf("candidate: prune non-operational: %w", err)
+		}
+	}
+	return byClass, nil
+}
+
 // Put stages a candidate, returning its content-derived ID. `now` is injected (the
 // package never reads the wall clock). A new candidate is inserted with
 // status=candidate and created_at=now; re-proposing identical content refreshes the

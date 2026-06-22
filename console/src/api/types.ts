@@ -1213,6 +1213,11 @@ export interface GovernanceView {
   counts: Record<string, number>; // by status (all candidates, honest total)
   suppressedMetadata: number;   // status=candidate but NOT enqueued (pure k8s object-metadata strays)
   suppressedNote?: string;      // why those are not actionable
+  // CLASSIFIED non-operational and NOT staged at all (not saved): runtime/process introspection,
+  // client-library plumbing, control-plane component internals. Distinct series since start.
+  suppressedNonOperational?: number;
+  suppressedNonOperationalByClass?: Record<string, number>;
+  suppressedNonOperationalNote?: string;
   gateNote: string;             // the harness blocks; a named human approves
   note: string;
 }

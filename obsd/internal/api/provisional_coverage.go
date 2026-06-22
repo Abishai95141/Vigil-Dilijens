@@ -45,10 +45,33 @@ type ProvisionalCoverageView struct {
 	AuditHypotheses    int `json:"auditHypotheses"`    // change->incident co-occurrence hypotheses (audit lane)
 	TraceTopology      int `json:"traceTopology"`      // observed service-call topology edges (trace lane)
 
+	// Non-operational strays EXCLUDED at the candidate seam (not saved). These never enter the
+	// counts above (they were never staged) — surfaced separately so the reconciliation
+	// classified == mappedToGroup + unresolved still holds over what WAS staged, while the
+	// operator still sees what was filtered out and why. Distinct series since process start.
+	StraysExcludedNonOperational int            `json:"straysExcludedNonOperational"`
+	ExcludedByClass              map[string]int `json:"excludedByClass,omitempty"`
+	ExcludedNote                 string         `json:"excludedNote,omitempty"`
+
 	TotalCandidates int            `json:"totalCandidates"`
 	ByStatus        map[string]int `json:"byStatus"` // candidate | promoted | rejected | shadow
 	BySource        map[string]int `json:"bySource"`
 	Note            string         `json:"note"`
+}
+
+// SetNonOperationalExcluded records the strays classified non-operational and excluded from
+// staging (the exporter's own runtime, client-library plumbing, control-plane component
+// internals). main calls this from the deterministic classifier's tally. A no-op at zero.
+func (v *ProvisionalCoverageView) SetNonOperationalExcluded(total int, byClass map[string]int) {
+	if v == nil || total <= 0 {
+		return
+	}
+	v.StraysExcludedNonOperational = total
+	v.ExcludedByClass = byClass
+	v.ExcludedNote = "Stray series classified non-operational (runtime/process introspection, client-library " +
+		"plumbing, control-plane component internals) and excluded from staging — they can never bind to a workload/" +
+		"node/storage entity. NOT included in the candidate counts above (never saved); reclaimable if a control-plane " +
+		"modality is later authored. Distinct series since process start."
 }
 
 // BuildProvisionalCoverage reconciles the candidate rows into the provisional-coverage

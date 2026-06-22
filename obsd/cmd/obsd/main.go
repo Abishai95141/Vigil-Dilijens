@@ -136,6 +136,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		forecastRoleSeries  = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin worst-member-toward-bar of its live member pods — max below an `above` bar, so it stays comparable to the per-pod bar; OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default (opt-in); off = byte-identical (the forecast feeds per-pod targets unchanged). CERTIFIED against real TimesFM — `just role-series-gate` passes 3/3 churn-leak crossing events (band coverage in [0.65,0.98] + per-event advance-warning recall).")
 		alertsOn            = fs.Bool("alerts-enabled", false, "docs/30: the off-digest email alert lane — mail CLASSED facts (cascade chain forms, OOM/crash fires, forecast crossing) with fatigue controls (edge-trigger + per-key cooldown + coalesce + quiet hours + rate limit). OFF by default; off = byte-identical (the lane is never constructed, never touches the digest). NON-GATING: a send failure is logged + retried, never blocks detection. Needs ALERT_SMTP_USER/ALERT_SMTP_PASSWORD/ALERT_TO env (a Gmail App Password); never hard-coded. Enforced off-digest by the notify import-firewall test.")
 		rightSizingOn       = fs.Bool("rightsizing-enabled", false, "docs/31 §6: the off-digest right-sizing ADVISORY lane — per-workload recommendations comparing SUSTAINED measured usage (p95 over the hot window) to the workload's OWN declared requests/limits, QoS- and stability-gated, surfaced at /api/right-sizing + the get_rightsizing_advice MCP tool. A recommendation a human acts on; NEVER auto-applied, never writes to the cluster, never gates detection, authors nothing in the graph. OFF by default; off = byte-identical (the lane is never constructed; off-digest regardless).")
+		filterNonOpStrays   = fs.Bool("filter-nonoperational-strays", true, "doc 20 P1 follow-up: at the candidate seam, CLASSIFY drained strays by actionability and do NOT stage the non-operational ones — the exporter's own Go/process runtime (go_*/process_*), client-library plumbing (rest_client_*/workqueue_*), and kube control-plane component internals (apiserver_*/etcd_*/scheduler_*). These can never bind to a workload/node/storage entity, so they only flood the governance queue (a full k3s/kubeadm control plane exposes thousands). Counted + surfaced (honest: /api/governance + /api/provisional-coverage state what was excluded). DIGEST-NEUTRAL: strays are off-digest, so this changes no fingerprint and no detection. ON by default; set false to stage every stray (the prior unfiltered behaviour).")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -217,7 +218,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn, *rightSizingOn)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn, *rightSizingOn, *filterNonOpStrays)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -292,7 +293,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled, rightSizingEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled, rightSizingEnabled, filterNonOperationalStrays bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -473,9 +474,28 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	// each scrape interval, propose PROVISIONAL candidate nodes + associated-with edges
 	// (discrete coordinate intersection, no score) into the candidate store. Reads the
 	// identity inventory, writes candidates; never touches the digest or detection.
+	nonOp := newNonOpTally()
 	if dgxEnabled && candStore != nil {
 		ingestor.EnableQuarantineCapture()
-		go dgxResolveLoop(ctx, logger, ingestor, store, candStore, graphVersion, p.Scrape.Interval.Duration())
+		// One-time self-heal: a store populated before the filter gate may hold a flood of
+		// non-operational stray candidates. Prune them once at startup so the fix is retroactive
+		// (the loop's PartitionStrays stops new ones; this clears the legacy ones). status=
+		// candidate only — human decisions are never touched. Off-digest; non-gating.
+		if filterNonOperationalStrays {
+			if pruned, err := candStore.PruneNonOperational(); err != nil {
+				logger.Error("dgx: prune non-operational stray candidates failed (non-gating)", "err", err)
+			} else {
+				total := 0
+				for _, n := range pruned {
+					total += n
+				}
+				if total > 0 {
+					logger.Info("dgx: pruned non-operational stray candidates (retroactive self-heal; never staged again)",
+						"pruned", total, "byClass", pruned)
+				}
+			}
+		}
+		go dgxResolveLoop(ctx, logger, ingestor, store, candStore, graphVersion, p.Scrape.Interval.Duration(), nonOp, filterNonOperationalStrays)
 	}
 
 	// doc 20 P2: the off-digest metric-dependency lane — periodically associate the hot
@@ -982,7 +1002,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					logger.Error("dgx provisional-coverage surface: list failed (non-gating)", "err", err)
 					return nil
 				}
-				return vapi.BuildProvisionalCoverage(time.Now().UTC(), mapCandidateRows(rows))
+				v := vapi.BuildProvisionalCoverage(time.Now().UTC(), mapCandidateRows(rows))
+				v.SetNonOperationalExcluded(nonOp.snapshot())
+				return v
 			}
 			// doc 20 + doc 12 §3.3: the governance review queue + the human decide endpoint.
 			// A candidate becomes authoritative ONLY by a named human's promotion here; main
@@ -994,7 +1016,9 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 					logger.Error("dgx governance surface: list failed (non-gating)", "err", err)
 					return nil
 				}
-				return vapi.NewGovernanceView(time.Now().UTC(), gv, mapGovernanceItems(rows, gapAttemptsMap(candStore)))
+				v := vapi.NewGovernanceView(time.Now().UTC(), gv, mapGovernanceItems(rows, gapAttemptsMap(candStore)))
+				v.SetNonOperationalExcluded(nonOp.snapshot())
+				return v
 			}
 			// slice 3: a human rejection lengthens the candidate's exploration-gap backoff (using
 			// the same base as the agent sweep), so a rejected gap is not re-examined every tick.
@@ -3568,10 +3592,56 @@ func buildEntityRefs(store *identity.Store) []candidate.EntityRef {
 	return refs
 }
 
+// nonOpTally is the process-lifetime, deduped tally of stray SERIES classified non-operational
+// (Go/process runtime, client-library internals, control-plane component internals) and so NOT
+// staged as mapping candidates — they can never bind to a workload/node/storage entity. It is a
+// surfacing aid only (off-digest, never read by detection): Vigil states exactly what it chose
+// not to save. Deduped by stray subject so the count is "distinct series excluded since start",
+// not a per-cycle recount (the same family is drained every scrape interval).
+type nonOpTally struct {
+	mu      sync.Mutex
+	seen    map[string]struct{}
+	byClass map[string]int
+}
+
+func newNonOpTally() *nonOpTally {
+	return &nonOpTally{seen: map[string]struct{}{}, byClass: map[string]int{}}
+}
+
+func (t *nonOpTally) record(excluded []candidate.ExcludedStray) {
+	if t == nil || len(excluded) == 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, e := range excluded {
+		if _, ok := t.seen[e.Subject]; ok {
+			continue
+		}
+		t.seen[e.Subject] = struct{}{}
+		t.byClass[e.Class]++
+	}
+}
+
+func (t *nonOpTally) snapshot() (int, map[string]int) {
+	if t == nil {
+		return 0, nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make(map[string]int, len(t.byClass))
+	for k, v := range t.byClass {
+		out[k] = v
+	}
+	return len(t.seen), out
+}
+
 // dgxResolveLoop drains quarantined strays each interval and stages candidate proposals
 // (off the deterministic path; non-gating). It is the first candidate PRODUCER (doc 20
-// P1) — it proposes PROVISIONAL nodes + associated-with edges, never authors.
-func dgxResolveLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, store *identity.Store, cs *candidate.Store, graphVersion string, every time.Duration) {
+// P1) — it proposes PROVISIONAL nodes + associated-with edges, never authors. When filter
+// is set, strays classified non-operational are excluded BEFORE staging (not saved) and
+// tallied for honest surfacing; off-digest either way (strays never enter a fingerprint).
+func dgxResolveLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingestor, store *identity.Store, cs *candidate.Store, graphVersion string, every time.Duration, tally *nonOpTally, filter bool) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -3593,7 +3663,17 @@ func dgxResolveLoop(ctx context.Context, logger *slog.Logger, in *observe.Ingest
 					Reason: q.Reason, StreamRef: q.Metric + "@" + q.Node, GraphVersion: graphVersion,
 				})
 			}
-			staged, err := candidate.ResolveAndStage(cs, time.Now().UTC(), obs, buildEntityRefs(store))
+			toStage := obs
+			if filter {
+				stage, excluded := candidate.PartitionStrays(obs)
+				toStage = stage
+				tally.record(excluded)
+				if len(excluded) > 0 {
+					logger.Info("dgx: excluded non-operational strays (not staged — runtime/client/control-plane internals)",
+						"excluded", len(excluded), "staged", len(stage))
+				}
+			}
+			staged, err := candidate.ResolveAndStage(cs, time.Now().UTC(), toStage, buildEntityRefs(store))
 			if err != nil {
 				logger.Error("dgx: stage stray candidates failed (non-gating)", "err", err)
 				continue

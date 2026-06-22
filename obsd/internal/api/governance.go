@@ -92,8 +92,36 @@ type GovernanceView struct {
 	// /api/provisional-coverage) so coverage stays honest; they are simply not actionable.
 	SuppressedMetadata int    `json:"suppressedMetadata"`
 	SuppressedNote     string `json:"suppressedNote,omitempty"`
-	GateNote           string `json:"gateNote"`
-	Note               string `json:"note"`
+	// SuppressedNonOperational counts stray series CLASSIFIED non-operational (the exporter's
+	// own Go/process runtime, client-library plumbing, or kube control-plane component
+	// internals) and therefore NOT STAGED as candidates at all — they can never bind to a
+	// workload/node/storage entity, so there is no mapping decision to make. Unlike
+	// SuppressedMetadata (staged but not enqueued), these were never saved, so they do NOT
+	// appear in Counts; they are surfaced here so the operator sees exactly what was excluded
+	// and why. Distinct series since process start. main sets these from the deterministic
+	// classifier (api never imports internal/candidate).
+	SuppressedNonOperational        int            `json:"suppressedNonOperational"`
+	SuppressedNonOperationalByClass map[string]int `json:"suppressedNonOperationalByClass,omitempty"`
+	SuppressedNonOperationalNote    string         `json:"suppressedNonOperationalNote,omitempty"`
+	GateNote                        string         `json:"gateNote"`
+	Note                            string         `json:"note"`
+}
+
+// SetNonOperationalExcluded records the count of stray series classified non-operational and
+// excluded from staging (not saved). main calls this with the deterministic classifier's tally
+// so the governance surface stays honest about what it chose not to keep. A no-op at zero.
+func (v *GovernanceView) SetNonOperationalExcluded(total int, byClass map[string]int) {
+	if v == nil || total <= 0 {
+		return
+	}
+	v.SuppressedNonOperational = total
+	v.SuppressedNonOperationalByClass = byClass
+	v.SuppressedNonOperationalNote = "Classified non-operational and NOT saved as mapping candidates: the " +
+		"exporter's own Go/process runtime (go_*/process_*), client-library plumbing (rest_client_*/workqueue_*), " +
+		"and kube control-plane component internals (apiserver_*/etcd_*/scheduler_*). None of these can bind to a " +
+		"workload/node/storage entity, so there is no mapping decision to make — the queue is kept to real, " +
+		"map-able signals. They are excluded at the candidate seam (off-digest; detection is unaffected). Control-plane " +
+		"HEALTH is a separate modality Vigil does not model yet, so these are reclaimable. Distinct series since process start."
 }
 
 // NewGovernanceView splits already-mapped items into the pending queue + the decided trail
