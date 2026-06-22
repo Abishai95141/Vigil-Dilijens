@@ -133,9 +133,11 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// the hanging-signal wire) = 16; + phenomenon-severity-v1 (v0.10.0, Phase 5) = 17;
 	// + init-container-failure-v1 (v0.11.0, the KSM init-restart member) = 18;
 	// + detection-status-v1 (v0.12.0, the membership-structuring escape hatch) = 19;
-	// + corrections-v1 (v0.13.0, the governed base-content overrides) = 20.
-	if len(ovls) != 20 {
-		t.Fatalf("overlays = %d, want 20", len(ovls))
+	// + corrections-v1 (v0.13.0, the governed base-content overrides) = 20;
+	// + psi-pressure-v1 (v0.14.0, the PSI saturation lane) = 21;
+	// + pvc-filling-v1 (v0.15.0, the PVC-fill lane) = 22.
+	if len(ovls) != 22 {
+		t.Fatalf("overlays = %d, want 22", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {
@@ -155,15 +157,17 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	}
 	g := res.gap
 	// 41 after v0.9.0: + PHEN_DISK_FILLING (entity-local span). (40 after v0.4.0: the
-	// cross-service overlay added 2 spanned phenomena.)
-	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 41 {
-		t.Errorf("merged spans = with %d / missing %d, want 41/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
+	// cross-service overlay added 2 spanned phenomena.) + 3 PSI saturation phenomena
+	// (v0.14.0: CPU/MEMORY/IO) = 44; + PHEN_PVC_FILLING (v0.15.0) = 45.
+	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 45 {
+		t.Errorf("merged spans = with %d / missing %d, want 45/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
 	}
 	// 8 v1 + 2 v2 + 2 v3 + 1 v4 (THR_POD_EVICTED) + 1 v5 (THR_NODE_DISK_PRESSURE) + 1 v6
 	// (THR_PVC_PENDING) + 1 disk-filling (THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT) = 16;
-	// + 1 init-container (THR_INIT_CONTAINER_RESTARTS_RATE) = 17.
-	if g.ThresholdRulesStructured != 17 {
-		t.Errorf("structured rules = %d, want 17", g.ThresholdRulesStructured)
+	// + 1 init-container (THR_INIT_CONTAINER_RESTARTS_RATE) = 17; + 3 PSI rate guards
+	// (v0.14.0) = 20; + 1 PVC-fill bar (v0.15.0, THR_PVC_USED_VS_REQUESTED_STORAGE) = 21.
+	if g.ThresholdRulesStructured != 21 {
+		t.Errorf("structured rules = %d, want 21", g.ThresholdRulesStructured)
 	}
 	if g.hasGaps() {
 		t.Error("no gaps should remain with overlays applied (-strict must pass)")
