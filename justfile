@@ -436,6 +436,13 @@ up:
 down:
     kind delete cluster --name vigil
 
+# Telemetry preflight (doc 31): verify the CURRENT-context cluster emits the signals
+# Vigil needs for PSI pressure, container disk-IO, and PVC-fill — BEFORE wiring obsd.
+# Cluster-agnostic (kind / k3s / cloud); PSI must PASS, PVC-fill is an advisory WARN on
+# local-path provisioners. Pass a node name to scope to one node.
+psi-preflight node="":
+    deploy/preflight/psi-storage-preflight.sh {{node}}
+
 # Apply the read-only RBAC for the in-cluster deployment (doc 14 A2).
 rbac:
     kubectl apply -f deploy/rbac/clusterrole.yaml

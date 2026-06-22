@@ -1,0 +1,40 @@
+# Robust single-node Vigil substrate (doc 31 §0) — the ONLY cluster that emits all three
+# real-valued signal classes on one node: PSI pressure, container disk-IO, AND per-PVC fill.
+#
+# Why Lima + Ubuntu (not kind, not minikube): PSI needs a kernel with CONFIG_PSI=y, and
+# per-PVC fill needs an LVM/block CSI on a dedicated disk. kind/LinuxKit has PSI but its
+# directory-backed CSI reports the node disk for every PVC; minikube's buildroot kernel has
+# `# CONFIG_PSI is not set` (PSI impossible). Ubuntu's 6.8 kernel has CONFIG_PSI=y on by
+# default AND ships lvm2 — so it satisfies both. vz backend = Apple Virtualization.framework,
+# no sudo, no extra hypervisor.
+#
+# Bring-up (see deploy/lima/README.md):
+#   limactl disk create vigil-lvm --size 40GiB        # dedicated disk for the LVM VG
+#   limactl start --name vigil-robust deploy/lima/vigil-robust.yaml --tty=false
+#   limactl shell vigil-robust -- bash -s < deploy/lima/bootstrap.sh   # k3s + LVM + OpenEBS
+#   just psi-preflight   (run inside the VM against k3s; PSI PASS + real per-PVC)
+#
+# Teardown: limactl delete -f vigil-robust   (the vigil-lvm disk persists: limactl disk delete vigil-lvm)
+
+minimumLimaVersion: "2.0.0"
+vmType: "vz"                 # Apple Virtualization.framework — no sudo, no socket_vmnet
+
+# Ubuntu 24.04 LTS (Noble) — kernel 6.8, CONFIG_PSI=y (PSI default-enabled), cgroup v2, lvm2 preinstalled.
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+
+cpus: 4
+memory: "6GiB"
+disk: "40GiB"
+
+# The dedicated raw disk that backs the LVM volume group `vigilvg`. Pre-create it once with
+# `limactl disk create vigil-lvm --size 40GiB`. bootstrap.sh wipes Lima's auto-format and
+# `pvcreate`s it raw, so each PVC becomes a real sized LVM logical volume (real per-PVC fill).
+additionalDisks:
+  - name: "vigil-lvm"
+
+# No host mounts needed; this is a self-contained appliance-style node.
+mounts: []

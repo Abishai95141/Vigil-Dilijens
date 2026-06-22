@@ -15,6 +15,20 @@
 #   just abb-sim-build vigil-abb      # build + load the sim image into THIS cluster
 #   just abb-genix                    # deploy (auto-labels the node)
 #   just abb-down                     # delete this cluster
+#
+# TELEMETRY READINESS (doc 31; verified live with `just psi-preflight`):
+#   PSI      — AVAILABLE OUT OF THE BOX. The kindest/node kernel (cgroup v2 + CONFIG_PSI)
+#              makes the kubelet's embedded cAdvisor emit container_pressure_{cpu,io,memory}
+#              _{stalled,waiting}_seconds_total per pod. NO feature gate, NO kubelet flag,
+#              NO node rebuild — config-only. obsd just needs to scrape + author it.
+#   disk-IO  — AVAILABLE (container_fs_{writes,reads}_bytes_total, io_time); already in
+#              obsd's cAdvisor scrape, inert until wired.
+#   PVC-fill — NOT AVAILABLE here. The default `rancher.io/local-path` provisioner makes
+#              hostPath-backed PVs that the kubelet does not stat, so kubelet_volume_stats_*
+#              is empty (verified: 0 series for 4 bound PVCs). This is a PROVISIONER limit,
+#              not a kernel/node-image one. To exercise PVC-fill locally, install a
+#              metrics-capable CSI driver (csi-driver-host-path / OpenEBS / Longhorn) and
+#              re-run the preflight; on a customer's real CSI cluster it emits natively.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: vigil-abb
