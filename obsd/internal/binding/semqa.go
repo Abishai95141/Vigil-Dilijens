@@ -245,6 +245,10 @@ func expectedKind(entityScope string) string {
 		return "Pod"
 	case "Node":
 		return "Node"
+	case "PVC":
+		return "PersistentVolumeClaim"
+	case "PDB":
+		return "PodDisruptionBudget"
 	default:
 		return ""
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -85,6 +86,10 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 	sliceInformer := f.Discovery().V1().EndpointSlices().Informer()
 	leaseInformer := f.Coordination().V1().Leases().Informer()
 	svcInformer := f.Core().V1().Services().Informer()
+	// PodDisruptionBudget (docs/33 build 2): a first-class identity instance so its KSM
+	// object-state series (kube_poddisruptionbudget_status_*) resolve to a real PDB CEI,
+	// the way PVC was added — making PHEN_PDB_VIOLATION detectable.
+	pdbInformer := f.Policy().V1().PodDisruptionBudgets().Informer()
 
 	// Index pods by UID so the join audit can verify a container CEI's owning pod
 	// exists (doc 03 §6) without a full scan.
@@ -135,6 +140,11 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 			UpdateFunc: func(_, obj any) { w.upsertLease(obj) },
 			DeleteFunc: w.deleteLease,
 		}},
+		{"poddisruptionbudget", pdbInformer, cache.ResourceEventHandlerFuncs{
+			AddFunc:    func(obj any) { w.upsertPDB(obj) },
+			UpdateFunc: func(_, obj any) { w.upsertPDB(obj) },
+			DeleteFunc: w.deletePDB,
+		}},
 	}
 	for _, h := range handlers {
 		if _, err := h.informer.AddEventHandler(h.funcs); err != nil {
@@ -145,6 +155,7 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 	w.synced = []cache.InformerSynced{
 		rsInformer.HasSynced, jobInformer.HasSynced, pvcInformer.HasSynced, svcInformer.HasSynced,
 		podInformer.HasSynced, nodeInformer.HasSynced, sliceInformer.HasSynced, leaseInformer.HasSynced,
+		pdbInformer.HasSynced,
 	}
 	return w, nil
 }
@@ -305,6 +316,44 @@ func (w *Watcher) deletePVC(obj any) {
 		Name: pvc.Name, UID: string(pvc.UID),
 	}
 	w.store.TerminateInstance(inst, deletionTime(pvc.DeletionTimestamp, w.clock))
+}
+
+// upsertPDB observes a PodDisruptionBudget into the lifecycle store (docs/33 build 2) so
+// its KSM object-state series (kube_poddisruptionbudget_status_current_healthy /
+// _desired_healthy) resolve to a real instance CEI — the same first-class-entity treatment
+// PVC received. A PDB is a namespaced object with no role layer (RoleCEI stays zero);
+// StateActive once it exists (its healthy/desired counts are separate MEASURED observations,
+// not the identity state). The violation itself (current < desired) is detected by the
+// controlplane/bucket-c overlay's ratio rule over these series.
+func (w *Watcher) upsertPDB(obj any) {
+	pdb, ok := obj.(*policyv1.PodDisruptionBudget)
+	if !ok {
+		return
+	}
+	inst := InstanceCoords{
+		Cluster: w.cluster, Namespace: pdb.Namespace, Kind: "PodDisruptionBudget",
+		Name: pdb.Name, UID: string(pdb.UID),
+	}
+	if _, err := w.store.Observe(inst, CEI{}, pdb.CreationTimestamp.Time, StateActive); err != nil {
+		w.logger.Warn("identity: pdb observe failed", "namespace", pdb.Namespace, "pdb", pdb.Name, "err", err)
+	}
+}
+
+func (w *Watcher) deletePDB(obj any) {
+	pdb, ok := obj.(*policyv1.PodDisruptionBudget)
+	if !ok {
+		if tomb, isTomb := obj.(cache.DeletedFinalStateUnknown); isTomb {
+			pdb, ok = tomb.Obj.(*policyv1.PodDisruptionBudget)
+		}
+		if !ok {
+			return
+		}
+	}
+	inst := InstanceCoords{
+		Cluster: w.cluster, Namespace: pdb.Namespace, Kind: "PodDisruptionBudget",
+		Name: pdb.Name, UID: string(pdb.UID),
+	}
+	w.store.TerminateInstance(inst, deletionTime(pdb.DeletionTimestamp, w.clock))
 }
 
 // --- helpers -----------------------------------------------------------------

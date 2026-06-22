@@ -176,7 +176,7 @@ var (
 	ovEdgeVocab      = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true, "flow": true}
 	ovKindVocab      = map[string]bool{"config-relative": true, "absolute": true, "rate-of-change": true, "co-occurrence": true}
 	ovDirectionVocab = map[string]bool{"above": true, "below": true}
-	ovScopeVocab     = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true}
+	ovScopeVocab     = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true, "PDB": true}
 	ovFacetVocab     = map[string]bool{"level": true, "slope": true, "ratio": true, "rate-guard": true}
 	ovExpectVocab    = map[string]bool{"rising": true, "falling": true, "crossed": true, "at-or-above": true, "breached": true}
 	ovMinStateVocab  = map[string]bool{"": true, "at-threshold": true, "above": true, "well-above": true}

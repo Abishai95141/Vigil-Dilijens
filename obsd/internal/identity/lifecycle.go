@@ -354,6 +354,13 @@ func (s *Store) PVCUID(namespace, name string, at time.Time) (string, bool) {
 	return s.lookup("PersistentVolumeClaim", namespace, name, at)
 }
 
+// PDBUID returns the UID of the PodDisruptionBudget that was (namespace, name) at instant
+// at (docs/33 build 2). Implements Lookup. PDBs are Observe()d into the store like PVCs
+// (the Watcher's PDB informer), so the same time-aware succession disambiguation applies.
+func (s *Store) PDBUID(namespace, name string, at time.Time) (string, bool) {
+	return s.lookup("PodDisruptionBudget", namespace, name, at)
+}
+
 func (s *Store) lookup(kind, namespace, name string, at time.Time) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

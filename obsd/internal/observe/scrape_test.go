@@ -70,6 +70,11 @@ func newTestIngestor(t *testing.T) (*Ingestor, *identity.Store) {
 	if _, err := st.Observe(identity.InstanceCoords{Cluster: cluster, Namespace: "shop", Kind: "PersistentVolumeClaim", Name: "data-cart", UID: "pvc-u1"}, identity.CEI{}, bornAt, identity.StateActive); err != nil {
 		t.Fatal(err)
 	}
+	// A PodDisruptionBudget is a first-class identity instance too (docs/33 build 2): its
+	// KSM object-state series resolve to the real PDB CEI via PDBUID.
+	if _, err := st.Observe(identity.InstanceCoords{Cluster: cluster, Namespace: "shop", Kind: "PodDisruptionBudget", Name: "web", UID: "pdb-u1"}, identity.CEI{}, bornAt, identity.StateActive); err != nil {
+		t.Fatal(err)
+	}
 	return NewIngestor(identity.NewNormalizer(cluster, st), qss.NewHotStore()), st
 }
 

@@ -27,7 +27,7 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 	// first-class identity instances (the Watcher Observe()s them, doc 03), so they ride
 	// the SAME inventory as pods/nodes — their KSM object-state series join the real
 	// instance CEI, not a pseudo-key (the documented dark-bar fix).
-	var pods, nodes, pvcs []identity.InstanceRecord
+	var pods, nodes, pvcs, pdbs []identity.InstanceRecord
 	for _, r := range inventory {
 		switch r.Kind {
 		case "Pod":
@@ -36,11 +36,14 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 			nodes = append(nodes, r)
 		case "PersistentVolumeClaim":
 			pvcs = append(pvcs, r)
+		case "PodDisruptionBudget":
+			pdbs = append(pdbs, r)
 		}
 	}
 	sort.Slice(pods, func(i, j int) bool { return pods[i].CEI.Key() < pods[j].CEI.Key() })
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].CEI.Key() < nodes[j].CEI.Key() })
 	sort.Slice(pvcs, func(i, j int) bool { return pvcs[i].CEI.Key() < pvcs[j].CEI.Key() })
+	sort.Slice(pdbs, func(i, j int) bool { return pdbs[i].CEI.Key() < pdbs[j].CEI.Key() })
 
 	// Rules are already sorted by ID (graph loader invariant).
 	for _, rule := range g.Rules {
@@ -58,7 +61,7 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 		if avail != nil {
 			if av, ok := avail.PerSignal[rule.Signal]; ok && av.State == OutOfScopeUnobtainable {
 				reason := "signal unobtainable on this cluster: " + strings.Join(av.Reasons, "; ")
-				bindAllOutOfScope(res, &cov, rule, em, reason, pods, nodes, pvcs)
+				bindAllOutOfScope(res, &cov, rule, em, reason, pods, nodes, pvcs, pdbs)
 				res.Coverage.PerRule = append(res.Coverage.PerRule, cov)
 				continue
 			}
@@ -82,6 +85,10 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 			for _, ref := range pvcs {
 				bindPVC(res, &cov, rule, em, ref, cfg, now)
 			}
+		case "PDB":
+			for _, ref := range pdbs {
+				bindPDB(res, &cov, rule, em, ref, now)
+			}
 		}
 		res.Coverage.PerRule = append(res.Coverage.PerRule, cov)
 	}
@@ -94,7 +101,7 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 // out-of-scope state with one stated reason (signal unobtainable here). The pairs
 // still EXIST in the report — "recorded as out-of-scope, not failure" and never
 // silently absent (doc 04 §3.1.1, §3.5).
-func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, reason string, pods, nodes, pvcs []identity.InstanceRecord) {
+func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, reason string, pods, nodes, pvcs, pdbs []identity.InstanceRecord) {
 	add := func(b Binding) {
 		b.State = StateOutOfScope
 		b.Validation = ValidationSuspect
@@ -119,6 +126,10 @@ func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule
 	case "PVC":
 		for _, rec := range pvcs {
 			add(Binding{CEIKey: rec.CEI.Key(), Entity: "PVC", RuleID: rule.ID, Metric: rule.Metric})
+		}
+	case "PDB":
+		for _, rec := range pdbs {
+			add(Binding{CEIKey: rec.CEI.Key(), Entity: "PDB", RuleID: rule.ID, Metric: rule.Metric})
 		}
 	}
 }
@@ -331,6 +342,22 @@ func bindPVC(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emiss
 		b.Bar = defaultBar(rule, now)
 		cov.DefaultBound++
 	}
+	res.Bindings = append(res.Bindings, b)
+}
+
+// bindPDB instantiates a PDB-scoped rule against one PodDisruptionBudget (docs/33 build 2).
+// The PDB is a first-class identity instance (rec), so its binding carries the REAL instance
+// CEI key — the same key its KSM object-state series use. PHEN_PDB_VIOLATION's only rule is
+// an absolute ratio (current_healthy/desired_healthy below 1.0), so the bar is a FLAGGED
+// ontology default; there is no customer config for PDB health, so no config-relative branch.
+func bindPDB(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, rec identity.InstanceRecord, now time.Time) {
+	b := Binding{
+		CEIKey: rec.CEI.Key(), Entity: "PDB",
+		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
+	}
+	cov.Instantiated++
+	b.Bar = defaultBar(rule, now)
+	cov.DefaultBound++
 	res.Bindings = append(res.Bindings, b)
 }
 

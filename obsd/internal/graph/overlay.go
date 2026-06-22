@@ -123,7 +123,7 @@ var knownSpans = map[string]bool{SpanEntityLocal: true, SpanFirstOrder: true, Sp
 // of the deterministic digest — adding it to the vocabulary changes no existing span.
 var knownTraversalEdgeTypes = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true, "flow": true}
 
-var knownEntityScopes = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true}
+var knownEntityScopes = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true, "PDB": true}
 
 var knownDirections = map[string]bool{"above": true, "below": true}
 
@@ -872,7 +872,7 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 			return fmt.Errorf("anchor for unknown phenomenon %q", id)
 		}
 		if !knownEntityScopes[kind] {
-			return fmt.Errorf("phenomenon %s: unknown anchor kind %q (Container|Pod|Node|PVC)", id, kind)
+			return fmt.Errorf("phenomenon %s: unknown anchor kind %q (Container|Pod|Node|PVC|PDB)", id, kind)
 		}
 		if p.Anchor != "" && p.Anchor != kind {
 			return fmt.Errorf("phenomenon %s: anchor conflict (%q already declared, overlay says %q)", id, p.Anchor, kind)

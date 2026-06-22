@@ -18,6 +18,7 @@ type fakeLookup struct {
 	pods  map[string][]interval // key: ns + "/" + name
 	nodes map[string][]interval // key: node name
 	pvcs  map[string][]interval // key: ns + "/" + name
+	pdbs  map[string][]interval // key: ns + "/" + name
 }
 
 func lookupIn(ivs []interval, at time.Time) (string, bool) {
@@ -39,6 +40,10 @@ func (f *fakeLookup) NodeUID(name string, at time.Time) (string, bool) {
 
 func (f *fakeLookup) PVCUID(ns, name string, at time.Time) (string, bool) {
 	return lookupIn(f.pvcs[ns+"/"+name], at)
+}
+
+func (f *fakeLookup) PDBUID(ns, name string, at time.Time) (string, bool) {
+	return lookupIn(f.pdbs[ns+"/"+name], at)
 }
 
 // --- fixtures ----------------------------------------------------------------

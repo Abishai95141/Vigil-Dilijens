@@ -109,6 +109,7 @@ const (
 	ReasonUnknownPod     Reason = "unknown-pod"
 	ReasonUnknownNode    Reason = "unknown-node"
 	ReasonUnknownPVC     Reason = "unknown-pvc"
+	ReasonUnknownPDB     Reason = "unknown-pdb"
 	ReasonUnmappedMetric Reason = "unmapped-metric-class"
 	ReasonUnknownFamily  Reason = "unknown-exporter-family"
 	ReasonMissingSource  Reason = "missing-scrape-source"
@@ -185,6 +186,11 @@ type Lookup interface {
 	// lifecycle-tracked object (doc 03), so its KSM object-state series join the same
 	// instance CEI its mounts edge uses, never a pseudo-key.
 	PVCUID(namespace, name string, at time.Time) (uid string, ok bool)
+	// PDBUID returns the UID of the PodDisruptionBudget that was (namespace, name) at
+	// instant at (docs/33 build 2). Same time-aware contract as PVCUID — a PDB is a
+	// namespaced, lifecycle-tracked object, so its KSM object-state series join the real
+	// instance CEI, never a pseudo-key.
+	PDBUID(namespace, name string, at time.Time) (uid string, ok bool)
 }
 
 // Normalizer applies the per-family normalization maps.
@@ -273,6 +279,19 @@ func (n *Normalizer) kubeletMetrics(s Series) Result {
 			return n.quarantine(FamilyKubelet, ReasonUnknownPVC)
 		}
 		return n.pvc(FamilyKubelet, ns, name, uid, s.At)
+	// Image-GC removals (docs/33 build 2 — PHEN_IMAGE_GC_EVENTS): the kubelet's
+	// runtime-operations counter is multi-dimensional (operation_type), but only the
+	// remove_image row is the image-GC signal. Resolving ONLY that row to the node CEI
+	// keeps the (node, metric) join single-series (the matcher's requirement); the other
+	// operation types are recognized kubelet ops we do not model, quarantined+counted.
+	case strings.HasPrefix(s.Metric, "kubelet_runtime_operations_total"):
+		if s.Labels["operation_type"] != "remove_image" {
+			return n.quarantine(FamilyKubelet, ReasonUnmappedMetric)
+		}
+		if s.SourceNode == "" {
+			return n.quarantine(FamilyKubelet, ReasonMissingSource)
+		}
+		return n.node(FamilyKubelet, s.SourceNode, s.joinTime(), s.At)
 	default:
 		return n.quarantine(FamilyKubelet, ReasonUnmappedMetric)
 	}
@@ -430,6 +449,21 @@ func (n *Normalizer) ksm(s Series) Result {
 		}
 		return n.pvc(FamilyKSM, ns, name, uid, s.At)
 
+	// PodDisruptionBudgets are namespaced, lifecycle-tracked instances (docs/33 build 2):
+	// their KSM object-state series (status_current_healthy / _desired_healthy) resolve to a
+	// PDB instance CEI via the time-aware lookup. A row whose budget is not in the
+	// control-plane view quarantines — never a guessed identity.
+	case strings.HasPrefix(s.Metric, "kube_poddisruptionbudget_"):
+		ns, name := s.Labels["namespace"], s.Labels["poddisruptionbudget"]
+		if ns == "" || name == "" {
+			return n.quarantine(FamilyKSM, ReasonMissingLabels)
+		}
+		uid, ok := n.lookup.PDBUID(ns, name, s.joinTime())
+		if !ok {
+			return n.quarantine(FamilyKSM, ReasonUnknownPDB)
+		}
+		return n.pdb(FamilyKSM, ns, name, uid, s.At)
+
 	default:
 		// kube_replicaset_* (an intermediate controller — anchoring it on its
 		// Deployment needs the owner chain, which is M3's resolver), services,
@@ -464,6 +498,16 @@ func (n *Normalizer) pod(f Family, ns, name, uid string, at time.Time) Result {
 func (n *Normalizer) pvc(f Family, ns, name, uid string, at time.Time) Result {
 	cei, err := MintInstance(InstanceCoords{
 		Cluster: n.cluster, Namespace: ns, Kind: "PersistentVolumeClaim", Name: name, UID: uid,
+	}, at)
+	if err != nil {
+		return n.quarantine(f, ReasonMalformed)
+	}
+	return n.resolved(f, cei)
+}
+
+func (n *Normalizer) pdb(f Family, ns, name, uid string, at time.Time) Result {
+	cei, err := MintInstance(InstanceCoords{
+		Cluster: n.cluster, Namespace: ns, Kind: "PodDisruptionBudget", Name: name, UID: uid,
 	}, at)
 	if err != nil {
 		return n.quarantine(f, ReasonMalformed)

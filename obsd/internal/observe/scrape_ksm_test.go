@@ -44,16 +44,17 @@ func TestScrapeKSMResolvesByLabelIdentity(t *testing.T) {
 	targets := []PodTarget{{Namespace: "monitoring", Name: "kube-state-metrics", Port: "8080", Path: "metrics"}}
 	sum := in.IngestPayloads(FetchKSM(context.Background(), f, targets))
 
-	// 11 series resolve: 1 restart counter (container) + 5 node-condition series (node:
+	// 12 series resolve: 1 restart counter (container) + 5 node-condition series (node:
 	// Ready true/false, MemoryPressure false, DiskPressure true/false) + 2
-	// pod-status-reason rows (pod) + 3 PVC status-phase rows (the claim — now a
-	// first-class identity instance). The PDB object metric is unmapped → quarantined.
-	// (Derived rows are projections, not counted in the scrape accounting.)
-	if sum.SeriesResolved != 11 || sum.SamplesStored != 11 {
-		t.Fatalf("resolved=%d stored=%d, want 11/11 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
+	// pod-status-reason rows (pod) + 3 PVC status-phase rows (the claim) + 1 PDB
+	// status-current-healthy row (the budget — now a first-class identity instance, docs/33
+	// build 2). (Derived rows are projections, not counted in the scrape accounting.)
+	if sum.SeriesResolved != 12 || sum.SamplesStored != 12 {
+		t.Fatalf("resolved=%d stored=%d, want 12/12 (%s)", sum.SeriesResolved, sum.SamplesStored, sum)
 	}
-	if sum.SeriesQuarantine["unmapped-metric-class"] != 1 {
-		t.Errorf("quarantines = %v, want unmapped-metric-class:1 (the PDB object metric)", sum.SeriesQuarantine)
+	// The PDB object metric now resolves to the PDB CEI (uid pdb-u1) — the entity-binding fix.
+	if pdb := in.StreamsByUIDMetric("pdb-u1", "kube_poddisruptionbudget_status_current_healthy"); len(pdb) != 1 {
+		t.Errorf("PDB healthy streams = %v, want exactly 1 (resolved to the PDB CEI)", pdb)
 	}
 
 	// The DERIVATION: the active Evicted row of kube_pod_status_reason is re-emitted as

@@ -137,8 +137,8 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// + psi-pressure-v1 (v0.14.0, the PSI saturation lane) = 21;
 	// + pvc-filling-v1 (v0.15.0, the PVC-fill lane) = 22;
 	// + controlplane-metrics-v1 (v0.16.0, the apiserver + CoreDNS lane) = 23.
-	if len(ovls) != 23 {
-		t.Fatalf("overlays = %d, want 23", len(ovls))
+	if len(ovls) != 24 {
+		t.Fatalf("overlays = %d, want 24", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
 	if err != nil {
@@ -153,8 +153,8 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	if len(res.structErrors) != 0 {
 		t.Errorf("membership-structuring hard fails remain: %v", res.structErrors)
 	}
-	if len(res.structuring.Acknowledged) != 6 {
-		t.Errorf("acknowledged off-matcher phenomena = %d, want 6 (the detection-status-v1 set)", len(res.structuring.Acknowledged))
+	if len(res.structuring.Acknowledged) != 4 {
+		t.Errorf("acknowledged off-matcher phenomena = %d, want 4 (detection-status-v1 set minus PDB_VIOLATION + IMAGE_GC_EVENTS, both now wired)", len(res.structuring.Acknowledged))
 	}
 	g := res.gap
 	// 41 after v0.9.0: + PHEN_DISK_FILLING (entity-local span). (40 after v0.4.0: the
@@ -168,8 +168,8 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// + 1 init-container (THR_INIT_CONTAINER_RESTARTS_RATE) = 17; + 3 PSI rate guards
 	// (v0.14.0) = 20; + 1 PVC-fill bar (v0.15.0, THR_PVC_USED_VS_REQUESTED_STORAGE) = 21;
 	// + 4 control-plane bars (v0.16.0: SERVFAIL/cache-miss ratios + APF/webhook rate guards) = 25.
-	if g.ThresholdRulesStructured != 25 {
-		t.Errorf("structured rules = %d, want 25", g.ThresholdRulesStructured)
+	if g.ThresholdRulesStructured != 27 {
+		t.Errorf("structured rules = %d, want 27", g.ThresholdRulesStructured)
 	}
 	if g.hasGaps() {
 		t.Error("no gaps should remain with overlays applied (-strict must pass)")

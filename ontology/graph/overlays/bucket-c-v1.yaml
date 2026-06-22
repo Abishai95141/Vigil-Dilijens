@@ -1,0 +1,165 @@
+# Bucket-C phenomena — authored overlay v1 (doc 02 §3.5, doc 04 §3.3, doc 07 §3.1;
+# docs/33 build 2 — wire the Bucket-C phenomena whose source exists on a live lane).
+#
+# Two phenomena wired here:
+#
+# 1. PHEN_PDB_VIOLATION (KSM, now via a first-class PDB entity). KSM emits
+#    kube_poddisruptionbudget_status_{current,desired}_healthy per PDB, but a PDB was
+#    not a modelled entity, so the series had no CEI to bind to (detection-status-v1
+#    acknowledged this as needs-entity-binding). The companion CODE change models the
+#    PodDisruptionBudget as a first-class identity instance — the Watcher Observe()s it
+#    (the policy/v1 informer), the lifecycle store resolves PDBUID, normalize.ksm routes
+#    kube_poddisruptionbudget_* to the PDB CEI, and the binding engine enumerates PDB-scoped
+#    rules — EXACTLY the treatment PVC received. A violation is current_healthy <
+#    desired_healthy, detected as the ratio current/desired BELOW 1.0 (a healthy PDB sits
+#    at >= 1.0 — at/above the bar, never crossed; a violated one drops below). Bar is a
+#    structural 1.0 (the PDB's OWN declared desired count is the denominator — borrowed
+#    normativity, never a guessed default).
+#
+# 2. PHEN_PROBE_CASCADE_META (cascade relations). This META phenomenon has NO metric
+#    members — it is relation-only, the authored statement that probe failures can be
+#    TRIGGERED by several upstream phenomena (its 7 phenomenon_relation edges). It cannot
+#    itself produce a finding (nothing to member-check), so it is detected only as a
+#    recognized cascade: a trigger phenomenon AND PHEN_PROBE_FAILURE_RESTART both lighting
+#    up on related entities. THROTTLING_CASCADE already has a direct
+#    THROTTLING_CASCADE->PROBE_FAILURE_RESTART relation (so that cascade is recognized);
+#    this overlay adds the same direct relation for the OTHER triggers that can actually
+#    fire on a standard cluster — CONNTRACK_EXHAUSTION and MEMORY_HIGH_THROTTLE — so their
+#    probe cascades are recognized too. The remaining META triggers (KUBE_PROXY_SYNC_SLOW,
+#    ETCD_SLOW_PATH, NETWORK_IMPAIRMENT) need exporters absent from this substrate (CNI/etcd)
+#    and are left unwired, honestly.
+#
+# CHARTER: the PDB ratio is an honest KSM-gauge/KSM-gauge comparison against the PDB's own
+# declared desired count -> borrowed-normativity clean, IN-DIGEST legitimate (deterministic,
+# replay-byte-identical). The cascade relations are AUTHORED trigger->downstream knowledge,
+# strictly descriptive (the recognizer never claims causation). No new kind, no agent write.
+# BEHAVIOURAL governance class (doc 12): the now-obtainable PDB signal + the new entity bump
+# the hash; the base KG and every prior release stay byte-identical and loadable.
+overlay: bucket-c
+version: 1
+author: vigil-engineering
+status: proposed-v1 (docs/33 build 2 — PDB_VIOLATION via a first-class PDB entity + probe-cascade direct relations)
+
+signals:
+  - id: SIG_kube_poddisruptionbudget_status_healthy_b2c1
+    name: PodDisruptionBudget healthy vs desired
+    data_type: gauge
+    entity: PodDisruptionBudget
+    modality: Metric
+    tools:
+      - kube-state-metrics
+    source: kube-state-metrics (PodDisruptionBudget .status)
+    collection_method: Prometheus scrape on KSM /metrics
+    notes: >-
+      kube_poddisruptionbudget_status_current_healthy and _desired_healthy, per PDB
+      {namespace, poddisruptionbudget}. The violation is current < desired: the PDB no longer
+      guarantees its minimum availability, so a voluntary disruption (drain/upgrade) or a
+      crash has dropped healthy pods below the budget. KSM emits these on every cluster.
+  - id: SIG_kubelet_runtime_remove_image_ops_b2c2
+    name: Kubelet image-GC removals
+    data_type: counter
+    entity: Node
+    modality: Metric
+    tools:
+      - kubelet
+    source: kubelet /metrics
+    collection_method: Prometheus scrape on the kubelet /metrics endpoint
+    notes: >-
+      kubelet_runtime_operations_total{operation_type="remove_image"}: the kubelet removed an
+      unused image. Image GC runs when imagefs usage crosses the kubelet's high threshold, so a
+      rising remove_image rate is the image-GC-active signal. Rides the kubelet /metrics lane
+      (--kubelet-metrics-enabled); the row exists only once a removal has happened.
+
+members:
+  PHEN_PDB_VIOLATION:
+    - signal: SIG_kube_poddisruptionbudget_status_healthy_b2c1
+      role: required
+      temporal: T0
+      why: current_healthy dropped below the PDB's own declared desired_healthy
+  PHEN_IMAGE_GC_EVENTS:
+    - signal: SIG_kubelet_runtime_remove_image_ops_b2c2
+      role: required
+      temporal: T0
+      why: kubelet remove_image operations rising — image GC is actively reclaiming imagefs
+
+anchors:
+  PHEN_PDB_VIOLATION: PDB
+
+rules:
+  - id: THR_PDB_CURRENT_BELOW_DESIRED_HEALTHY
+    signal: SIG_kube_poddisruptionbudget_status_healthy_b2c1
+    metric: kube_poddisruptionbudget_status_current_healthy
+    divisor_metric: kube_poddisruptionbudget_status_desired_healthy
+    kind: absolute
+    default: 1.0
+    direction: below
+    entity_scope: PDB
+    window: 5m
+    rationale: >-
+      A PDB is violated when current_healthy < desired_healthy. The evaluated quantity is
+      current/desired: a healthy PDB sits at >= 1.0 (at/above the 1.0 bar — StateAtThreshold,
+      never crossed), a violated one drops below 1.0 (crossed, direction below). The
+      denominator is the PDB's OWN declared desired_healthy — borrowed normativity, never a
+      guessed default; a PDB with desired_healthy=0 yields no finite ratio and is dropped
+      (no fabricated violation). FLAGGED ontology default for the 1.0 structural bar.
+
+  - id: THR_KUBELET_IMAGE_GC_REMOVALS
+    signal: SIG_kubelet_runtime_remove_image_ops_b2c2
+    metric: kubelet_runtime_operations_total
+    kind: rate-of-change
+    default: 1
+    direction: above
+    entity_scope: Node
+    window: 15m
+    rationale: >-
+      A rising kubelet remove_image rate means image GC is actively reclaiming imagefs (it ran
+      because usage crossed the kubelet's high threshold). Any sustained removal (>=1 in the 15m
+      window) is the image-GC-active signal; the longer window suits a coarse housekeeping event.
+      No customer config bar exists; FLAGGED ontology default. The remove_image series exists
+      only once a removal has happened, so a cluster with ample imagefs never binds it.
+
+checks:
+  PHEN_PDB_VIOLATION:
+    - signal: SIG_kube_poddisruptionbudget_status_healthy_b2c1
+      metric: kube_poddisruptionbudget_status_current_healthy
+      facet: ratio
+      expect: at-or-above
+      on: anchor
+      note: >-
+        current/desired healthy ratio crossed BELOW 1.0 (THR_PDB_CURRENT_BELOW_DESIRED_HEALTHY),
+        on the PodDisruptionBudget itself. The workload's member pods (one selects hop) and the
+        eviction-API 429 member are named corroboration without a v1 check — surfaced as a
+        DEGRADED match, never fabricated. Requires the --ksm-enabled lane.
+  PHEN_IMAGE_GC_EVENTS:
+    - signal: SIG_kubelet_runtime_remove_image_ops_b2c2
+      metric: kubelet_runtime_operations_total
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: >-
+        kubelet remove_image operations accruing at/over the window bar
+        (THR_KUBELET_IMAGE_GC_REMOVALS), on the node. The kubelet GC log line and the
+        node_filesystem_avail imagefs correlate are named members without a v1 check — surfaced
+        as a DEGRADED match, never fabricated. Requires --kubelet-metrics-enabled; the
+        remove_image row exists only during real image GC (imagefs pressure).
+
+relations:
+  # Direct probe-cascade fan-in for the triggers that fire on a standard cluster (the
+  # PROBE_CASCADE_META meta is relation-only and cannot itself surface; these make the
+  # individual cascades recognizable). THROTTLING_CASCADE already has its direct relation.
+  - src: PHEN_CONNTRACK_EXHAUSTION
+    dst: PHEN_PROBE_FAILURE_RESTART
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      A full conntrack table drops new connections, so the kubelet's probe TCP/HTTP handshake
+      cannot establish — probes fail and the container is restarted (the PROBE_CASCADE_META
+      conntrack trigger, made directly recognizable).
+  - src: PHEN_MEMORY_HIGH_THROTTLE
+    dst: PHEN_PROBE_FAILURE_RESTART
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      Sustained memory-reclaim stalls slow the application's event loop past the probe timeout,
+      so liveness probes fail and the container is restarted (the PROBE_CASCADE_META
+      memory-throttle trigger, made directly recognizable).

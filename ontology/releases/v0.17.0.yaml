@@ -1,0 +1,57 @@
+# Graph release v0.17.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.17.0
+graph_version: "sha256:c11a0c2af312e3a9c1e3ebe7054c0f6919fd5d94479d0b61595b1c89582596cf"
+created: "2026-06-23"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - bucket-c-v1.yaml
+  - controlplane-metrics-v1.yaml
+  - corrections-v1.yaml
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - detection-status-v1.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - psi-pressure-v1.yaml
+  - pvc-filling-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Wires the Bucket-C phenomena whose source exists on a live lane (docs/33 build 2). The new
+  overlay bucket-c-v1.yaml: (1) makes PHEN_PDB_VIOLATION detectable via a FIRST-CLASS PDB
+  entity — the companion CODE change models the PodDisruptionBudget as an identity instance
+  (the Watcher's policy/v1 informer Observe()s it, the lifecycle store resolves PDBUID,
+  normalize.ksm routes kube_poddisruptionbudget_* to the PDB CEI, and the binding engine
+  enumerates PDB-scoped rules — exactly the treatment PVC received), then authors a new KSM
+  signal node + structured member + an absolute ratio rule (current_healthy/desired_healthy
+  BELOW 1.0: a healthy PDB sits at >= 1.0, a violated one drops below) + a PDB-anchored
+  first-order check; (2) adds direct CONNTRACK_EXHAUSTION->PROBE_FAILURE_RESTART
+  and MEMORY_HIGH_THROTTLE->PROBE_FAILURE_RESTART phenomenon_relation edges so those probe
+  cascades (the fireable members of the relation-only PHEN_PROBE_CASCADE_META) are recognized
+  by the cascade lane, as THROTTLING_CASCADE->PROBE_FAILURE_RESTART already is. PDB_VIOLATION
+  drops out of the static blindspot floor (now wired). CHARTER-CLEAN: the PDB ratio is an
+  honest KSM-gauge comparison against the PDB's OWN declared desired count (borrowed
+  normativity), IN-DIGEST legitimate; the cascade relations are AUTHORED trigger->downstream
+  knowledge, strictly descriptive. No new kind, no agent write. BEHAVIOURAL governance class
+  (doc 12): the now-obtainable PDB signal + the new entity bump the hash v0.16.0->v0.17.0;
+  the base KG and every prior release stay byte-identical and loadable. The PROBE_CASCADE_META
+  triggers needing absent exporters (KUBE_PROXY_SYNC_SLOW/ETCD_SLOW_PATH/NETWORK_IMPAIRMENT on
+  CNI/etcd) are left unwired, honestly. IMAGE_GC_EVENTS stays acknowledged needs-scrape-lane:
+  its kubelet remove_image counter is now reachable on the kubelet-metrics lane but only emits
+  during real image GC (imagefs pressure), so it is wireable-on-demand, not validated here.

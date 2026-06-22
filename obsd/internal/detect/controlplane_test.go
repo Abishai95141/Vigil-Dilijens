@@ -132,3 +132,64 @@ func TestControlPlaneDNSSilentWhenBelowBar(t *testing.T) {
 		t.Errorf("DNS_CACHE_THRASH must NOT fire below the bar, got %+v", f)
 	}
 }
+
+// --- Bucket-C: PDB_VIOLATION (docs/33 build 2) -------------------------------
+
+const cpPDBKey = "i|cl|kube-system|PodDisruptionBudget|web|pdb-uid-1"
+
+// pdbViolatedFP: the PDB anchor (Kind=PDB) with current/desired healthy ratio crossed
+// BELOW the 1.0 bar (StateAbove on a below-direction rule = a real violation).
+func pdbViolatedFP() observe.Fingerprint {
+	return observe.Fingerprint{
+		CEIKey: cpPDBKey, Namespace: "kube-system", Name: "web", Kind: "PDB", EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_PDB_CURRENT_BELOW_DESIRED_HEALTHY", Metric: "kube_poddisruptionbudget_status_current_healthy",
+			State: observe.StateAbove, Direction: "below", BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-pdb", SampleAt: evalAt, How: "counter-ratio"},
+		}},
+	}
+}
+
+func TestPDBViolationFiresOnPDBAnchor(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	out := m.Match([]observe.Fingerprint{pdbViolatedFP()}, nil, newCPTopo(t), w)
+	if f := findPhen(out, "PHEN_PDB_VIOLATION"); f == nil {
+		t.Fatalf("PDB_VIOLATION should fire on the PDB; findings: %+v", out)
+	} else if f.EntityCEI != cpPDBKey || f.Span != "first-order" || f.RequiredMet < 1 {
+		t.Errorf("PDB_VIOLATION = entity %s span %s met %d/%d, want the PDB / first-order / >=1 met",
+			f.EntityCEI, f.Span, f.RequiredMet, f.RequiredTotal)
+	}
+}
+
+// A healthy PDB (ratio at/above 1.0 → StateAtThreshold, not crossed) must NOT fire.
+func TestPDBViolationSilentWhenHealthy(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	fp := pdbViolatedFP()
+	fp.Thresholds[0].State = observe.StateAtThreshold // current == desired
+	if f := findPhen(m.Match([]observe.Fingerprint{fp}, nil, newCPTopo(t), w), "PHEN_PDB_VIOLATION"); f != nil {
+		t.Errorf("PDB_VIOLATION must NOT fire when current==desired (ratio 1.0), got %+v", f)
+	}
+}
+
+// --- Bucket-C: IMAGE_GC_EVENTS (docs/33 build 2) -----------------------------
+
+// imageGCFP: a node with the kubelet remove_image rate guard breached (image GC active).
+func imageGCFP() observe.Fingerprint {
+	return observe.Fingerprint{
+		CEIKey: cpNodeKey, Name: "control-1", Kind: "Node", EvaluatedAt: evalAt,
+		Rates: []observe.VariableRate{{
+			RuleID: "THR_KUBELET_IMAGE_GC_REMOVALS", Metric: "kubelet_runtime_operations_total",
+			WindowDelta: 3, Bar: 1, Breached: true, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "s-imgc", SampleAt: evalAt, How: "rate-guard"},
+		}},
+	}
+}
+
+func TestImageGCFiresEntityLocalOnNode(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	if f := findPhen(m.MatchFingerprint(imageGCFP()), "PHEN_IMAGE_GC_EVENTS"); f == nil {
+		t.Fatalf("IMAGE_GC_EVENTS should fire on the node when remove_image removals breach the guard")
+	} else if f.EntityCEI != cpNodeKey || f.RequiredMet < 1 {
+		t.Errorf("IMAGE_GC_EVENTS = entity %s met %d/%d, want the node / >=1 met", f.EntityCEI, f.RequiredMet, f.RequiredTotal)
+	}
+}
