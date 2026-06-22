@@ -12,6 +12,7 @@ import { InsightsPage } from "./routes/insights";
 import { McpPage } from "./routes/mcp";
 import { GraphPage, OverviewPage } from "./routes/pages";
 import { RefereePage } from "./routes/referee";
+import { RightSizingPage } from "./routes/right-sizing";
 import { RootCausePage } from "./routes/rootcause";
 import { SilencePage } from "./routes/silence";
 import { TimelinePage } from "./routes/timeline";
@@ -37,6 +38,7 @@ const routeTree = root.addChildren([
   r("/silence", SilencePage),
   r("/governance", GovernancePage),
   r("/causal-hypotheses", CausalHypothesesPage),
+  r("/right-sizing", RightSizingPage),
   r("/referee", RefereePage),
   r("/config", ConfigPage),
   // NOTE: not "/mcp" — that path is proxied to obsd's POST-only JSON-RPC endpoint

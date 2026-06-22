@@ -65,6 +65,10 @@ type Providers struct {
 	// AuthorCausalDirection records a named operator's authored causal direction (or
 	// not-causal) for a hypothesis, returning the AUTHORED overlay YAML. nil ⇒ unavailable.
 	AuthorCausalDirection func(CausalDirectionRequest) *CausalDirectionResult
+	// RightSizing returns the off-digest right-sizing ADVISORY surface (docs/31 §6): per-workload
+	// recommendations comparing sustained usage to declared requests/limits — a human acts on
+	// them, the system never does. nil ⇒ the lane is OFF; the route serves the honest OFF state.
+	RightSizing func() *RightSizingView
 	// Events returns the v3 T-C discrete-event lane surface (OOMKilled,
 	// CrashLoopBackOff joined by CEI); nil ⇒ the honest "not enabled" state.
 	Events func() *EventsView
@@ -580,6 +584,22 @@ func Register(mux *http.ServeMux, p Providers) {
 		}
 		if v == nil {
 			v = BuildCausalHypotheses(nil, false, timeNowUTC())
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/right-sizing", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *RightSizingView
+		if p.RightSizing != nil {
+			v = p.RightSizing()
+		}
+		if v == nil {
+			// The lane is off — say so honestly rather than imply all allocations are correct.
+			v = BuildRightSizing(nil, false, 0, timeNowUTC())
 		}
 		writeJSON(w, v)
 	})

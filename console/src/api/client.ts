@@ -25,6 +25,7 @@ import type {
   McpToolName,
   McpToolResult,
   McpToolsListResult,
+  RightSizingView,
   RootCauseChainView,
   SilenceLedgerView,
   TimelineView,
@@ -85,6 +86,8 @@ export const useUnexplained = () => useView<UnexplainedView>("unexplained", "/ap
 export const useGovernance = () => useView<GovernanceView>("governance", "/api/governance");
 export const useCausalHypotheses = () =>
   useView<CausalHypothesesView>("causal-hypotheses", "/api/causal-hypotheses");
+export const useRightSizing = () =>
+  useView<RightSizingView>("right-sizing", "/api/right-sizing");
 
 // A NAMED operator's authored causal DIRECTION for a co-occurrence hypothesis (doc 22 C3 —
 // the system never infers direction). "a-to-b"/"b-to-a" promote with the directed note and

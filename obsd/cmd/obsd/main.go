@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -61,6 +62,7 @@ import (
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/params"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/qss"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/replay"
+	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/rightsizing"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/selection"
 	fstore "github.com/Abishai95141/Vigil-Dilijens/obsd/internal/store"
 	"github.com/Abishai95141/Vigil-Dilijens/obsd/internal/trace"
@@ -133,6 +135,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		causalDiscoveryPath = fs.String("causal-discovery-path", "", "doc 29 §B: path to the OFFLINE causal-discovery harness JSON shortlist (harness/causal-discovery/ — fixed-lag + PCMCI-pruned candidate links). Each interval the file is read and its links are staged as DIRECTION-FREE causal-hypothesis candidates (PCMCI's direction is a PROJECTED hint; a named operator authors the arrow at /api/causal-hypotheses/author). Empty ⇒ off. Needs --dgx-enabled (the candidate store). Off-digest; never feeds detection (the candidate firewall enforces it).")
 		forecastRoleSeries  = fs.Bool("forecast-role-series", false, "doc 20 P5: churn-stable identity — forecast the WORKLOAD ROLE (a deterministic per-bin worst-member-toward-bar of its live member pods — max below an `above` bar, so it stays comparable to the per-pod bar; OwnerReference succession) instead of a single pod UID, so the series survives pod churn (HPA/rollout/OOM-restart). Requires forecast.enabled. OFF by default (opt-in); off = byte-identical (the forecast feeds per-pod targets unchanged). CERTIFIED against real TimesFM — `just role-series-gate` passes 3/3 churn-leak crossing events (band coverage in [0.65,0.98] + per-event advance-warning recall).")
 		alertsOn            = fs.Bool("alerts-enabled", false, "docs/30: the off-digest email alert lane — mail CLASSED facts (cascade chain forms, OOM/crash fires, forecast crossing) with fatigue controls (edge-trigger + per-key cooldown + coalesce + quiet hours + rate limit). OFF by default; off = byte-identical (the lane is never constructed, never touches the digest). NON-GATING: a send failure is logged + retried, never blocks detection. Needs ALERT_SMTP_USER/ALERT_SMTP_PASSWORD/ALERT_TO env (a Gmail App Password); never hard-coded. Enforced off-digest by the notify import-firewall test.")
+		rightSizingOn       = fs.Bool("rightsizing-enabled", false, "docs/31 §6: the off-digest right-sizing ADVISORY lane — per-workload recommendations comparing SUSTAINED measured usage (p95 over the hot window) to the workload's OWN declared requests/limits, QoS- and stability-gated, surfaced at /api/right-sizing + the get_rightsizing_advice MCP tool. A recommendation a human acts on; NEVER auto-applied, never writes to the cluster, never gates detection, authors nothing in the graph. OFF by default; off = byte-identical (the lane is never constructed; off-digest regardless).")
 	)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -214,7 +217,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn, *rightSizingOn)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -289,7 +292,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled, rightSizingEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -494,6 +497,16 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 		// O(n²) assoc lane it can afford the whole cluster — and honest coverage demands it
 		// (a capped scan would silently skip most workloads).
 		go onsetLoop(ctx, logger, ingestor, &onsetView, envDuration("ONSET_INTERVAL", time.Minute), 0)
+	}
+
+	// docs/31 §6: the off-digest right-sizing ADVISORY lane — each interval, compare each
+	// workload's SUSTAINED usage (p95 over the hot window) to its DECLARED requests/limits and
+	// publish /api/right-sizing (QoS- and stability-gated recommendations). OFF by default;
+	// never feeds detection/forecasting (off-digest); reuses the onset lane for the stability gate.
+	var rightSizingView atomic.Pointer[vapi.RightSizingView]
+	if rightSizingEnabled {
+		rightSizingView.Store(vapi.BuildRightSizing(nil, true, 0, time.Now().UTC()))
+		go rightSizingLoop(ctx, logger, client, ingestor, store, &onsetView, &rightSizingView, envDuration("RIGHTSIZING_INTERVAL", 2*time.Minute))
 	}
 
 	// doc 22 C3: the off-digest direction-free causal-hypothesis lane — each interval, pair the
@@ -912,6 +925,12 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 				}
 				return vapi.BuildCausalHypotheses(mapCausalHypothesisRows(rows), true, time.Now().UTC())
 			},
+			RightSizing: func() *vapi.RightSizingView {
+				if !rightSizingEnabled {
+					return nil // the route serves the honest OFF state
+				}
+				return rightSizingView.Load()
+			},
 			AuthorCausalDirection: func(req vapi.CausalDirectionRequest) *vapi.CausalDirectionResult {
 				if !coHypEnabled || candStore == nil {
 					return &vapi.CausalDirectionResult{OK: false, Message: "causal-hypothesis authoring is not enabled"}
@@ -1125,6 +1144,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			},
 			Onsets:           providers.Onsets,
 			CausalHypotheses: providers.CausalHypotheses,
+			RightSizing:      providers.RightSizing,
 			Findings: func() *vapi.FindingsView {
 				if providers.Findings == nil {
 					return nil
@@ -3209,6 +3229,188 @@ func buildServiceResolver(store *identity.Store, clusterID string) trace.Service
 
 // logsLoop mines MEASURED log templates from a bounded sample of pod logs each interval
 // and publishes /api/log-templates (doc 20 P4). Off the deterministic path.
+// rightSizingLoop is the off-digest right-sizing ADVISORY lane (docs/31 §6). Each interval it
+// reads a live config snapshot (declared requests/limits) + the hot usage series + the onset
+// lane (stability), computes per-(workload,resource) recommendations via the pure rightsizing
+// producer (sustained p95 vs declared request/limit, QoS- and stability-gated), and publishes
+// /api/right-sizing. OFF-digest: it reads atomic snapshots, writes only its own view, never
+// feeds detection/forecasting/replay; with the flag off the loop never runs (byte-identical).
+func rightSizingLoop(ctx context.Context, logger *slog.Logger, client kubernetes.Interface, in *observe.Ingestor, store *identity.Store, onsetView *atomic.Pointer[vapi.OnsetView], view *atomic.Pointer[vapi.RightSizingView], every time.Duration) {
+	if every <= 0 {
+		every = 2 * time.Minute
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			now := time.Now().UTC()
+			// Each cycle hits the API server (List Pods/Nodes/PVCs) for declared requests/limits —
+			// off-digest load, never gated by detection, default cadence 2m. A failure logs + skips
+			// the cycle (a degraded API server just ages the advisory); it never blocks anything.
+			cfg, err := kube.SnapshotConfig(ctx, client)
+			if err != nil {
+				logger.Warn("rightsizing: config snapshot failed; skipping cycle", "err", err)
+				continue
+			}
+			// Active-onset stream keys (the stability gate): a series with a live changepoint is
+			// not yet settled, so it must not be sized against (honest silence).
+			onsetKeys := map[string]struct{}{}
+			if ov := onsetView.Load(); ov != nil && ov.Enabled {
+				for _, o := range ov.Onsets {
+					onsetKeys[o.EntityCEI+"|"+o.Metric] = struct{}{}
+				}
+			}
+			var inputs []rightsizing.Input
+			var windowSecs int64
+			for _, rec := range store.ActiveInstances() {
+				switch rec.Kind {
+				case "Pod":
+					pc, ok := cfg.Pod(rec.Namespace, rec.Name)
+					if !ok {
+						continue
+					}
+					roleKind := rec.Kind
+					if rec.RoleCEI.Kind != "" {
+						roleKind = rec.RoleCEI.Kind
+					}
+					mk := func(res rightsizing.ResourceKind, container string, usage []float64, key string, req, lim int64) rightsizing.Input {
+						_, onsetting := onsetKeys[key]
+						return rightsizing.Input{
+							WorkloadRef: rec.Namespace + "/" + rec.Name, Namespace: rec.Namespace, Name: rec.Name,
+							WorkloadKind: roleKind, Container: container, Resource: res, Usage: usage,
+							Request: req, Limit: lim, ActiveOnset: onsetting,
+						}
+					}
+					for _, cc := range pc.Containers {
+						uid := rec.UID + "/" + cc.Name
+						if u, w, key, ok := gaugeUsage(in, uid, "container_memory_working_set_bytes"); ok {
+							inputs = append(inputs, mk(rightsizing.Memory, cc.Name, u, key, cc.MemRequestBytes, cc.MemLimitBytes))
+							windowSecs = maxInt64(windowSecs, w)
+						}
+						if u, w, key, ok := counterRateUsage(in, uid, "container_cpu_usage_seconds_total"); ok {
+							inputs = append(inputs, mk(rightsizing.CPU, cc.Name, u, key, cc.CPURequestMilli, cc.CPULimitMilli))
+							windowSecs = maxInt64(windowSecs, w)
+						}
+					}
+				case "PersistentVolumeClaim":
+					pvc, ok := cfg.PVC(rec.Namespace, rec.Name)
+					if !ok {
+						continue
+					}
+					if u, w, key, ok := gaugeUsage(in, rec.UID, "kubelet_volume_stats_used_bytes"); ok {
+						_, onsetting := onsetKeys[key]
+						inputs = append(inputs, rightsizing.Input{
+							WorkloadRef: rec.Namespace + "/" + rec.Name, Namespace: rec.Namespace, Name: rec.Name,
+							WorkloadKind: "PVC", Resource: rightsizing.Storage, Usage: u,
+							Request: pvc.RequestedStorageBytes, ActiveOnset: onsetting,
+						})
+						windowSecs = maxInt64(windowSecs, w)
+					}
+				}
+			}
+			rows := mapRightSizingRows(rightsizing.Compute(inputs, rightsizing.DefaultParams(), now))
+			view.Store(vapi.BuildRightSizing(rows, true, windowSecs, now))
+			var rec, up int
+			for _, r := range rows {
+				switch r.Action {
+				case "reclaim":
+					rec++
+				case "resize-up":
+					up++
+				}
+			}
+			if len(rows) > 0 {
+				logger.Info("rightsizing: computed right-sizing advisory (docs/31 §6)",
+					"analyzed", len(rows), "reclaim", rec, "resize_up", up, "window_seconds", windowSecs)
+			}
+		}
+	}
+}
+
+// gaugeUsage returns the finite samples of a GAUGE stream (memory/storage usage) for a CEI
+// UID + metric, plus the window span and the stream key (for the onset-gate join).
+func gaugeUsage(in *observe.Ingestor, uid, metric string) (vals []float64, windowSecs int64, key string, ok bool) {
+	keys := in.StreamsByUIDMetric(uid, metric)
+	if len(keys) == 0 {
+		return nil, 0, "", false
+	}
+	key = keys[0]
+	samples := in.Hot().LastN(key, qss.HotCapacity())
+	if len(samples) == 0 {
+		return nil, 0, key, false
+	}
+	for _, s := range samples {
+		if !math.IsNaN(s.Value) && !math.IsInf(s.Value, 0) {
+			vals = append(vals, s.Value)
+		}
+	}
+	windowSecs = int64(samples[len(samples)-1].At.Sub(samples[0].At) / time.Second)
+	return vals, windowSecs, key, len(vals) > 0
+}
+
+// counterRateUsage builds a per-interval rate series in MILLICORES from a COUNTER stream
+// (container_cpu_usage_seconds_total): reset-aware forward differences (Δvalue/Δtime × 1000),
+// dropping resets and zero-gaps. Deterministic; the producer takes the p95 of this series.
+func counterRateUsage(in *observe.Ingestor, uid, metric string) (vals []float64, windowSecs int64, key string, ok bool) {
+	keys := in.StreamsByUIDMetric(uid, metric)
+	if len(keys) == 0 {
+		return nil, 0, "", false
+	}
+	key = keys[0]
+	samples := in.Hot().LastN(key, qss.HotCapacity()) // oldest-first
+	if len(samples) < 2 {
+		return nil, 0, key, false
+	}
+	for i := 1; i < len(samples); i++ {
+		dv := samples[i].Value - samples[i-1].Value
+		dt := samples[i].At.Sub(samples[i-1].At).Seconds()
+		if dt <= 0 || dv < 0 { // counter reset or zero/negative gap → drop
+			continue
+		}
+		vals = append(vals, dv/dt*1000.0)
+	}
+	windowSecs = int64(samples[len(samples)-1].At.Sub(samples[0].At) / time.Second)
+	return vals, windowSecs, key, len(vals) > 0
+}
+
+// mapRightSizingRows adapts the pure producer's Advice to the api row (main does the mapping
+// so the api never imports internal/rightsizing), in a deterministic order.
+func mapRightSizingRows(advs []rightsizing.Advice) []vapi.RightSizingRow {
+	rows := make([]vapi.RightSizingRow, 0, len(advs))
+	for _, a := range advs {
+		unit := "bytes"
+		if a.Resource == rightsizing.CPU {
+			unit = "millicores"
+		}
+		rows = append(rows, vapi.RightSizingRow{
+			WorkloadRef: a.WorkloadRef, Namespace: a.Namespace, Name: a.Name, WorkloadKind: a.WorkloadKind,
+			Container: a.Container, Resource: string(a.Resource), Unit: unit, QoS: a.QoS,
+			P95: a.P95, CV: a.CV, Samples: a.Samples, Request: a.Request, Limit: a.Limit,
+			Action: string(a.Action), Recommended: a.Recommended, Stable: a.Stable, Reason: a.Reason,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].WorkloadRef != rows[j].WorkloadRef {
+			return rows[i].WorkloadRef < rows[j].WorkloadRef
+		}
+		if rows[i].Container != rows[j].Container {
+			return rows[i].Container < rows[j].Container
+		}
+		return rows[i].Resource < rows[j].Resource
+	})
+	return rows
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func logsLoop(ctx context.Context, logger *slog.Logger, client kubernetes.Interface, logsView *atomic.Pointer[vapi.LogTemplatesView], every time.Duration, tail, maxPods int) {
 	if every <= 0 {
 		every = time.Minute

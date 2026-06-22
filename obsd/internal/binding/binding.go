@@ -39,12 +39,17 @@ type PodConfig struct {
 	SLOs map[string]float64
 }
 
-// ContainerConfig carries one container's declared limits. 0 = not declared.
+// ContainerConfig carries one container's declared resources. 0 = not declared (the
+// resolvability hole, never silently defaulted). Requests are read alongside limits so the
+// off-digest right-sizing advisory (docs/31 §6) can derive the QoS class (Guaranteed ⟺
+// requests==limits on every resource) and compare sustained usage to the declared request.
 type ContainerConfig struct {
 	Name                       string
 	MemLimitBytes              int64
 	CPULimitMilli              int64
 	EphemeralStorageLimitBytes int64 // 0 = not declared
+	MemRequestBytes            int64 // 0 = not declared
+	CPURequestMilli            int64 // 0 = not declared
 }
 
 // NodeConfig carries a node's declared allocatable capacity. 0 = unknown.

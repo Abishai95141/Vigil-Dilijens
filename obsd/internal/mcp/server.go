@@ -83,6 +83,11 @@ type Sources struct {
 	// direction — surface each only as an association/lead; never assign a direction yourself
 	// (that is the operator's authorship, read back via get_authored_relations). nil ⇒ off.
 	CausalHypotheses func() *api.CausalHypothesesView
+	// RightSizing is the off-digest right-sizing ADVISORY (docs/31 §6): per-workload
+	// recommendations comparing sustained measured usage to declared requests/limits, grounded
+	// in MEASURED percentiles + DECLARED config. A recommendation a human acts on — NEVER an
+	// auto-applied action. nil ⇒ the advisory lane is off.
+	RightSizing func() *api.RightSizingView
 	// Findings is the MEASURED persisted finding feed: matched-phenomenon rows including
 	// recently STALE ones ("last seen X ago") that get_insights (now-only) omits — read it for
 	// "what just fired / just cleared". A finding is a MEASURED match, never a cause. nil ⇒ off.
@@ -229,6 +234,7 @@ const (
 	toolTimeline            = "get_timeline"
 	toolOnsets              = "get_onsets"
 	toolCausalHypotheses    = "get_causal_hypotheses"
+	toolRightSizing         = "get_rightsizing_advice"
 	toolFindings            = "get_findings"
 	toolConfig              = "get_config"
 	toolCandidates          = "get_candidates"
@@ -379,6 +385,11 @@ func toolDefs() []toolDef {
 			InputSchema: emptyObjectSchema,
 		},
 		{
+			Name:        toolRightSizing,
+			Description: "ADVISORY (off-digest recommendation, NOT a detection and NOT an action). Per-workload right-sizing: each row compares a workload's SUSTAINED measured usage (p95 over the window) to its OWN declared request/limit, and recommends one of: reclaim (sustained usage well below the request), resize-up (near/over the limit), within-headroom (no change), out-of-scope, or unstable. The percentiles are MEASURED and the request/limit are DECLARED (borrowed normativity); the recommendation is a SUGGESTION a human acts on — Vigil NEVER auto-applies it, never writes to the cluster. Respects QoS: a Guaranteed resource (request==limit) is never advised into Burstable by a reclaim; a BestEffort resource (no request/limit) is out of scope. A churny/ramping/mid-rollout workload yields NO recommendation (honest silence), not a noisy number. Present each as a recommendation to validate against the workload's SLO; never as a measured fact, a cause, or an executed change. Off ⇒ stated honestly (needs --rightsizing-enabled).",
+			InputSchema: emptyObjectSchema,
+		},
+		{
 			Name:        toolFindings,
 			Description: "MEASURED — the persisted finding feed: matched-phenomenon rows over time, INCLUDING recently STALE ones marked 'last seen X ago' (which get_insights, a now-only join, omits). Use it for 'what just fired or just cleared' and to see a finding's first/last-seen span and completeness. A stale row is a past match, not a current state — respect the stale flag; a finding is a MEASURED match, never a cause.",
 			InputSchema: emptyObjectSchema,
@@ -477,6 +488,8 @@ func (s *Server) callTool(params json.RawMessage) (json.RawMessage, *rpcErr) {
 		return toolJSON(orNil(s.src.Onsets), "onset lane not enabled (needs --onset-enabled)"), nil
 	case toolCausalHypotheses:
 		return toolJSON(orNil(s.src.CausalHypotheses), "causal-hypothesis lane not enabled (needs --cohypothesis-enabled)"), nil
+	case toolRightSizing:
+		return toolJSON(orNil(s.src.RightSizing), "right-sizing advisory lane not enabled (needs --rightsizing-enabled)"), nil
 	case toolFindings:
 		return toolJSON(orNil(s.src.Findings), "findings feed not available (needs --db)"), nil
 	case toolConfig:

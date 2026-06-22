@@ -1253,3 +1253,44 @@ export interface GovernancePreviewResult {
   caveat?: string;
   message?: string;
 }
+
+// GET /api/right-sizing — the off-digest right-sizing ADVISORY (docs/31 §6). Per-workload,
+// per-resource recommendations comparing SUSTAINED measured usage (p95 over the window) to the
+// workload's OWN declared request/limit. A recommendation a human acts on — never auto-applied.
+export interface RightSizingSummary {
+  analyzed: number;
+  reclaim: number;
+  resizeUp: number;
+  withinHeadroom: number;
+  outOfScope: number;
+  unstable: number;
+}
+export interface RightSizingRow {
+  workloadRef: string;
+  namespace?: string;
+  name?: string;
+  workloadKind?: string;
+  container?: string;
+  resource: "cpu" | "memory" | "storage";
+  unit: "millicores" | "bytes";
+  qos: string;                  // Guaranteed | Burstable | BestEffort
+  p95: number;                  // MEASURED sustained percentile (native unit)
+  cv: number;                   // MEASURED coefficient of variation over the window
+  samples: number;
+  request?: number;             // DECLARED
+  limit?: number;               // DECLARED
+  action: "reclaim" | "resize-up" | "within-headroom" | "out-of-scope" | "unstable";
+  recommended?: number;         // ADVISORY suggestion (request for reclaim, limit for resize-up)
+  stable: boolean;
+  reason: string;
+}
+export interface RightSizingView {
+  generatedAt: string;
+  class: string;
+  enabled: boolean;
+  windowSeconds: number;        // the EFFECTIVE sustained window the percentile covered (hot-store-limited)
+  rules: string;                // the DECLARED advisory thresholds, surfaced so the operator sees the fixed rules
+  note: string;
+  summary: RightSizingSummary;
+  advisories?: RightSizingRow[];
+}

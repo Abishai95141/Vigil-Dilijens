@@ -126,6 +126,13 @@ func containerLimits(c corev1.Container) binding.ContainerConfig {
 	if q, ok := c.Resources.Limits[corev1.ResourceEphemeralStorage]; ok {
 		cc.EphemeralStorageLimitBytes = q.Value()
 	}
+	// Requests (docs/31 §6 right-sizing): the QoS class + the reclaim bar read these.
+	if q, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+		cc.MemRequestBytes = q.Value()
+	}
+	if q, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+		cc.CPURequestMilli = q.MilliValue()
+	}
 	return cc
 }
 
