@@ -1,0 +1,237 @@
+# PSI pressure-stall saturation — authored overlay v1 (doc 02 §3.5, doc 04 §3.3,
+# doc 07 §3.1; the docs/31 Step-3 adoption from the ABB_Accelerator_Proto competitor).
+#
+# Wires a previously HANGING signal class into the deterministic path: cAdvisor's
+# Pressure-Stall-Information counters (container_pressure_{cpu,memory,io}_*_seconds_total)
+# are emitted on /metrics/cadvisor — which obsd ALREADY scrapes (FetchCAdvisor) — but
+# were referenced by NO signal, NO rule, NO phenomenon: ingested and inert. This overlay
+# mints the signals and authors three entity-local SATURATION phenomena, the direct,
+# low-noise saturation signal the competitor exploits and Vigil today only infers
+# indirectly (throttle counters, OOM events).
+#
+# PSI semantics (Linux kernel cgroup-v2 pressure accounting, seconds-of-stall counters):
+#   _waiting_ = PSI "some" (>=1 task stalled on the resource) — used for CPU (runqueue
+#               delay; CPU has no meaningful "full").
+#   _stalled_ = PSI "full" (ALL non-idle tasks stalled) — the harsher, lower-noise signal;
+#               used for MEMORY (reclaim thrash, an OOM precursor) and IO (storage stall).
+#
+# BORROWED NORMATIVITY: PSI has NO customer-declared Kubernetes limit (it is a kernel
+# saturation reading, not a spec field), so each bar is a FLAGGED ontology default —
+# never learned, never a guessed customer config — exactly like THR_CONTAINER_OOM_RATE
+# (>=1) and THR_CONTAINER_RESTARTS_RATE (>3). The bar is a rate-of-change guard: the
+# WindowDelta (stall-seconds accrued over the observation rate-window, reset-aware) >= the
+# declared seconds floor. The effective window is observation.rate_window = 5m (300s), so
+# each floor is expressed as fraction x 300s and documented as such in the rationale.
+#
+# CHARTER: container_pressure_* are monotonic counters from the already-trusted cAdvisor
+# source -> borrowed-normativity clean, IN-DIGEST legitimate (rate() of a monotonic counter
+# is deterministic -> replay-byte-identical). No new kind, no new endpoint, no agent write.
+#
+# ZERO-VALUE TRAP (docs/31 §2.5 / R4-z, k8s #136333): on a cluster where the PSI feature is
+# on but the kernel lacks real PSI, the family is emitted as STATIC ZERO and a naive rate
+# bar reads 0 < floor = "healthy" (a false-confidence NO-DATA, never a false alarm — the bar
+# cannot FIRE on zeros). The proper fix is a blindspots / silence-ledger floor ("PSI present
+# but all-zero over N hours => NO-DATA"); the rule-eligibility vocabulary is CLOSED
+# (graph/overlay.go knownEligibilityPredicates) so it is NOT expressible as an
+# eligibility_config_path here. This is a documented Step-3 FOLLOW-UP. It is INACTIVE on the
+# target AWS substrate, whose kernel has CONFIG_PSI=y with 450 live MOVING series (docs/32).
+#
+# BEHAVIOURAL governance class (doc 12): NEW signals + phenomena + flagged-default bars bump
+# the graph hash (v0.13.0 -> v0.14.0). DETECTION surfaces immediately (non-gating); any
+# forecast WARNING for this rate-guard class is forecast-ineligible by construction
+# (ReasonRateGuardBar) — these are crossing guards, not forecastable levels.
+overlay: psi-pressure
+version: 1
+author: vigil-engineering
+status: proposed-v1 (docs/31 Step 3 — PSI container_pressure_* wired to flagged-default rate-guard saturation bars)
+
+# The authored Signal nodes — cAdvisor PSI counters, the convention of the existing
+# container_* cAdvisor signals (entity Container, modality Metric, tools [cadvisor]). The
+# 8-hex suffix is crc32(metric-name) for a stable, collision-free id.
+signals:
+  - id: SIG_container_pressure_cpu_waiting_062cfcd1
+    name: Container CPU pressure (PSI some, waiting)
+    data_type: Counter
+    entity: Container
+    modality: Metric
+    tools:
+      - cadvisor
+    source: cAdvisor
+    collection_method: Prometheus scrape on /metrics/cadvisor
+    notes: >-
+      container_pressure_cpu_waiting_seconds_total — cumulative seconds at least one task in
+      the container's cgroup waited on CPU (PSI "some"). The runqueue-saturation reading;
+      CPU has no meaningful "full" variant, so "waiting" is the CPU pressure signal.
+  - id: SIG_container_pressure_memory_stalled_79b19492
+    name: Container memory pressure (PSI full, stalled)
+    data_type: Counter
+    entity: Container
+    modality: Metric
+    tools:
+      - cadvisor
+    source: cAdvisor
+    collection_method: Prometheus scrape on /metrics/cadvisor
+    notes: >-
+      container_pressure_memory_stalled_seconds_total — cumulative seconds ALL non-idle tasks
+      in the cgroup stalled on memory (PSI "full"). Sustained memory-full pressure is reclaim
+      thrash and a direct OOM precursor; near-zero on a healthy container.
+  - id: SIG_container_pressure_io_stalled_b022af54
+    name: Container I/O pressure (PSI full, stalled)
+    data_type: Counter
+    entity: Container
+    modality: Metric
+    tools:
+      - cadvisor
+    source: cAdvisor
+    collection_method: Prometheus scrape on /metrics/cadvisor
+    notes: >-
+      container_pressure_io_stalled_seconds_total — cumulative seconds ALL non-idle tasks in
+      the cgroup stalled on block I/O (PSI "full"). Sustained I/O-full pressure is genuine
+      storage saturation (the disk cannot keep up), distinct from a benign write burst.
+
+phenomena:
+  - id: PHEN_CPU_PRESSURE_SATURATION
+    label: CPU pressure saturation (PSI)
+    signals:
+      - ["container_pressure_cpu_waiting_seconds_total", "required", "T0+", "sustained CPU PSI 'some' — the container's tasks spend a large fraction of the window waiting on CPU"]
+    notes: >-
+      Entity-local: a container whose cgroup CPU PSI "some" (waiting) is sustained high over
+      the window is CPU-saturated at the kernel's own accounting — a direct saturation signal
+      that today Vigil infers only indirectly from throttle counters. Single required member;
+      absent corroboration is NAMED, never fabricated (degrade-never-fabricate, doc 07).
+  - id: PHEN_MEMORY_PRESSURE_SATURATION
+    label: Memory pressure saturation (PSI)
+    signals:
+      - ["container_pressure_memory_stalled_seconds_total", "required", "T0+", "sustained memory PSI 'full' — all tasks stalling on memory reclaim, the OOM precursor"]
+    notes: >-
+      Entity-local: sustained memory PSI "full" (every non-idle task stalled on memory) is
+      reclaim thrash that precedes an OOM kill. The kernel-pressure analogue of working-set
+      approaching the limit, earlier and noise-resistant. Authored downstream-related to
+      PHEN_OOM_KILL_CGROUP (the curated ontology order), surfaced verbatim, never inferred.
+  - id: PHEN_IO_PRESSURE_SATURATION
+    label: I/O pressure saturation (PSI)
+    signals:
+      - ["container_pressure_io_stalled_seconds_total", "required", "T0+", "sustained I/O PSI 'full' — all tasks stalling on block I/O, genuine storage saturation"]
+    notes: >-
+      Entity-local: sustained I/O PSI "full" (every non-idle task blocked on block I/O) is
+      real storage saturation, distinguishable from a benign write burst by the sustained
+      window-delta requirement. Single required member; corroboration (disk-IO rate, volume
+      stats) is NAMED-absent here, not fabricated.
+
+members:
+  PHEN_CPU_PRESSURE_SATURATION:
+    - signal: SIG_container_pressure_cpu_waiting_062cfcd1
+      role: required
+      temporal: T0+
+      why: sustained CPU PSI "some" is the entity-local observable that the container is CPU-saturated
+  PHEN_MEMORY_PRESSURE_SATURATION:
+    - signal: SIG_container_pressure_memory_stalled_79b19492
+      role: required
+      temporal: T0+
+      why: sustained memory PSI "full" is the entity-local reclaim-thrash observable preceding an OOM
+  PHEN_IO_PRESSURE_SATURATION:
+    - signal: SIG_container_pressure_io_stalled_b022af54
+      role: required
+      temporal: T0+
+      why: sustained I/O PSI "full" is the entity-local observable that block storage cannot keep up
+
+spans:
+  PHEN_CPU_PRESSURE_SATURATION:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: The PSI counter is observed AT the container's own cgroup vs an absolute pressure floor — no topology walk joins it. Entity-local.
+  PHEN_MEMORY_PRESSURE_SATURATION:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: The PSI counter is observed AT the container's own cgroup vs an absolute pressure floor — no topology walk joins it. Entity-local.
+  PHEN_IO_PRESSURE_SATURATION:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: The PSI counter is observed AT the container's own cgroup vs an absolute pressure floor — no topology walk joins it. Entity-local.
+
+rules:
+  - id: THR_CONTAINER_PSI_CPU_WAITING_RATE
+    signal: SIG_container_pressure_cpu_waiting_062cfcd1
+    metric: container_pressure_cpu_waiting_seconds_total
+    kind: rate-of-change
+    default: 150
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      Sustained CPU-pressure guard: >=150 stall-seconds of PSI "some" accrued in the 5m rate
+      window (= ~50% of wall-clock spent with a task waiting on CPU). PSI has no
+      customer-declared limit, so this is a FLAGGED conservative ontology default (CPU "some"
+      is the noisiest PSI family — set high to demand genuine sustained saturation, not a
+      transient burst), mirroring the flagged THR_CONTAINER_*_RATE guards. Never learned.
+  - id: THR_CONTAINER_PSI_MEMORY_STALLED_RATE
+    signal: SIG_container_pressure_memory_stalled_79b19492
+    metric: container_pressure_memory_stalled_seconds_total
+    kind: rate-of-change
+    default: 30
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      Sustained memory-pressure guard: >=30 stall-seconds of PSI "full" in the 5m window
+      (= ~10% of wall-clock with EVERY task stalled on memory reclaim). Memory "full" pressure
+      is near-zero on a healthy container, so 10% sustained is already serious reclaim thrash
+      (an OOM precursor) — a FLAGGED conservative ontology default, never learned.
+  - id: THR_CONTAINER_PSI_IO_STALLED_RATE
+    signal: SIG_container_pressure_io_stalled_b022af54
+    metric: container_pressure_io_stalled_seconds_total
+    kind: rate-of-change
+    default: 60
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      Sustained I/O-pressure guard: >=60 stall-seconds of PSI "full" in the 5m window
+      (= ~20% of wall-clock with EVERY task blocked on block I/O). The sustained window-delta
+      distinguishes genuine storage saturation from a benign write burst — a FLAGGED
+      conservative ontology default, never learned.
+
+checks:
+  PHEN_CPU_PRESSURE_SATURATION:
+    - signal: SIG_container_pressure_cpu_waiting_062cfcd1
+      metric: container_pressure_cpu_waiting_seconds_total
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: >-
+        >=150 CPU-PSI-"some" stall-seconds in the 5m window (THR_CONTAINER_PSI_CPU_WAITING_RATE,
+        flagged default). Single required member; no corroborating member is authored on this
+        signal set — surfaced as a single-member DEGRADED match, named, never fabricated. All-zero
+        PSI is the §2.5 NO-DATA portability case (blindspots follow-up), not "healthy".
+  PHEN_MEMORY_PRESSURE_SATURATION:
+    - signal: SIG_container_pressure_memory_stalled_79b19492
+      metric: container_pressure_memory_stalled_seconds_total
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: >-
+        >=30 memory-PSI-"full" stall-seconds in the 5m window (THR_CONTAINER_PSI_MEMORY_STALLED_RATE,
+        flagged default — reclaim thrash, an OOM precursor). Single required member; absent
+        corroboration named, never fabricated.
+  PHEN_IO_PRESSURE_SATURATION:
+    - signal: SIG_container_pressure_io_stalled_b022af54
+      metric: container_pressure_io_stalled_seconds_total
+      facet: rate-guard
+      expect: breached
+      on: anchor
+      note: >-
+        >=60 I/O-PSI-"full" stall-seconds in the 5m window (THR_CONTAINER_PSI_IO_STALLED_RATE,
+        flagged default — genuine storage saturation). Single required member; absent
+        corroboration named, never fabricated.
+
+relations:
+  - src: PHEN_MEMORY_PRESSURE_SATURATION
+    dst: PHEN_OOM_KILL_CGROUP
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      Per the curated ontology: sustained memory PSI "full" (the cgroup spending the window
+      stalled on memory reclaim) is the kernel-pressure precursor to a cgroup OOM kill — both
+      anchor on the SAME container (entity-local to entity-local, topologically related), so
+      the relation is valid for the cascade walker. Surfaced verbatim as the AUTHORED why,
+      never an inferred cause; the human authors any direction beyond this curated edge.

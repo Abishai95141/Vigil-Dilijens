@@ -33,6 +33,14 @@ type PlatformFacts struct {
 	// ToolPresent allows explicit overrides/seeds (tests, future config); the
 	// detector fills it for every Tool node id.
 	ToolPresent map[string]bool
+
+	// KubeletMetricsScraped reports whether the kubelet's OWN /metrics endpoint is
+	// being scraped (the --kubelet-metrics-enabled lane, docs/31 Step 2b). When true,
+	// Metric signals whose only emitting tool is the kubelet (e.g. kubelet_volume_stats_*)
+	// are NO LONGER auto-out-of-scope — they are genuinely obtainable. Default false:
+	// the lane is off, so the unscraped-endpoint override applies exactly as before
+	// (byte-identical). Set from the runtime flag where GateSignals is called.
+	KubeletMetricsScraped bool
 }
 
 // Obtainability states (the complete set).
@@ -409,6 +417,13 @@ func GateSignals(g *graph.Graph, facts PlatformFacts) *AvailabilityReport {
 			if av.State == Obtainable && scrapedMetricModalities[s.Modality] {
 				allUnscraped, reason := true, ""
 				for _, tool := range s.Tools {
+					// The kubelet's own /metrics IS scraped when the docs/31 Step-2b lane is
+					// on (--kubelet-metrics-enabled) → its metrics (kubelet_volume_stats_* …)
+					// are no longer unscraped. Off ⇒ this never triggers (byte-identical).
+					if tool == "kubelet" && facts.KubeletMetricsScraped {
+						allUnscraped = false
+						break
+					}
 					if r := unscrapedEndpointTools[tool]; r != "" {
 						reason = r
 					} else {

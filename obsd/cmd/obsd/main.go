@@ -118,6 +118,7 @@ func run(args []string, stdout, stderr *os.File) error {
 		refereeOn           = fs.Bool("referee-enabled", false, "v3 T-D: expose the validate_claim referee (MCP tool + /api/validate-claim) — checks an external claim against the charter + authored graph; ADVISORY, never blocks. OFF by default; off = byte-identical.")
 		departureOn         = fs.Bool("departure-enabled", false, "doc 15 cap. C: the band-departure anomaly lane — a MEASURED sample leaving its own PROJECTED forecast band (classed PROJECTED, OFF the digest, never feeds governance). OFF by default; off = byte-identical. Gate-pending: surfaced only after a live step capture.")
 		ksmEnabled          = fs.Bool("ksm-enabled", false, "G2 telemetry lane: scrape kube-state-metrics /metrics and ingest its kube_* object-state gauges as CEI streams in the SAME gated scrape cycle as cAdvisor (IN-digest, whole-cycle = the replay guarantee). OFF by default; off = byte-identical (no KSM scrape => no kube_* streams => the released v4 KSM checks stay unobservable, the per-tick digest is unchanged). The detect-conditions-v4 checks are part of the RELEASED graph (governance); this flag gates only the scrape that makes them observable.")
+		kubeletMetricsOn    = fs.Bool("kubelet-metrics-enabled", false, "docs/31 Step 2b: scrape the kubelet's OWN /metrics endpoint (nodes/<n>/proxy/metrics, distinct from /metrics/cadvisor) in the SAME gated scrape cycle as cAdvisor, and ingest kubelet_volume_stats_* (per-PVC fill: used/available/capacity) as PVC-CEI streams. OFF by default; off = byte-identical (no kubelet-/metrics scrape => no volume-stats streams => the PVC-fill bar stays unobservable, the per-tick digest is unchanged). The pvc-filling overlay's bar is in the RELEASED graph (governance); this flag gates only the scrape + the obtainability that make it observable.")
 		dgxEnabled          = fs.Bool("dgx-enabled", false, "doc 20 P0: stand up the Dynamic Graph eXtension candidate staging store (candidates.db) + the read-only /api/candidates surface. OFF by default; off = byte-identical (the store is never opened; the deterministic path never reads candidates — enforced by the firewall tests). No agent in P0; this only stands up the firewalled store + surface.")
 		histQuantiles       = fs.Bool("histogram-quantiles", false, "doc 20 P0.5: derive p50/p95/p99 GAUGE streams from HISTOGRAM exposition families at ingest (Prometheus bucket interpolation) instead of skipping them — unlocks p95/p99 latency for every exporter. OFF by default; off = byte-identical (histograms stay skipped + counted). MEASURED arithmetic; the derived streams ride the SAME CEI/normalize/replay path as scraped gauges.")
 		assocEnabled        = fs.Bool("assoc-enabled", false, "doc 20 P2: compute the MEASURED metric-dependency graph (windowed correlation over hot series, surfaced at /api/dependency as undirected associated-with edges — never causal). OFF by default; off = byte-identical (no association computed). Off-digest; barred from detection + forecasting (enforced by the assoc import-firewall test).")
@@ -213,7 +214,7 @@ func run(args []string, stdout, stderr *os.File) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn)
+	return runIdentity(ctx, logger, p, *kubeconfig, *healthAddr, stdout, ontologyGraph, *storeDir, *dbPath, *apiEnabled, *dumpBindings, *flowEnabled, *flowInterval, *mcpEnabled, *incidentMem, *eventsOn, *eventsConds, *eventsInt, *refereeOn, *appMetrics, *departureOn, *ksmEnabled, *kubeletMetricsOn, *dgxEnabled, *histQuantiles, *assocEnabled, *dgxAgentEnabled, *logsEnabled, *auditEnabled, *auditLogPath, *tracesEnabled, *tracesPath, *forecastRoleSeries, *onsetEnabled, *coHypEnabled, *causalDiscoveryPath, *alertsOn)
 }
 
 // mcpAdvisoryGatePassed gates whether a register-clean ADVISORY (the MCP 4th class)
@@ -288,7 +289,7 @@ func cleanPhenLabel(label string) string {
 
 // runIdentity wires and runs the identity & correlation layer against the cluster,
 // serving health/metrics and printing a live entity inventory + join-audit verdict.
-func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled bool) error {
+func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kubeconfig, healthAddr string, out io.Writer, ontologyGraph *graph.Graph, storeDir, dbPath string, apiEnabled bool, dumpBindings string, flowEnabled bool, flowInterval time.Duration, mcpEnabled, incidentMemory bool, eventsEnabled bool, eventsCondsPath string, eventsInterval time.Duration, refereeEnabled, appMetricsEnabled, departureEnabled, ksmEnabled, kubeletMetricsEnabled, dgxEnabled, histogramQuantiles, assocEnabled, dgxAgentEnabled, logsEnabled, auditEnabled bool, auditLogPath string, tracesEnabled bool, tracesPath string, forecastRoleSeries, onsetEnabled, coHypEnabled bool, causalDiscoveryPath string, alertsEnabled bool) error {
 	client, err := kube.NewClientset(kubeconfig)
 	if err != nil {
 		return fmt.Errorf("kubernetes client: %w", err)
@@ -731,7 +732,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			"discovery", "kube-state-metrics workload", "ingest", "kube_* object-state gauges -> CEI streams (in-digest)")
 	}
 	go scrapeLoop(ctx, logger, &gate, ingestor, proxyFetcher, watcher, p.Scrape.Interval.Duration(),
-		appMetricsEnabled, proxyFetcher, appTargets, ksmEnabled, ksmTargets)
+		appMetricsEnabled, proxyFetcher, appTargets, ksmEnabled, ksmTargets, kubeletMetricsEnabled)
 
 	// v2 flow lane (doc 15): observe conntrack from the per-node agent and assert
 	// observed-flow edges into the same EdgeStore the tick snapshots. Off by default;
@@ -1152,7 +1153,7 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 	}
 	go serveHealth(ctx, logger, ln, registry, watcher, providers, mcpHandler)
 	go inventoryLoop(ctx, out, logger, &gate, store, edges, watcher, clusterID, graphVersion, graphRelease, p.Observation.EvaluationTick.Duration(),
-		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings},
+		&binder{graph: ontologyGraph, client: client, logger: logger, ingestor: ingestor, fpParams: fpParams, dumpPath: dumpBindings, kubeletMetricsScraped: kubeletMetricsEnabled},
 		capture, &coverage, &silenceView, &unexpView, &insightsView, &topoView, findingsStore, budgets,
 		fcIn, p.Selection.TierBBudgetPerCycle, &warningsView, flowEnabled, flowRel, &crossSvcView, &projectedCrossSvcView, &transitiveChainView, &projectedTransitiveView,
 		incidentMemory, p.Incident.ResolveGap.Duration(), p.Incident.WindowBucket.Duration(),
@@ -3581,7 +3582,7 @@ func mapCandidateRows(cs []candidate.Candidate) []vapi.CandidateRow {
 	return out
 }
 
-func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration, appEnabled bool, podFetcher observe.PodFetcher, appTargets func(context.Context) []observe.PodTarget, ksmEnabled bool, ksmTargets func(context.Context) []observe.PodTarget) {
+func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in *observe.Ingestor, f observe.Fetcher, watcher *identity.Watcher, every time.Duration, appEnabled bool, podFetcher observe.PodFetcher, appTargets func(context.Context) []observe.PodTarget, ksmEnabled bool, ksmTargets func(context.Context) []observe.PodTarget, kubeletMetricsEnabled bool) {
 	if every <= 0 {
 		every = 15 * time.Second
 	}
@@ -3622,10 +3623,18 @@ func scrapeLoop(ctx context.Context, logger *slog.Logger, gate *sync.RWMutex, in
 				payloads = append(payloads, observe.FetchKSM(ctx, podFetcher, tg)...)
 			}
 		}
+		// kubelet /metrics lane (docs/31 Step 2b): the kubelet's OWN /metrics on every
+		// node, in the SAME gated cycle, for kubelet_volume_stats_* (per-PVC fill).
+		// Only when the flag is on; off ⇒ this block never runs and obsd is byte-identical.
+		kubeletCount := 0
+		if kubeletMetricsEnabled && len(names) > 0 {
+			payloads = append(payloads, observe.FetchKubeletMetrics(ctx, f, names)...)
+			kubeletCount = len(names)
+		}
 		gate.Lock()
 		sum := in.IngestPayloads(payloads)
 		gate.Unlock()
-		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d app:%d ksm:%d", len(names), len(neNodes), appCount, ksmCount),
+		logger.Info("observation ingest", "families", fmt.Sprintf("cadvisor:%d node-exporter:%d app:%d ksm:%d kubelet:%d", len(names), len(neNodes), appCount, ksmCount, kubeletCount),
 			"summary", sum.String(), "streams", in.Hot().Streams())
 	}
 	if waitForSync(ctx, watcher, every) {

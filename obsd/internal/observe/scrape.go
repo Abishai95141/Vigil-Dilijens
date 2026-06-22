@@ -160,6 +160,23 @@ func FetchNodeExporter(ctx context.Context, f Fetcher, nodes []string) []NodePay
 	return out
 }
 
+// FetchKubeletMetrics fetches the kubelet's OWN /metrics endpoint (docs/31 Step 2b) —
+// the sibling of FetchCAdvisor, hitting "metrics" instead of "metrics/cadvisor" on the
+// SAME kubelet port via the API-server node proxy (nodes/<name>/proxy/metrics). This is
+// the endpoint that carries kubelet_volume_stats_* (per-PVC fill), which cAdvisor does
+// not emit. The caller gates this behind --kubelet-metrics-enabled, so an un-enabled
+// cluster never fetches it (byte-identical replay).
+func FetchKubeletMetrics(ctx context.Context, f Fetcher, nodes []string) []NodePayload {
+	sorted := append([]string(nil), nodes...)
+	sort.Strings(sorted)
+	out := make([]NodePayload, 0, len(sorted))
+	for _, node := range sorted {
+		body, receivedAt, err := f.NodeMetrics(ctx, node, "metrics")
+		out = append(out, NodePayload{Node: node, Family: identity.FamilyKubelet, Body: body, ReceivedAt: receivedAt, Err: err})
+	}
+	return out
+}
+
 // PodFetcher fetches one pod's /metrics endpoint through the API server's
 // pods/proxy subresource (doc 15 cap. A — the sibling of nodes/proxy). Separate
 // from Fetcher so node-scoped fixtures stay unaffected.

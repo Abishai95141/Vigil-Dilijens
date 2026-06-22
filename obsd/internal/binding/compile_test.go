@@ -24,8 +24,8 @@ func loadGraph(t *testing.T) *graph.Graph {
 	if err != nil {
 		t.Fatalf("LoadWithOverlays: %v", err)
 	}
-	if len(g.Rules) != 17 {
-		t.Fatalf("rules = %d, want 17 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE)", len(g.Rules))
+	if len(g.Rules) != 21 {
+		t.Fatalf("rules = %d, want 21 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE)", len(g.Rules))
 	}
 	return g
 }
@@ -183,13 +183,15 @@ func TestResolvabilityHoleListedNeverSilent(t *testing.T) {
 		t.Errorf("unbounded list must name the payment role:\n%s", joined)
 	}
 
-	// Resolvability metric: config-eligible pairs = mem(3) + cpu(3) + node(1) + pvc(1) = 8;
-	// config-bound = web x2 x2rules + node + pvc = 6.
-	if res.Coverage.ConfigEligible != 8 || res.Coverage.ConfigBound != 6 {
-		t.Errorf("eligible/bound = %d/%d, want 8/6", res.Coverage.ConfigEligible, res.Coverage.ConfigBound)
+	// Resolvability metric: config-eligible pairs = mem(3) + cpu(3) + node(1) + pvc(2) = 9;
+	// config-bound = web x2 x2rules + node + pvc(2) = 7. v0.15.0 (pvc-filling-v1) added the
+	// THR_PVC_USED_VS_REQUESTED_STORAGE config-relative PVC bar — a second resolvable PVC pair
+	// on the fixture's declared-request PVC (8/6 -> 9/7, resolvability 0.75 -> 7/9).
+	if res.Coverage.ConfigEligible != 9 || res.Coverage.ConfigBound != 7 {
+		t.Errorf("eligible/bound = %d/%d, want 9/7", res.Coverage.ConfigEligible, res.Coverage.ConfigBound)
 	}
-	if res.Coverage.Resolvability != 0.75 {
-		t.Errorf("resolvability = %v, want 0.75", res.Coverage.Resolvability)
+	if res.Coverage.Resolvability != 7.0/9.0 {
+		t.Errorf("resolvability = %v, want %v", res.Coverage.Resolvability, 7.0/9.0)
 	}
 }
 

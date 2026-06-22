@@ -30,6 +30,11 @@ const (
 	// queue, freshness — bound to CUSTOMER-DECLARED SLO bars (borrowed normativity).
 	// Identity is the scrape-target pod, never the series labels.
 	FamilyApp Family = "app"
+	// FamilyKubelet is the kubelet's OWN /metrics endpoint (docs/31 Step 2b) — distinct
+	// from FamilyCAdvisor (/metrics/cadvisor). It carries kubelet_volume_stats_* (per-PVC
+	// fill: used/available/capacity), which ride here and NOT on /metrics/cadvisor.
+	// Off by default (--kubelet-metrics-enabled); off = byte-identical (lane never scrapes).
+	FamilyKubelet Family = "kubelet"
 
 	// OTel semconv is deliberately the FOURTH lane, added in Phase 0b–1 after the
 	// first maps work, to prove the machinery is not single-dialect-shaped
@@ -43,6 +48,7 @@ var mapVersions = map[Family]string{
 	FamilyKSM:          "0.1.0",
 	FamilyNodeExporter: "0.1.0",
 	FamilyApp:          "0.1.0",
+	FamilyKubelet:      "0.1.0",
 }
 
 // MapVersion returns the current normalization-map version for a family.
@@ -192,8 +198,33 @@ func (n *Normalizer) Normalize(s Series) Result {
 		return n.nodeExporter(s)
 	case FamilyApp:
 		return n.app(s)
+	case FamilyKubelet:
+		return n.kubeletMetrics(s)
 	default:
 		return n.quarantine(s.Family, ReasonUnknownFamily)
+	}
+}
+
+// kubeletMetrics implements the kubelet's-own-/metrics dialect (docs/31 Step 2b).
+// kubelet_volume_stats_* carry {namespace, persistentvolumeclaim} → the PVC instance
+// CEI via the SAME time-aware lookup the KSM PVC branch uses, so they join the key the
+// mounts edge (a pod mounts its PVC) already uses. A claim not in the control-plane view
+// quarantines — never a guessed identity. Other kubelet /metrics families (pleg,
+// runtime_operations, rest_client…) are not yet mapped here; they quarantine, stated.
+func (n *Normalizer) kubeletMetrics(s Series) Result {
+	switch {
+	case strings.HasPrefix(s.Metric, "kubelet_volume_stats_"):
+		ns, name := s.Labels["namespace"], s.Labels["persistentvolumeclaim"]
+		if ns == "" || name == "" {
+			return n.quarantine(FamilyKubelet, ReasonMissingLabels)
+		}
+		uid, ok := n.lookup.PVCUID(ns, name, s.joinTime())
+		if !ok {
+			return n.quarantine(FamilyKubelet, ReasonUnknownPVC)
+		}
+		return n.pvc(FamilyKubelet, ns, name, uid, s.At)
+	default:
+		return n.quarantine(FamilyKubelet, ReasonUnmappedMetric)
 	}
 }
 

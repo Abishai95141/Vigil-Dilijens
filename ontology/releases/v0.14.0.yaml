@@ -1,0 +1,59 @@
+# Graph release v0.14.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.14.0
+graph_version: "sha256:bdbbda04af26b00331cc88735abf5f8b7e99ee53f834dd6c7ec6f87c1de3d71e"
+created: "2026-06-22"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - corrections-v1.yaml
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - detection-status-v1.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - psi-pressure-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Adds the PSI (Pressure-Stall-Information) saturation lane — the docs/31 Step-3 adoption
+  from the ABB_Accelerator_Proto competitor, the first of its four genuine telemetry edges.
+  The new overlay psi-pressure-v1.yaml wires a previously HANGING signal class: cAdvisor's
+  container_pressure_{cpu,memory,io}_*_seconds_total counters are emitted on /metrics/cadvisor
+  (already scraped by FetchCAdvisor) but were referenced by no signal, rule, or phenomenon —
+  ingested and inert. The overlay mints three Signal nodes (CPU "some"/waiting,
+  memory "full"/stalled, IO "full"/stalled) and authors three NEW entity-local CorrelationGroup
+  phenomena: PHEN_CPU_PRESSURE_SATURATION, PHEN_MEMORY_PRESSURE_SATURATION,
+  PHEN_IO_PRESSURE_SATURATION (41→44 phenomena). Each carries a rate-of-change rate-guard bar
+  (THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE) — the WindowDelta of stall
+  seconds over the 5m observation rate-window vs a FLAGGED conservative ontology default
+  (CPU 150s/≈50%, memory 30s/≈10%, IO 60s/≈20%); PSI has no customer-declared limit, so the bar
+  is a flagged default exactly like THR_CONTAINER_OOM_RATE / THR_CONTAINER_RESTARTS_RATE, never
+  learned. One authored cascade relation: PHEN_MEMORY_PRESSURE_SATURATION→PHEN_OOM_KILL_CGROUP
+  (downstream; both anchor the same Container, so topologically valid), surfaced verbatim as the
+  curated why, never an inferred direction. CHARTER-CLEAN: container_pressure_* are monotonic
+  counters from the already-trusted cAdvisor source → borrowed-normativity clean, IN-DIGEST
+  legitimate (rate() of a monotonic counter is deterministic → replay-byte-identical); no new
+  node kind, no new endpoint, no agent write path; the bars are forecast-ineligible by
+  construction (rate-guards, ReasonRateGuardBar). BEHAVIOURAL governance class (doc 12): new
+  signals + phenomena + flagged-default bars bump the hash v0.13.0→v0.14.0; the base KG and every
+  prior release stay byte-identical and loadable. KNOWN FOLLOW-UP (docs/31 §2.5 / R4-z): the
+  PSI zero-value trap (a kernel-PSI-less cluster emitting static-zero series reads as "healthy",
+  a false-confidence NO-DATA — never a false alarm, the bar cannot fire on zeros) needs a
+  blindspots/silence-ledger NO-DATA floor; it is NOT expressible as a rule eligibility (the
+  eligibility predicate vocabulary is closed) and is deferred. It is INACTIVE on the AWS target
+  substrate, whose kernel has CONFIG_PSI=y with 450 live moving series.

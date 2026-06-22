@@ -23,8 +23,8 @@ func loadKGWithOverlays(t *testing.T) *Graph {
 // their traversal edge types — the doc 14 A14 gap, closed by authored content.
 func TestOverlaysCloseTheSpanGap(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Phenomena) != 41 {
-		t.Fatalf("phenomena = %d, want 41 (+ PHEN_DISK_FILLING, disk-filling-v1 / v0.9.0)", len(g.Phenomena))
+	if len(g.Phenomena) != 45 {
+		t.Fatalf("phenomena = %d, want 45 (+ 3 PSI saturation, psi-pressure-v1 / v0.14.0; + 1 PHEN_PVC_FILLING, pvc-filling-v1 / v0.15.0)", len(g.Phenomena))
 	}
 	counts := map[string]int{}
 	for id, p := range g.Phenomena {
@@ -40,12 +40,14 @@ func TestOverlaysCloseTheSpanGap(t *testing.T) {
 			t.Errorf("%s: entity-local with traversal edges %v", id, p.TraversalEdgeTypes)
 		}
 	}
-	// The authored distribution (18 + 17 + 5 = 40) — pinned so an accidental edit
+	// The authored distribution (22 + 17 + 5 = 44) — pinned so an accidental edit
 	// to the overlay shows up as a deliberate diff here too. v0.4.0 (doc 15 Phase C)
 	// added PHEN_UPSTREAM_DEGRADATION (entity-local) + PHEN_DOWNSTREAM_IMPACT
-	// (first-order over the new "flow" traversal edge).
-	if counts[SpanEntityLocal] != 19 || counts[SpanFirstOrder] != 17 || counts[SpanSecondOrder] != 5 {
-		t.Errorf("span distribution = %v, want entity-local:19 first-order:17 second-order:5", counts)
+	// (first-order over the new "flow" traversal edge). v0.14.0 (psi-pressure-v1)
+	// added 3 entity-local PSI saturation phenomena (19 -> 22); v0.15.0 (pvc-filling-v1)
+	// added PHEN_PVC_FILLING (entity-local, 22 -> 23).
+	if counts[SpanEntityLocal] != 23 || counts[SpanFirstOrder] != 17 || counts[SpanSecondOrder] != 5 {
+		t.Errorf("span distribution = %v, want entity-local:23 first-order:17 second-order:5", counts)
 	}
 }
 
@@ -67,8 +69,8 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 17 {
-		t.Fatalf("rules = %d, want 17 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE)", len(g.Rules))
+	if len(g.Rules) != 21 {
+		t.Fatalf("rules = %d, want 21 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
 		if g.Rules[i-1].ID >= g.Rules[i].ID {
@@ -131,8 +133,10 @@ func TestOverlayVersionPinning(t *testing.T) {
 	// hatch acknowledging the 6 metric-matcher-dark phenomena), so 19.
 	// v0.13.0 (CORRECTIONS): + corrections-v1 (governed overrides: 2 non-causal probe-cascade
 	// triggers downgraded, the EQG_OOM_EVENTS false-equivalence pattern removed), so 20.
-	if len(merged.Overlays) != 20 {
-		t.Fatalf("overlay provenance records = %d, want 20 (… + init-container-failure-v1, detection-status-v1, corrections-v1)", len(merged.Overlays))
+	// v0.14.0 (PSI): + psi-pressure-v1 (the PSI saturation lane), so 21.
+	// v0.15.0 (PVC-fill): + pvc-filling-v1 (the per-PVC fill lane), so 22.
+	if len(merged.Overlays) != 22 {
+		t.Fatalf("overlay provenance records = %d, want 22 (… + init-container-failure-v1, detection-status-v1, corrections-v1, psi-pressure-v1, pvc-filling-v1)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {
 		t.Errorf("expected the authored MEMORY_LEAK member check")

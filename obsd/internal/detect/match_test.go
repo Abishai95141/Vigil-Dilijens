@@ -151,12 +151,13 @@ func TestMatchDeterministic(t *testing.T) {
 func TestOnlyEntityLocalPhenomena(t *testing.T) {
 	g := loadGraph(t)
 	m := NewMatcher(g)
-	// 19 after v0.9.0: + PHEN_DISK_FILLING (entity-local, the hanging-signal wire).
-	// (18 after v0.4.0: + PHEN_UPSTREAM_DEGRADATION, entity-local.) This count is a
-	// graph-structure assertion; PHEN_DISK_FILLING DOES carry a check, so unlike
-	// PHEN_UPSTREAM_DEGRADATION it can fire on a container filling toward its limit.
-	if m.EntityLocalCount() != 19 {
-		t.Errorf("entity-local phenomena = %d, want 19", m.EntityLocalCount())
+	// 23 after v0.15.0: + PHEN_PVC_FILLING (entity-local, pvc-filling-v1).
+	// 22 after v0.14.0: + 3 PSI saturation phenomena (CPU/MEMORY/IO_PRESSURE_SATURATION,
+	// entity-local, each carries a rate-guard check, psi-pressure-v1).
+	// (19 after v0.9.0: + PHEN_DISK_FILLING, the hanging-signal wire; 18 after v0.4.0:
+	// + PHEN_UPSTREAM_DEGRADATION.) This count is a graph-structure assertion.
+	if m.EntityLocalCount() != 23 {
+		t.Errorf("entity-local phenomena = %d, want 23", m.EntityLocalCount())
 	}
 	// OOM is first-order — must not be in the matcher's set.
 	for _, p := range m.entityLoc {

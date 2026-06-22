@@ -40,8 +40,8 @@ func TestGateSignalsKindCluster(t *testing.T) {
 	for _, n := range rep.Counts {
 		total += n
 	}
-	if total != 592 || len(rep.PerSignal) != 592 {
-		t.Fatalf("gated %d/%d signals, want 592 in exactly one state each (counts=%v)", len(rep.PerSignal), total, rep.Counts)
+	if total != 595 || len(rep.PerSignal) != 595 {
+		t.Fatalf("gated %d/%d signals, want 595 in exactly one state each (+3 psi-pressure cAdvisor signals, v0.14.0) (counts=%v)", len(rep.PerSignal), total, rep.Counts)
 	}
 	for id, av := range rep.PerSignal {
 		if av.State != Obtainable && len(av.Reasons) == 0 {

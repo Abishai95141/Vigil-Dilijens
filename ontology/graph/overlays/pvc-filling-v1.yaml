@@ -1,0 +1,106 @@
+# PVC-filling phenomenon — authored overlay v1 (doc 02 §3.5, doc 04 §3.3, doc 07 §3.1;
+# the docs/31 Step-2b adoption from the ABB_Accelerator_Proto competitor's storage edge).
+#
+# Wires a previously HANGING signal into the deterministic path: the kubelet's
+# kubelet_volume_stats_used_bytes (a Gauge, SIG_kubelet_volume_stats_used_bytes_38fa9389)
+# is authored in the base KG but was UNOBTAINABLE — it rides the kubelet's OWN /metrics
+# endpoint, which obsd did not scrape (it ingests cAdvisor VIA the kubelet, not the
+# kubelet's /metrics). The companion CODE change adds the FetchKubeletMetrics lane
+# (--kubelet-metrics-enabled) + a FamilyKubelet normalizer branch that resolves the
+# {namespace, persistentvolumeclaim} labels to the PVC instance CEI (the SAME key the
+# mounts edge uses), and flips the signal obtainable when the lane is on. This overlay
+# makes it MEASURED-detectable: the direct analogue of PHEN_DISK_FILLING (container
+# ephemeral storage) for a PERSISTENT volume filling toward its declared request.
+#
+# BORROWED NORMATIVITY: the bar is the PVC's OWN declared storage request
+# (pvc.spec.resources.requests.storage) x 0.85 — never learned, never a guessed default.
+# A PVC with no declared request -> no bar -> out-of-scope (eligibility-gated), never a
+# fabricated healthy reading. capacity_bytes (the provisioned size) is NOT used as the
+# denominator: the request is the customer's CONTRACT, capacity is a CSI artifact (and a
+# metric/metric ratio with a moving denominator is the trap docs/31 §3.2 forbids).
+#
+# CHARTER: kubelet_volume_stats_used_bytes is an honest kubelet gauge -> borrowed-normativity
+# clean, IN-DIGEST legitimate (a point-in-time gauge vs a config-relative bar, deterministic,
+# replay-byte-identical). No new kind. The new SCRAPE lane is flag-gated OFF by default, so
+# replay is byte-identical until an operator turns it on.
+#
+# EMISSION NOTE (docs/31 §3.3 correction, verified live on AWS): kubelet_volume_stats_*
+# emit ONLY where a BLOCK-backed CSI reports real per-PVC stats (AWS EBS, OpenEBS-LVM,
+# csi-hostpath) — NOT on directory-backed CSI (kind local-path reports the node disk or
+# nothing). On the AWS EBS substrate the 4 abb-genix PVCs report DISTINCT real capacities
+# (1/2/10/10 GiB) — the kind blind spot, closed.
+#
+# BEHAVIOURAL governance class (doc 12): a NEW phenomenon wiring a now-obtainable signal
+# bumps the graph hash (v0.14.0 -> v0.15.0). DETECTION surfaces immediately when the lane is
+# on (non-gating); forecast WARNING for this class stays gate-pending until its backtest gate.
+overlay: pvc-filling
+version: 1
+author: vigil-engineering
+status: proposed-v1 (docs/31 Step 2b — kubelet_volume_stats_used_bytes wired to a config-relative PVC-request bar)
+
+phenomena:
+  - id: PHEN_PVC_FILLING
+    label: Persistent volume filling
+    signals:
+      - ["kubelet_volume_stats_used_bytes", "required", "T0+", "PVC used bytes rising toward its declared storage request — the write-failure precursor"]
+    notes: >-
+      The direct analogue of PHEN_MEMORY_LEAK / PHEN_DISK_FILLING for a PERSISTENT volume:
+      a PVC's used bytes rising toward its OWN declared request. When the volume fills,
+      writes fail (ENOSPC) — the application breaks even though the pod stays Running, so a
+      sustained rising approach is the early bar. Single required member; corroboration
+      (inode exhaustion via kubelet_volume_stats_inodes_*, FilesystemResize events) is named
+      in the check note, never fabricated as a dangling edge.
+
+members:
+  PHEN_PVC_FILLING:
+    - signal: SIG_kubelet_volume_stats_used_bytes_38fa9389
+      role: required
+      temporal: T0+
+      why: PVC used bytes rising toward the claim's declared storage request
+
+spans:
+  PHEN_PVC_FILLING:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      The rising-usage member is observed AT the PVC itself (its own used-bytes gauge vs its
+      own declared request) — no topology walk joins it. Entity-local, the direct analogue of
+      PHEN_DISK_FILLING.
+
+rules:
+  - id: THR_PVC_USED_VS_REQUESTED_STORAGE
+    signal: SIG_kubelet_volume_stats_used_bytes_38fa9389
+    metric: kubelet_volume_stats_used_bytes
+    kind: config-relative
+    config_path: pvc.spec.resources.requests.storage
+    factor: 0.85
+    direction: above
+    entity_scope: PVC
+    window: 5m
+    rationale: >-
+      The write-failure-precursor bar: a PVC that fills to its declared request fails writes
+      with ENOSPC, so 85% of the PVC's OWN declared request is the early bar (matching
+      PHEN_DISK_FILLING's 0.85x — storage fills coarsely, buying forecast lead time). The
+      bar is config-relative on the PVC's declared request, which the binding engine
+      (bindPVC) resolves; a PVC with no declared request (RequestedStorageBytes==0) binds
+      UNBOUNDED/listed — never a guessed default. No eligibility_config_path: bindPVC ignores
+      it (PVC eligibility is implicit in whether the request resolves), and a PVC with no
+      per-PVC stats series is handled by SIGNAL obtainability (out-of-scope when the kubelet
+      lane is off or the CSI is directory-backed). capacity_bytes (provisioned size) is
+      deliberately NOT the denominator; the declared request is the customer contract.
+
+checks:
+  PHEN_PVC_FILLING:
+    - signal: SIG_kubelet_volume_stats_used_bytes_38fa9389
+      metric: kubelet_volume_stats_used_bytes
+      facet: slope
+      expect: rising
+      min_state: at-threshold
+      on: anchor
+      note: >-
+        rising while at/over the 0.85x requested-storage bar (THR_PVC_USED_VS_REQUESTED_STORAGE);
+        the 5m slope approximates a sustained fill. Corroborating signals
+        (kubelet_volume_stats_inodes_used vs inodes, FilesystemResize/VolumeResize events) are
+        not authored on this signal set — surfaced as a single-member DEGRADED match, named,
+        never fabricated. Requires the --kubelet-metrics-enabled lane on a block-backed CSI;
+        directory-backed CSI (kind local-path) emits no real per-PVC stats -> out-of-scope.

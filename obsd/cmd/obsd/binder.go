@@ -38,6 +38,11 @@ type binder struct {
 	ingestor *observe.Ingestor // stream evidence for semantic QA (doc 04 M3) + fingerprints (05)
 	fpParams observe.FPParams  // primitive/fingerprint constants from the params file
 
+	// kubeletMetricsScraped mirrors --kubelet-metrics-enabled (docs/31 Step 2b): when
+	// true, the obtainability gate treats the kubelet's own /metrics signals (volume_stats)
+	// as scrapable, not out-of-scope. Off ⇒ coverage is byte-identical to before.
+	kubeletMetricsScraped bool
+
 	last        *binding.Result
 	lastAvail   *binding.AvailabilityReport
 	lastObs     *binding.ObservabilityReport
@@ -196,6 +201,9 @@ func (b *binder) compile(ctx context.Context, inventory []identity.InstanceRecor
 		// Facts unavailable: availability gating skipped FOR THIS COMPILE, stated.
 		b.logger.Warn("binding: platform facts unavailable; availability gating skipped this compile", "err", err)
 	} else {
+		// docs/31 Step 2b: surface the kubelet-/metrics lane state so volume_stats
+		// gate obtainable when the lane is on (off ⇒ no change).
+		facts.KubeletMetricsScraped = b.kubeletMetricsScraped
 		avail = binding.GateSignals(b.graph, facts)
 	}
 

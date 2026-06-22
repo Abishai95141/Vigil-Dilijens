@@ -1,0 +1,61 @@
+# Graph release v0.15.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.15.0
+graph_version: "sha256:284b2e0dc276e17a3048b2faef2268664a06ce908b75d31dda4e1c10b265ab57"
+created: "2026-06-22"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - corrections-v1.yaml
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - detection-status-v1.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - psi-pressure-v1.yaml
+  - pvc-filling-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+summary: >-
+  Adds the PVC-fill (per-PVC storage) lane — the docs/31 Step-2b adoption from the
+  ABB_Accelerator_Proto competitor's storage edge, and the per-PVC payoff the AWS-EBS
+  substrate was built for. The new overlay pvc-filling-v1.yaml authors ONE NEW entity-local
+  phenomenon PHEN_PVC_FILLING (44→45) — the direct analogue of PHEN_DISK_FILLING for a
+  PERSISTENT volume — wiring the previously HANGING signal kubelet_volume_stats_used_bytes
+  (authored in the base KG but UNOBTAINABLE: it rides the kubelet's OWN /metrics, which obsd
+  did not scrape). Its bar THR_PVC_USED_VS_REQUESTED_STORAGE is config-relative against the
+  PVC's OWN declared request (pvc.spec.resources.requests.storage, a known config-path
+  already resolvable by the binding engine) x 0.85, eligibility-gated so a PVC with no
+  declared request is out-of-scope, never fabricated; capacity_bytes is deliberately NOT the
+  denominator (the request is the customer contract; a moving-denominator ratio is the
+  docs/31 §3.2 trap). The companion CODE change (NOT in the graph) adds: a flag-gated
+  kubelet-/metrics scrape lane (observe.FetchKubeletMetrics + --kubelet-metrics-enabled, the
+  sibling of FetchCAdvisor hitting nodes/<n>/proxy/metrics), a FamilyKubelet normalizer branch
+  resolving kubelet_volume_stats_* {namespace,persistentvolumeclaim} labels to the PVC CEI
+  (the same key the mounts edge uses), and an obtainability fact (PlatformFacts.
+  KubeletMetricsScraped) that lifts the kubelet unscraped-endpoint override when the lane is
+  on — so the volume-stats signals gate obtainable. ALL of that is OFF by default: the flag is
+  false, the lane never scrapes, the fact is false, the override applies exactly as before →
+  byte-identical replay + byte-identical coverage until an operator turns it on. CHARTER-CLEAN:
+  kubelet_volume_stats_used_bytes is an honest kubelet gauge vs a config-relative bar → IN-DIGEST
+  legitimate (deterministic, replay-byte-identical); no new node kind, no agent write path.
+  BEHAVIOURAL governance class (doc 12): the new phenomenon + now-obtainable signal bump the
+  hash v0.14.0→v0.15.0; the base KG and every prior release stay byte-identical and loadable.
+  EMISSION (docs/31 §3.3 correction): kubelet_volume_stats_* emit real per-PVC values ONLY on a
+  block-backed CSI (AWS EBS, OpenEBS-LVM, csi-hostpath) — on the live AWS-EBS cluster the 4
+  abb-genix PVCs report distinct real capacities (1/2/10/10 GiB), the kind directory-CSI blind
+  spot closed.
