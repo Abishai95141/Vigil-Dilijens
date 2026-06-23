@@ -159,6 +159,30 @@ CREATE TABLE IF NOT EXISTS gap_state (
   next_revisit_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS gap_state_revisit ON gap_state(next_revisit_at);
+
+-- agent_decisions (docs/33 build 4): the AI-triage AUDIT LOG. Every time an operator authorizes
+-- the agent to triage a candidate, the agent's verdict (promote|reject|hold), confidence, one-line
+-- rationale, the producing model, and the authorizing operator are recorded here — whether or not
+-- it changed the candidate's status. A promotion can be REVERTED, which flips reverted=1 and the
+-- candidate's status back; the original decision row is KEPT (the audit trail is append-only, the
+-- revert is a new fact on the same row). OFF the deterministic path (this whole store is firewalled).
+CREATE TABLE IF NOT EXISTS agent_decisions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  candidate_id  TEXT NOT NULL,
+  verdict       TEXT NOT NULL,
+  applied       INTEGER NOT NULL DEFAULT 0,   -- 1 if the verdict changed the candidate's status
+  confidence    TEXT,
+  rationale     TEXT,
+  direction     TEXT,
+  model         TEXT,
+  authorized_by TEXT NOT NULL,
+  decided_at    TEXT NOT NULL,
+  reverted      INTEGER NOT NULL DEFAULT 0,
+  reverted_by   TEXT,
+  reverted_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS agent_decisions_cand ON agent_decisions(candidate_id);
+CREATE INDEX IF NOT EXISTS agent_decisions_at   ON agent_decisions(decided_at);
 `
 
 // migrations bring an older candidates.db up to the current schema. ADD COLUMN is
@@ -446,6 +470,118 @@ func (s *Store) Decide(now time.Time, id string, st Status, decidedBy, note stri
 	}
 	if n == 0 {
 		return fmt.Errorf("candidate: decide: no candidate %q", id)
+	}
+	return nil
+}
+
+// --- AI-assisted triage audit log + revert (docs/33 build 4) ------------------
+
+// AgentDecision is one logged agent-triage verdict (the AI audit trail). Applied is true when
+// the verdict changed the candidate's status (a promote/reject that was carried out); Reverted is
+// true once a promotion was undone. The row is append-only: a revert sets Reverted on the SAME
+// row rather than deleting the original decision (the audit trail never loses a fact).
+type AgentDecision struct {
+	ID           int64     `json:"id"`
+	CandidateID  string    `json:"candidateId"`
+	Verdict      string    `json:"verdict"`
+	Applied      bool      `json:"applied"`
+	Confidence   string    `json:"confidence,omitempty"`
+	Rationale    string    `json:"rationale,omitempty"`
+	Direction    string    `json:"direction,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	AuthorizedBy string    `json:"authorizedBy"`
+	DecidedAt    time.Time `json:"decidedAt"`
+	Reverted     bool      `json:"reverted"`
+	RevertedBy   string    `json:"revertedBy,omitempty"`
+	RevertedAt   time.Time `json:"revertedAt,omitempty"`
+}
+
+// LogAgentDecision appends one agent-triage verdict to the audit log and returns its row id. It
+// records the verdict regardless of whether it was applied — a "hold" or a rejected promotion is
+// still an auditable agent action. `now` is injected.
+func (s *Store) LogAgentDecision(now time.Time, d AgentDecision) (int64, error) {
+	if strings.TrimSpace(d.CandidateID) == "" || strings.TrimSpace(d.Verdict) == "" {
+		return 0, errors.New("candidate: agent decision needs a candidate id + verdict")
+	}
+	if strings.TrimSpace(d.AuthorizedBy) == "" {
+		return 0, errors.New("candidate: agent triage requires an authorizing operator (authorizedBy)")
+	}
+	applied := 0
+	if d.Applied {
+		applied = 1
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO agent_decisions (candidate_id, verdict, applied, confidence, rationale, direction, model, authorized_by, decided_at)
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		d.CandidateID, d.Verdict, applied, d.Confidence, d.Rationale, d.Direction, d.Model, d.AuthorizedBy, now.UTC().Format(sqlTime))
+	if err != nil {
+		return 0, fmt.Errorf("candidate: log agent decision: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+// ListAgentDecisions returns the audit log newest-first, capped at limit (<=0 ⇒ 200).
+func (s *Store) ListAgentDecisions(limit int) ([]AgentDecision, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(
+		`SELECT id, candidate_id, verdict, applied, confidence, rationale, direction, model, authorized_by, decided_at, reverted, reverted_by, reverted_at
+		 FROM agent_decisions ORDER BY decided_at DESC, id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("candidate: list agent decisions: %w", err)
+	}
+	defer rows.Close()
+	var out []AgentDecision
+	for rows.Next() {
+		var d AgentDecision
+		var applied, reverted int
+		var conf, rat, dir, model, revBy, revAt sql.NullString
+		var decidedAt string
+		if err := rows.Scan(&d.ID, &d.CandidateID, &d.Verdict, &applied, &conf, &rat, &dir, &model, &d.AuthorizedBy, &decidedAt, &reverted, &revBy, &revAt); err != nil {
+			return nil, err
+		}
+		d.Applied = applied == 1
+		d.Reverted = reverted == 1
+		d.Confidence, d.Rationale, d.Direction, d.Model, d.RevertedBy = conf.String, rat.String, dir.String, model.String, revBy.String
+		d.DecidedAt, _ = time.Parse(sqlTime, decidedAt)
+		if revAt.Valid {
+			d.RevertedAt, _ = time.Parse(sqlTime, revAt.String)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// Revert undoes an APPLIED agent promotion: it resets the candidate's status back to candidate
+// (re-opening it for review), clears the decision fields, and flips the matching applied,
+// not-yet-reverted agent_decisions row to reverted (recording who reverted + when). It is the
+// deliberate, logged un-promotion the disclaimer promises. Only a PROMOTED candidate can be
+// reverted; reverting anything else, or with no authorizing name, is an error.
+func (s *Store) Revert(now time.Time, candidateID, revertedBy string) error {
+	if strings.TrimSpace(revertedBy) == "" {
+		return errors.New("candidate: revert requires a named operator (revertedBy)")
+	}
+	c, ok, err := s.Get(candidateID)
+	if err != nil {
+		return err
+	}
+	if !ok || c == nil {
+		return fmt.Errorf("candidate: revert: no candidate %q", candidateID)
+	}
+	if c.Status != StatusPromoted {
+		return fmt.Errorf("candidate: revert: %q is %s, only a promoted candidate can be reverted", candidateID, c.Status)
+	}
+	at := now.UTC().Format(sqlTime)
+	if _, err := s.db.Exec(
+		`UPDATE candidates SET status = ?, reason = ?, decided_by = NULL, note = NULL, decided_at = NULL, updated_at = ? WHERE id = ?`,
+		string(StatusCandidate), "reverted: re-opened for review", at, candidateID); err != nil {
+		return fmt.Errorf("candidate: revert: %w", err)
+	}
+	if _, err := s.db.Exec(
+		`UPDATE agent_decisions SET reverted = 1, reverted_by = ?, reverted_at = ? WHERE candidate_id = ? AND applied = 1 AND reverted = 0`,
+		revertedBy, at, candidateID); err != nil {
+		return fmt.Errorf("candidate: revert: mark audit: %w", err)
 	}
 	return nil
 }

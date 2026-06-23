@@ -5,8 +5,16 @@
 // human promotes it here. Promotion authors the note (the model's rationale is discarded)
 // and emits a committable overlay; reject removes it. Clear evidence, signed decisions.
 
-import { decideGovernance, previewGovernance, useGovernance } from "@/api/client";
+import {
+  aiTriage,
+  decideGovernance,
+  previewGovernance,
+  revertPromotion,
+  useAIAudit,
+  useGovernance,
+} from "@/api/client";
 import type {
+  AITriageResult,
   GovernanceDecisionResult,
   GovernanceItem,
   GovernancePreviewResult,
@@ -338,7 +346,56 @@ function PreviewPanel({ res }: { res: GovernancePreviewResult }) {
 
 export function GovernancePage() {
   const q = useGovernance();
+  const audit = useAIAudit();
   const qc = useQueryClient();
+
+  // docs/33 build 4 — AI-assisted triage (operator-authorized, audited, reversible).
+  const [triageBusy, setTriageBusy] = useState(false);
+  const [triageRes, setTriageRes] = useState<AITriageResult | null>(null);
+  const [showDisclaimer, setShowDisclaimer] = useState(false); // the mistakes pop-up before any agent run
+  const [pendingTriage, setPendingTriage] = useState<{
+    candidateId?: string;
+    all?: boolean;
+  } | null>(null);
+  const [reverting, setReverting] = useState<string | null>(null);
+
+  // Show the disclaimer first; the agent only runs after the operator confirms it.
+  function askTriage(target: { candidateId?: string; all?: boolean }) {
+    setPendingTriage(target);
+    setShowDisclaimer(true);
+  }
+  async function runTriage() {
+    if (!pendingTriage) return;
+    setShowDisclaimer(false);
+    setTriageBusy(true);
+    setErr(null);
+    try {
+      const res = await aiTriage({ ...pendingTriage, authorizedBy: reviewer.trim() || "operator" });
+      setTriageRes(res);
+      if (!res.ok) setErr(res.message);
+      await qc.invalidateQueries({ queryKey: ["governance"] });
+      await qc.invalidateQueries({ queryKey: ["ai-audit"] });
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setTriageBusy(false);
+      setPendingTriage(null);
+    }
+  }
+  async function revert(candidateId: string) {
+    setReverting(candidateId);
+    setErr(null);
+    try {
+      const res = await revertPromotion(candidateId, reviewer.trim() || "operator");
+      if (!res.ok) setErr(res.message);
+      await qc.invalidateQueries({ queryKey: ["governance"] });
+      await qc.invalidateQueries({ queryKey: ["ai-audit"] });
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setReverting(null);
+    }
+  }
 
   // The reviewer signs every decision; persisted so it survives a reload.
   const [reviewer, setReviewer] = useState(() => localStorage.getItem("vigil.reviewer") ?? "");
@@ -430,6 +487,102 @@ export function GovernancePage() {
                 )}
               </div>
 
+              {/* docs/33 build 4 — AI-assisted triage. The operator authorizes DeepSeek to review
+                  candidates and apply a verdict; fallible, fully logged, reversible. */}
+              <div className="v-panel p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="v-eyebrow text-[10px]">AI-assisted triage · DeepSeek</div>
+                    <p className="mt-1 max-w-2xl text-[12px] leading-relaxed text-ink-soft">
+                      Authorize the agent to review pending candidates from their measured evidence
+                      and decide promote / reject / hold. It can be wrong — every decision is logged
+                      below and any promotion is reversible. A promoted causal hypothesis is used in
+                      the root-cause chain on the next incident.
+                    </p>
+                  </div>
+                  <Button
+                    onClick={() => askTriage({ all: true })}
+                    disabled={triageBusy}
+                    data-testid="ai-triage-all"
+                  >
+                    {triageBusy ? "Triaging…" : "Let AI triage pending"}
+                  </Button>
+                </div>
+                {triageRes ? (
+                  <div className="mt-3 rounded-[6px] border border-rule bg-plane p-3 text-[12px]">
+                    <div className="text-ink-soft">
+                      {triageRes.message}
+                      {triageRes.model ? (
+                        <span className="text-ink-low"> · {triageRes.model}</span>
+                      ) : null}
+                    </div>
+                    {triageRes.outcomes?.length ? (
+                      <ul className="mt-2 space-y-1">
+                        {triageRes.outcomes.map((o) => (
+                          <li key={o.candidateId} className="flex items-start gap-2">
+                            <Tag
+                              sev={
+                                o.verdict === "promote"
+                                  ? "ok"
+                                  : o.verdict === "reject"
+                                    ? "neutral"
+                                    : "info"
+                              }
+                            >
+                              {o.verdict}
+                            </Tag>
+                            <span className="text-ink-low">
+                              <Mono>{(o.subject ?? o.candidateId).slice(0, 64)}</Mono>
+                              {o.rationale ? (
+                                <span className="text-ink-soft"> — {o.rationale}</span>
+                              ) : null}
+                              {o.error ? (
+                                <span className="text-[color:var(--sev-degraded)]">
+                                  {" "}
+                                  [{o.error}]
+                                </span>
+                              ) : null}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
+              {/* The mistakes disclaimer — shown before the agent acts; it runs only on confirm. */}
+              {showDisclaimer ? (
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+                  data-testid="ai-disclaimer"
+                >
+                  <div className="v-panel max-w-lg p-5">
+                    <div className="v-eyebrow text-[10px]">before you let the AI decide</div>
+                    <p className="mt-2 text-[13px] leading-relaxed text-ink">
+                      {audit.data?.disclaimer ??
+                        "AI-assisted triage can be wrong — it may promote a weak proposal or reject a useful one. Every decision is logged, and any promotion can be reverted. You authorize this review and remain in control."}
+                    </p>
+                    <p className="mt-2 text-[12px] text-ink-low">
+                      The agent will{" "}
+                      {pendingTriage?.all
+                        ? "review all pending decidable candidates"
+                        : "review this candidate"}{" "}
+                      and apply its verdict (promote / reject / hold). Promotions are reversible
+                      from the audit log.
+                    </p>
+                    <div className="mt-4 flex justify-end gap-2">
+                      <Button variant="ghost" onClick={() => setShowDisclaimer(false)}>
+                        Cancel
+                      </Button>
+                      <Button onClick={runTriage} data-testid="ai-confirm">
+                        I understand — run triage
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               <Stat4
                 items={[
                   {
@@ -475,6 +628,68 @@ export function GovernancePage() {
                   starts watching it against a threshold.
                 </div>
               </div>
+
+              {/* docs/33 build 4 — the AI audit log: every agent verdict, with the authorizing
+                  operator + rationale, and a revert for any promotion. */}
+              {audit.data?.entries?.length ? (
+                <div className="v-panel p-4" data-testid="ai-audit-log">
+                  <div className="v-eyebrow mb-2 text-[10px]">
+                    AI decision log · {audit.data.entries.length}
+                  </div>
+                  <ul className="space-y-2">
+                    {audit.data.entries.map((e, i) => (
+                      <li
+                        key={`${e.candidateId}-${i}`}
+                        className="flex flex-wrap items-start justify-between gap-2 rounded-[6px] border border-rule bg-plane px-3 py-2 text-[12px]"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <Tag
+                              sev={
+                                e.verdict === "promote"
+                                  ? "ok"
+                                  : e.verdict === "reject"
+                                    ? "neutral"
+                                    : "info"
+                              }
+                            >
+                              {e.verdict}
+                            </Tag>
+                            {e.reverted ? <Tag sev="degraded">reverted</Tag> : null}
+                            {!e.applied ? (
+                              <span className="text-ink-low">(not applied)</span>
+                            ) : null}
+                            <span className="text-ink-low">{e.model}</span>
+                            <span className="text-ink-low">· by {e.authorizedBy}</span>
+                            <span className="text-ink-low">· {relTime(e.decidedAt)}</span>
+                          </div>
+                          <div className="mt-1 truncate text-ink-soft">
+                            <Mono>{(e.subject ?? e.candidateId).slice(0, 72)}</Mono>
+                          </div>
+                          {e.rationale ? (
+                            <div className="mt-0.5 text-ink-low">{e.rationale}</div>
+                          ) : null}
+                          {e.reverted && e.revertedBy ? (
+                            <div className="mt-0.5 text-[color:var(--sev-degraded)]">
+                              reverted by {e.revertedBy}
+                            </div>
+                          ) : null}
+                        </div>
+                        {e.canRevert ? (
+                          <Button
+                            variant="ghost"
+                            onClick={() => revert(e.candidateId)}
+                            disabled={reverting === e.candidateId}
+                            data-testid="ai-revert"
+                          >
+                            {reverting === e.candidateId ? "Reverting…" : "Revert"}
+                          </Button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
 
               {/* Non-actionable k8s object-metadata strays are CLASSIFIED and counted, but kept
                   out of the review queue so it stays the necessary decisions, not hundreds of
@@ -788,6 +1003,14 @@ export function GovernancePage() {
                                         onClick={() => decide(it, "reject")}
                                       >
                                         Reject
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        disabled={triageBusy}
+                                        onClick={() => askTriage({ candidateId: it.id })}
+                                        data-testid="ai-triage-one"
+                                      >
+                                        Ask AI
                                       </Button>
                                       {!reviewer.trim() && (
                                         <span className="text-[11px] text-warning">

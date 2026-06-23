@@ -4,6 +4,8 @@
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import type {
+  AIAuditView,
+  AITriageResult,
   CausalDirectionResult,
   CausalHypothesesView,
   ClaimVerdict,
@@ -25,6 +27,7 @@ import type {
   McpToolName,
   McpToolResult,
   McpToolsListResult,
+  RevertResult,
   RightSizingView,
   RootCauseChainView,
   SilenceLedgerView,
@@ -86,8 +89,7 @@ export const useUnexplained = () => useView<UnexplainedView>("unexplained", "/ap
 export const useGovernance = () => useView<GovernanceView>("governance", "/api/governance");
 export const useCausalHypotheses = () =>
   useView<CausalHypothesesView>("causal-hypotheses", "/api/causal-hypotheses");
-export const useRightSizing = () =>
-  useView<RightSizingView>("right-sizing", "/api/right-sizing");
+export const useRightSizing = () => useView<RightSizingView>("right-sizing", "/api/right-sizing");
 
 // A NAMED operator's authored causal DIRECTION for a co-occurrence hypothesis (doc 22 C3 —
 // the system never infers direction). "a-to-b"/"b-to-a" promote with the directed note and
@@ -129,6 +131,23 @@ export const previewGovernance = (candidateId: string) =>
   getJson<GovernancePreviewResult>(
     `/api/governance/preview?candidateId=${encodeURIComponent(candidateId)}`,
   );
+
+// docs/33 build 4 — AI-assisted triage. An operator authorizes the agent to review one candidate
+// (candidateId) or all pending decidable ones (all=true); it recommends + applies a verdict
+// (unless dryRun), logged to the AI audit trail and reversible. The operator stays in control.
+export const aiTriage = (req: {
+  candidateId?: string;
+  all?: boolean;
+  authorizedBy: string;
+  dryRun?: boolean;
+}) => postJson<AITriageResult>("/api/governance/ai-triage", req);
+
+// The AI audit log (every agent verdict + revert). Polled on the governance page.
+export const useAIAudit = () => useView<AIAuditView>("ai-audit", "/api/governance/ai-audit");
+
+// Undo an agent promotion: re-opens the candidate, logs the revert.
+export const revertPromotion = (candidateId: string, revertedBy: string) =>
+  postJson<RevertResult>("/api/governance/revert", { candidateId, revertedBy });
 
 // ── MCP JSON-RPC client ──────────────────────────────────────────────────────
 // One POST /mcp endpoint. A tools/call result wraps the view JSON as a STRING

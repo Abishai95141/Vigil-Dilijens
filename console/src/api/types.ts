@@ -1317,3 +1317,55 @@ export interface RightSizingView {
   summary: RightSizingSummary;
   advisories?: RightSizingRow[];
 }
+
+// ── AI-assisted governance triage (docs/33 build 4) ──────────────────────────
+export interface AITriageOutcome {
+  candidateId: string;
+  subject?: string;
+  kind?: string;
+  verdict: "promote" | "reject" | "hold";
+  confidence?: string;
+  rationale?: string;
+  direction?: string;
+  applied: boolean;
+  status?: string;
+  error?: string;
+}
+export interface AITriageResult {
+  ok: boolean;
+  message: string;
+  model?: string;
+  reviewed: number;
+  promoted: number;
+  rejected: number;
+  held: number;
+  outcomes?: AITriageOutcome[];
+  dryRun?: boolean;
+  disclaimer: string;
+}
+export interface AIAuditEntry {
+  candidateId: string;
+  subject?: string;
+  verdict: string;
+  applied: boolean;
+  confidence?: string;
+  rationale?: string;
+  direction?: string;
+  model?: string;
+  authorizedBy: string;
+  decidedAt: string;
+  reverted: boolean;
+  revertedBy?: string;
+  revertedAt?: string;
+  canRevert: boolean;
+}
+export interface AIAuditView {
+  generatedAt: string;
+  disclaimer: string;
+  entries?: AIAuditEntry[];
+}
+export interface RevertResult {
+  ok: boolean;
+  candidateId: string;
+  message: string;
+}

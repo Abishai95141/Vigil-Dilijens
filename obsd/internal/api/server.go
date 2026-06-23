@@ -104,6 +104,17 @@ type Providers struct {
 	// candidate) the deterministic stray→group resolution delta computed on a scratch graph.
 	// It NEVER mutates the store or the graph. nil ⇒ the lane is not enabled.
 	GovernancePreview func(candidateID string) *GovernancePreviewResult
+	// GovernanceAITriage runs the AI-assisted triage (docs/33 build 4): an operator-authorized
+	// agent review of one candidate (or all pending actionable ones) that recommends + applies a
+	// verdict (promote|reject|hold), logged to the AI audit trail and reversible. nil ⇒ the lane
+	// is not enabled (--dgx-agent-enabled).
+	GovernanceAITriage func(AITriageRequest) AITriageResult
+	// GovernanceAIAudit returns the AI-triage audit log (every agent verdict + revert). nil ⇒
+	// the lane is not enabled.
+	GovernanceAIAudit func() *AIAuditView
+	// GovernanceRevert undoes an agent promotion (re-opens the candidate, logs the revert). nil
+	// ⇒ the lane is not enabled.
+	GovernanceRevert func(RevertRequest) RevertResult
 	// Dependency returns the MEASURED metric-dependency graph (doc 20 P2): observed
 	// series that move together, as undirected associations (never causal). nil ⇒ the
 	// lane is not enabled (--assoc-enabled); the route serves the honest OFF state.
@@ -283,6 +294,73 @@ func Register(mux *http.ServeMux, p Providers) {
 			return
 		}
 		writeJSON(w, p.GovernancePreview(id))
+	})
+
+	mux.HandleFunc("/api/governance/ai-triage", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed (POST a JSON {candidateId|all, authorizedBy, dryRun})", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.GovernanceAITriage == nil {
+			writeJSON(w, AITriageResult{OK: false, Message: "AI triage is not enabled (--dgx-agent-enabled + a configured provider)", Disclaimer: AITriageDisclaimer})
+			return
+		}
+		var req AITriageRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBody)).Decode(&req); err != nil {
+			http.Error(w, "POST a JSON body {candidateId|all, authorizedBy, dryRun}", http.StatusBadRequest)
+			return
+		}
+		res := p.GovernanceAITriage(req)
+		if !res.OK {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			enc := json.NewEncoder(w)
+			enc.SetEscapeHTML(false)
+			_ = enc.Encode(res)
+			return
+		}
+		writeJSON(w, res)
+	})
+
+	mux.HandleFunc("/api/governance/ai-audit", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var v *AIAuditView
+		if p.GovernanceAIAudit != nil {
+			v = p.GovernanceAIAudit()
+		}
+		if v == nil {
+			v = &AIAuditView{GeneratedAt: timeNowUTC(), Disclaimer: AITriageDisclaimer}
+		}
+		writeJSON(w, v)
+	})
+
+	mux.HandleFunc("/api/governance/revert", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed (POST a JSON {candidateId, revertedBy})", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.GovernanceRevert == nil {
+			writeJSON(w, RevertResult{OK: false, Message: "the governance lane is not enabled (--dgx-enabled)"})
+			return
+		}
+		var req RevertRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBody)).Decode(&req); err != nil {
+			http.Error(w, "POST a JSON body {candidateId, revertedBy}", http.StatusBadRequest)
+			return
+		}
+		res := p.GovernanceRevert(req)
+		if !res.OK {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			enc := json.NewEncoder(w)
+			enc.SetEscapeHTML(false)
+			_ = enc.Encode(res)
+			return
+		}
+		writeJSON(w, res)
 	})
 
 	mux.HandleFunc("/api/dependency", func(w http.ResponseWriter, r *http.Request) {

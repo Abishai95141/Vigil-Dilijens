@@ -1068,6 +1068,17 @@ func runIdentity(ctx context.Context, logger *slog.Logger, p params.Params, kube
 			providers.GovernancePreview = func(candidateID string) *vapi.GovernancePreviewResult {
 				return previewGovernance(candStore, ontologyGraph, gv, candidateID)
 			}
+			// docs/33 build 4: AI-assisted triage — operator-authorized, audited, reversible.
+			// dgxAgent may be nil (--dgx-agent-enabled off); aiTriageRun handles that honestly.
+			providers.GovernanceAITriage = func(req vapi.AITriageRequest) vapi.AITriageResult {
+				return aiTriageRun(ctx, dgxAgent, candStore, gv, logger, time.Now().UTC(), req)
+			}
+			providers.GovernanceAIAudit = func() *vapi.AIAuditView {
+				return aiAuditView(candStore, logger)
+			}
+			providers.GovernanceRevert = func(req vapi.RevertRequest) vapi.RevertResult {
+				return aiRevert(candStore, logger, time.Now().UTC(), req)
+			}
 		}
 		if assocEnabled {
 			providers.Dependency = func() *vapi.DependencyView { return depView.Load() }
@@ -2372,6 +2383,208 @@ func authorCausalDirection(cs *candidate.Store, graphVersion string, now time.Ti
 		return &vapi.CausalDirectionResult{OK: false, CandidateID: c.ID,
 			Message: "direction must be a-to-b, b-to-a, or not-causal"}
 	}
+}
+
+// aiTriageDecidableKinds are the candidate kinds the AI triage reviews — real PROPOSALS a
+// human would otherwise hand-decide. Stray placeholder NODEs (cei-fallback) are deliberately
+// excluded: they belong to the stray-mapping path, not a promote/reject verdict.
+var aiTriageDecidableKinds = map[candidate.Kind]bool{
+	candidate.KindCausalHypothesis:    true,
+	candidate.KindEquivGroup:          true,
+	candidate.KindPhenomenonCandidate: true,
+	candidate.KindEdge:                true,
+}
+
+// aiTriageBatchCap bounds how many candidates one "triage all" run reviews (one LLM call each).
+const aiTriageBatchCap = 25
+
+// aiTriageRun is the AI-assisted governance triage (docs/33 build 4): an OPERATOR-AUTHORIZED
+// agent review of one candidate (req.CandidateID) or all pending decidable ones (req.All). For
+// each, the agent recommends promote|reject|hold from the MEASURED evidence; unless req.DryRun,
+// the verdict is APPLIED (promote → author; reject → reject) and LOGGED to the AI audit trail.
+// A promoted CAUSAL HYPOTHESIS routes through authorCausalDirection (the same path a human uses),
+// so it carries the bridge-readable note and FEEDS the root-cause cascade on the next incident.
+// A per-candidate provider/parse failure is recorded and skipped — it never aborts the batch.
+func aiTriageRun(ctx context.Context, agent *dgx.Agent, cs *candidate.Store, graphVersion string, logger *slog.Logger, now time.Time, req vapi.AITriageRequest) vapi.AITriageResult {
+	res := vapi.AITriageResult{Disclaimer: vapi.AITriageDisclaimer, DryRun: req.DryRun}
+	if agent == nil || cs == nil {
+		res.Message = "AI triage is not enabled (--dgx-agent-enabled + a configured provider)"
+		return res
+	}
+	op := strings.TrimSpace(req.AuthorizedBy)
+	if op == "" {
+		op = "operator" // the click itself is the authorization; default the name if the UI omits it
+	}
+	// Gather the target candidate(s).
+	var targets []candidate.Candidate
+	if req.All {
+		rows, err := cs.List(candidate.Filter{Status: candidate.StatusCandidate})
+		if err != nil {
+			res.Message = "list candidates: " + err.Error()
+			return res
+		}
+		sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+		for i := range rows {
+			if aiTriageDecidableKinds[rows[i].Kind] {
+				targets = append(targets, rows[i])
+				if len(targets) >= aiTriageBatchCap {
+					break
+				}
+			}
+		}
+	} else {
+		c, ok, err := cs.Get(req.CandidateID)
+		if err != nil {
+			res.Message = err.Error()
+			return res
+		}
+		if !ok || c == nil {
+			res.Message = "no such candidate"
+			return res
+		}
+		if c.Status != candidate.StatusCandidate {
+			res.Message = "candidate is already " + string(c.Status) + " — only a pending candidate can be triaged"
+			return res
+		}
+		targets = []candidate.Candidate{*c}
+	}
+	if len(targets) == 0 {
+		res.OK = true
+		res.Message = "no pending decidable candidates to triage"
+		return res
+	}
+	for i := range targets {
+		c := targets[i]
+		out := vapi.AITriageOutcome{CandidateID: c.ID, Subject: c.Subject, Kind: string(c.Kind), Status: string(c.Status)}
+		d, err := agent.TriageCandidate(ctx, c)
+		if err != nil {
+			out.Error = err.Error()
+			out.Verdict = "hold"
+			res.Outcomes = append(res.Outcomes, out)
+			res.Held++
+			continue
+		}
+		res.Model = d.Model
+		out.Verdict, out.Confidence, out.Rationale, out.Direction = string(d.Verdict), d.Confidence, d.Rationale, d.Direction
+		// A causal hypothesis can only be PROMOTED with a witness-supported direction — without
+		// one there is no arrow to author, so a direction-less promote is downgraded to HOLD.
+		if d.Verdict == dgx.VerdictPromote && c.Kind == candidate.KindCausalHypothesis && d.Direction == "" {
+			d.Verdict, out.Verdict = dgx.VerdictHold, "hold"
+			out.Rationale = "promote recommended but no witness-supported direction — held for a human"
+		}
+		applied, status := false, string(c.Status)
+		if !req.DryRun {
+			applied, status, out.Error = applyTriageVerdict(cs, agent, graphVersion, now, op, c, d)
+		}
+		out.Applied, out.Status = applied, status
+		if !req.DryRun {
+			if _, lerr := cs.LogAgentDecision(now, candidate.AgentDecision{
+				CandidateID: c.ID, Verdict: string(d.Verdict), Applied: applied, Confidence: d.Confidence,
+				Rationale: d.Rationale, Direction: d.Direction, Model: d.Model, AuthorizedBy: op,
+			}); lerr != nil {
+				logger.Warn("ai-triage: log decision failed (non-gating)", "candidate", c.ID, "err", lerr)
+			}
+		}
+		switch d.Verdict {
+		case dgx.VerdictPromote:
+			res.Promoted++
+		case dgx.VerdictReject:
+			res.Rejected++
+		default:
+			res.Held++
+		}
+		res.Outcomes = append(res.Outcomes, out)
+	}
+	res.OK = true
+	res.Reviewed = len(targets)
+	res.Message = fmt.Sprintf("reviewed %d: %d promoted, %d rejected, %d held", res.Reviewed, res.Promoted, res.Rejected, res.Held)
+	if req.DryRun {
+		res.Message = "DRY RUN — " + res.Message + " (nothing applied)"
+	}
+	logger.Info("ai-triage run", "authorized_by", op, "reviewed", res.Reviewed, "promoted", res.Promoted,
+		"rejected", res.Rejected, "held", res.Held, "dry_run", req.DryRun, "model", res.Model)
+	return res
+}
+
+// applyTriageVerdict carries out one agent verdict. A causal-hypothesis promote routes through
+// authorCausalDirection (the human-equivalent path → the bridge-readable note → the cascade);
+// any other promote, and every reject, uses candStore.Decide. A hold changes nothing. The
+// decidedBy is explicitly the AGENT (never a human's name), with the authorizing operator in the
+// note — honest provenance. Returns (applied, resulting-status, error).
+func applyTriageVerdict(cs *candidate.Store, agent *dgx.Agent, graphVersion string, now time.Time, op string, c candidate.Candidate, d dgx.TriageDecision) (bool, string, string) {
+	decidedBy := "agent-triage:" + d.Model
+	note := fmt.Sprintf("(AI-triage, authorized by %s): %s", op, d.Rationale)
+	switch d.Verdict {
+	case dgx.VerdictPromote:
+		if c.Kind == candidate.KindCausalHypothesis {
+			r := authorCausalDirection(cs, graphVersion, now, vapi.CausalDirectionRequest{
+				CandidateID: c.ID, Direction: d.Direction, DecidedBy: decidedBy, Note: note,
+			})
+			if !r.OK {
+				return false, string(c.Status), r.Message
+			}
+			return true, "promoted", ""
+		}
+		if err := cs.Decide(now, c.ID, candidate.StatusPromoted, decidedBy, note); err != nil {
+			return false, string(c.Status), err.Error()
+		}
+		return true, "promoted", ""
+	case dgx.VerdictReject:
+		if err := cs.Decide(now, c.ID, candidate.StatusRejected, decidedBy, note); err != nil {
+			return false, string(c.Status), err.Error()
+		}
+		return true, "rejected", ""
+	default: // hold — no change
+		return false, string(c.Status), ""
+	}
+}
+
+// aiAuditView maps the candidate store's agent-decision log onto the API view, joining each
+// entry's candidate subject for display (docs/33 build 4).
+func aiAuditView(cs *candidate.Store, logger *slog.Logger) *vapi.AIAuditView {
+	v := &vapi.AIAuditView{GeneratedAt: time.Now().UTC(), Disclaimer: vapi.AITriageDisclaimer}
+	if cs == nil {
+		return v
+	}
+	rows, err := cs.ListAgentDecisions(200)
+	if err != nil {
+		logger.Warn("ai-audit: list failed (non-gating)", "err", err)
+		return v
+	}
+	subj := map[string]string{}
+	for i := range rows {
+		s, ok := subj[rows[i].CandidateID]
+		if !ok {
+			if c, found, _ := cs.Get(rows[i].CandidateID); found && c != nil {
+				s = c.Subject
+			}
+			subj[rows[i].CandidateID] = s
+		}
+		v.Entries = append(v.Entries, vapi.AIAuditEntry{
+			CandidateID: rows[i].CandidateID, Subject: s, Verdict: rows[i].Verdict, Applied: rows[i].Applied,
+			Confidence: rows[i].Confidence, Rationale: rows[i].Rationale, Direction: rows[i].Direction,
+			Model: rows[i].Model, AuthorizedBy: rows[i].AuthorizedBy, DecidedAt: rows[i].DecidedAt,
+			Reverted: rows[i].Reverted, RevertedBy: rows[i].RevertedBy, RevertedAt: rows[i].RevertedAt,
+			CanRevert: rows[i].Applied && rows[i].Verdict == string(dgx.VerdictPromote) && !rows[i].Reverted,
+		})
+	}
+	return v
+}
+
+// aiRevert undoes an agent promotion (docs/33 build 4): re-opens the candidate + logs the revert.
+func aiRevert(cs *candidate.Store, logger *slog.Logger, now time.Time, req vapi.RevertRequest) vapi.RevertResult {
+	if cs == nil {
+		return vapi.RevertResult{OK: false, CandidateID: req.CandidateID, Message: "the governance lane is not enabled"}
+	}
+	by := strings.TrimSpace(req.RevertedBy)
+	if by == "" {
+		by = "operator"
+	}
+	if err := cs.Revert(now, req.CandidateID, by); err != nil {
+		return vapi.RevertResult{OK: false, CandidateID: req.CandidateID, Message: err.Error()}
+	}
+	logger.Info("ai-triage revert", "candidate", req.CandidateID, "reverted_by", by)
+	return vapi.RevertResult{OK: true, CandidateID: req.CandidateID, Message: "promotion reverted; candidate re-opened for review"}
 }
 
 // causalDirectionNoteMarker is the stable prefix authorCausalDirection writes into a
