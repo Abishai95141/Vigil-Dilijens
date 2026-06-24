@@ -13,6 +13,8 @@ Env:  DGX_API_KEY (DeepSeek, for the agent pane) · OBSD_BASE (default http://lo
 """
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -88,8 +90,8 @@ with st.sidebar:
 
 st.title("Vigil Scenario Studio — see it, then ask about it")
 
-tab_principle, tab_scen, tab_live, tab_agent, tab_cluster = st.tabs(
-    ["🧭  Working Principle", "🎬  Scenarios", "📊  Vigil Live", "🤖  Ask the Agent", "🩺  Cluster"]
+tab_principle, tab_scen, tab_live, tab_ask, tab_agent, tab_cluster = st.tabs(
+    ["🧭  Working Principle", "🎬  Scenarios", "📊  Vigil Live", "💬  Ask Vigil", "🤖  Ask (per-question)", "🩺  Cluster"]
 )
 
 
@@ -290,6 +292,67 @@ with tab_agent:
             for tool, val in res.get("grounded", {}).items():
                 st.markdown(f"**{tool}**")
                 st.json(val, expanded=False)
+
+
+# ============================ ASK VIGIL (agentic chat) ====================
+with tab_ask:
+    st.caption(
+        f"Chat with the MCP-connected copilot. It calls Vigil's tools **live** (all "
+        f"{vigil.mcp_tool_count()} of them), iterates over the grounded facts, and synthesises a "
+        "comprehensive, actionable answer — provenance preserved, nothing invented."
+    )
+    if not agent.DGX_API_KEY:
+        st.warning("`DGX_API_KEY` is not set — export the DeepSeek key (same one obsd uses) to enable the chat.")
+
+    cc1, cc2 = st.columns([5, 1])
+    with cc1:
+        st.markdown(
+            "**Try:** *What's wrong right now and how do I fix it?* · *What's the root cause?* · "
+            "*Are services affecting each other's resources?* · *Any early warnings — how do I resolve them?* · "
+            "*What can't Vigil see here?*"
+        )
+    with cc2:
+        if st.button("🗑 Clear", use_container_width=True):
+            st.session_state["ask_history"] = []
+            st.rerun()
+
+    if "ask_history" not in st.session_state:
+        st.session_state["ask_history"] = []
+
+    for m in st.session_state["ask_history"]:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+            if m.get("trace"):
+                with st.expander(f"🔧 {len(m['trace'])} live Vigil tool calls (the grounding)"):
+                    for s in m["trace"]:
+                        arg = f" `{json.dumps(s['args'])}`" if s.get("args") else ""
+                        st.markdown(f"**`{s['tool']}`**{arg}")
+                        st.code(json.dumps(s["result"], default=str)[:1800], language="json")
+
+    prompt = st.chat_input("Ask anything about the live cluster…")
+    if prompt:
+        st.session_state["ask_history"].append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            status = st.status("Calling Vigil's tools…", expanded=True)
+            steps: list[dict] = []
+
+            def _on_step(name, args, result):
+                steps.append({"tool": name, "args": args, "result": result})
+                status.write(f"🔧 `{name}`" + (f" {json.dumps(args)}" if args else ""))
+
+            agent_msgs = [{"role": h["role"], "content": h["content"]} for h in st.session_state["ask_history"]]
+            try:
+                res = agent.chat_agentic(agent_msgs, on_step=_on_step)
+                status.update(label=f"✓ synthesised from {len(steps)} grounded tool calls", state="complete", expanded=False)
+                st.markdown(res["answer"])
+                st.session_state["ask_history"].append(
+                    {"role": "assistant", "content": res["answer"], "trace": res["trace"]}
+                )
+            except Exception as e:
+                status.update(label="synthesis error", state="error")
+                st.error(f"{type(e).__name__}: {e}")
 
 
 # ============================ CLUSTER =====================================

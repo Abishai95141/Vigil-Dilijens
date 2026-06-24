@@ -149,3 +149,113 @@ def answer(question: str) -> dict:
     except Exception as e:
         res["error"] = f"{type(e).__name__}: {e}"
     return res
+
+
+# =========================================================================== #
+# AGENTIC CHAT — the "Ask Vigil" page. Unlike answer() (fixed tools, one shot),
+# this exposes ALL of Vigil's MCP tools to DeepSeek as OpenAI function-calls and
+# lets the model DECIDE which to call, iterate over the grounded results, and
+# synthesise a comprehensive, actionable answer. A real tool-use loop.
+# =========================================================================== #
+ASK_SYSTEM = (
+    "You are Vigil's operator copilot. You answer questions about a LIVE Kubernetes cluster by "
+    "CALLING Vigil's read-only MCP tools to gather grounded, already-classed facts, then "
+    "synthesising a comprehensive, actionable answer an on-call operator can act on immediately.\n\n"
+    "Each tool returns facts with a provenance class: MEASURED (observed/arithmetic), PROJECTED (a "
+    "forecast band), AUTHORED (a human-curated causal relation), ASSOCIATION (an undirected "
+    "correlation — a LEAD, never proof of cause), ADVISORY (a right-sizing recommendation).\n\n"
+    "HOW TO WORK:\n"
+    "1. CALL THE TOOLS YOU NEED before answering — never guess. Start broad (get_findings, "
+    "get_insights, get_root_cause_chain, get_cross_service), then drill in (get_onsets, "
+    "get_dependency, get_causal_hypotheses, get_events, get_incidents, get_warnings, "
+    "get_rightsizing_advice, get_timeline, get_coverage, get_silence_ledger, get_blindspots). "
+    "Call several — a thorough answer usually needs 4-8 tool calls.\n"
+    "2. GROUND EVERY CLAIM in a tool result. Never invent a pod, metric, number, or cause that is "
+    "not in a result. If the facts don't support an answer, say so plainly.\n"
+    "3. PRESERVE PROVENANCE. An association is a lead, not a cause. A forecast is a forecast. Only an "
+    "AUTHORED relation is causal. If you hypothesise a cause Vigil hasn't authored, label it clearly "
+    "as YOUR hypothesis — and you may call validate_claim to have Vigil label it.\n"
+    "4. BE COMPREHENSIVE AND ACTIONABLE. A great answer has: (a) the headline answer in one line; "
+    "(b) the MEASURED evidence — named workloads/pods/nodes, phenomena, metrics, bars, quality; "
+    "(c) the blast radius / what's affected and who's downstream; (d) the root cause, or an honest "
+    "'no single cause — independent faults'; (e) concrete REMEDIATION steps to take now; (f) what "
+    "Vigil cannot see here (blind spots), so the operator knows the limits.\n"
+    "5. Lead with the answer, then evidence, then remediation. Use the real entity names and numbers "
+    "from the facts. Be specific and confident when the facts are clear; never overstate when they "
+    "aren't. Markdown, with short sections and bold headers.\n\n"
+    "Your value is being HONEST, GROUNDED, and ACTIONABLE. Wow the operator with specificity and "
+    "useful next steps — never with invented certainty."
+)
+
+
+# emit_advisory POSTS an advisory (a side effect, gated/withheld by the charter) — the read-only
+# copilot should synthesise, not post; validate_claim (a read-only honesty labeler) stays available.
+_CHAT_TOOL_EXCLUDE = {"emit_advisory"}
+
+
+def mcp_openai_tools() -> list[dict]:
+    """Convert Vigil's live MCP tool list into OpenAI function-calling tool definitions."""
+    out = []
+    for t in vigil.mcp_list_tools():
+        name = t.get("name")
+        if not name or name in _CHAT_TOOL_EXCLUDE:
+            continue
+        out.append({"type": "function", "function": {
+            "name": name,
+            "description": (t.get("description") or "")[:1024],
+            "parameters": t.get("inputSchema") or {"type": "object", "properties": {}},
+        }})
+    return out
+
+
+def _chat_raw(messages: list[dict], tools: list[dict] | None = None, timeout: int = 120) -> dict:
+    """One OpenAI-compatible chat turn; returns the assistant message (may carry tool_calls)."""
+    if not DGX_API_KEY:
+        raise RuntimeError("DGX_API_KEY is not set — export it to enable the Ask page.")
+    body: dict = {"model": DGX_MODEL, "messages": messages, "temperature": 0.2, "stream": False}
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
+    req = urllib.request.Request(
+        DGX_BASE_URL.rstrip("/") + "/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"content-type": "application/json", "authorization": f"Bearer {DGX_API_KEY}"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        d = json.loads(r.read().decode())
+    return d["choices"][0]["message"]
+
+
+def chat_agentic(history: list[dict], max_iters: int = 8, on_step=None) -> dict:
+    """Run the tool-use loop. `history` is the prior [{role,content}] user/assistant turns
+    (most recent user message last). Returns {answer, trace} where trace is the tool calls made."""
+    tools = mcp_openai_tools()
+    convo = [{"role": "system", "content": ASK_SYSTEM}] + list(history)
+    trace: list[dict] = []
+    for _ in range(max_iters):
+        msg = _chat_raw(convo, tools=tools)
+        am: dict = {"role": "assistant", "content": msg.get("content") or ""}
+        tcs = msg.get("tool_calls") or []
+        if tcs:
+            am["tool_calls"] = tcs
+        convo.append(am)
+        if not tcs:
+            return {"answer": am["content"], "trace": trace}
+        for tc in tcs:
+            fn = tc.get("function", {}).get("name", "")
+            try:
+                args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+            except Exception:
+                args = {}
+            result = vigil.mcp_call(fn, args) if fn else {"_error": "empty tool name"}
+            trace.append({"tool": fn, "args": args, "result": result})
+            if on_step:
+                try:
+                    on_step(fn, args, result)
+                except Exception:
+                    pass
+            convo.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": _compact(result, 12000)})
+    # iteration budget hit — force a grounded synthesis from what we have
+    convo.append({"role": "user", "content": "Enough tool calls. Give your final, comprehensive, actionable answer NOW, grounded only in the facts gathered."})
+    final = _chat_raw(convo, tools=None)
+    return {"answer": final.get("content") or "", "trace": trace}

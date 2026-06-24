@@ -76,3 +76,7 @@ back to 1). The DeepSeek key is read from the environment only — never hard-co
 - `cluster.py` — transparent `kubectl` wrappers (AWS-aware; each returns the exact command it ran).
 - `vigil.py` — read-only obsd `/api` + `/mcp` client.
 - `agent.py` — the MCP-grounded DeepSeek "Ask the agent" brain (one-shot, charter-disciplined).
+
+## 💬 Ask Vigil (agentic chat)
+
+The **Ask Vigil** tab is a live chat with the MCP copilot. Unlike the per-question pane (fixed tools, one shot), it exposes **all of Vigil's MCP tools** to DeepSeek as function calls and lets the model decide which to call, iterate over the grounded results, and synthesise a comprehensive, actionable answer — leading with the answer, then MEASURED evidence, blast radius, remediation steps, and an honest 'what Vigil can't see'. Every tool call is shown inline so each claim is auditable. Needs `DGX_API_KEY`.
