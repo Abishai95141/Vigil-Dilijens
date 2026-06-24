@@ -361,6 +361,14 @@ func (s *Store) PDBUID(namespace, name string, at time.Time) (string, bool) {
 	return s.lookup("PodDisruptionBudget", namespace, name, at)
 }
 
+// StatefulSetUID returns the UID of the StatefulSet that was (namespace, name) at instant at
+// (docs/33 closure 1, v0.18.0). Implements Lookup. StatefulSets are Observe()d into the store
+// like PVCs/PDBs (the Watcher's apps/v1 informer), so the same time-aware succession
+// disambiguation applies — a recreated workload of the same name resolves to the right generation.
+func (s *Store) StatefulSetUID(namespace, name string, at time.Time) (string, bool) {
+	return s.lookup("StatefulSet", namespace, name, at)
+}
+
 func (s *Store) lookup(kind, namespace, name string, at time.Time) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

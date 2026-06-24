@@ -97,8 +97,15 @@ checks:
       expect: rising
       min_state: at-threshold
       on: anchor
+      # The base threshold-rules-v1 ALSO binds a PVC rule (THR_PVC_USED_VS_REQUESTED) on this same
+      # metric, so a filling PVC carries TWO threshold variables on kubelet_volume_stats_used_bytes.
+      # Name our rule so findThreshold resolves unambiguously instead of withholding the member as
+      # "no usable evidence" (the same collision that made CPU_AGGRESSOR inert before the fix).
+      rule: THR_PVC_USED_VS_REQUESTED_STORAGE
       note: >-
-        rising while at/over the 0.85x requested-storage bar (THR_PVC_USED_VS_REQUESTED_STORAGE);
+        rising while at/over the 0.85x requested-storage bar (THR_PVC_USED_VS_REQUESTED_STORAGE,
+        named via the check rule discriminator so the co-existing base PVC bar does not make the
+        member ambiguous);
         the 5m slope approximates a sustained fill. Corroborating signals
         (kubelet_volume_stats_inodes_used vs inodes, FilesystemResize/VolumeResize events) are
         not authored on this signal set — surfaced as a single-member DEGRADED match, named,

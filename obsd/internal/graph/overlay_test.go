@@ -23,7 +23,7 @@ func loadKGWithOverlays(t *testing.T) *Graph {
 // their traversal edge types — the doc 14 A14 gap, closed by authored content.
 func TestOverlaysCloseTheSpanGap(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Phenomena) != 45 {
+	if len(g.Phenomena) != 47 {
 		t.Fatalf("phenomena = %d, want 45 (+ 3 PSI saturation, psi-pressure-v1 / v0.14.0; + 1 PHEN_PVC_FILLING, pvc-filling-v1 / v0.15.0)", len(g.Phenomena))
 	}
 	counts := map[string]int{}
@@ -46,7 +46,7 @@ func TestOverlaysCloseTheSpanGap(t *testing.T) {
 	// (first-order over the new "flow" traversal edge). v0.14.0 (psi-pressure-v1)
 	// added 3 entity-local PSI saturation phenomena (19 -> 22); v0.15.0 (pvc-filling-v1)
 	// added PHEN_PVC_FILLING (entity-local, 22 -> 23).
-	if counts[SpanEntityLocal] != 23 || counts[SpanFirstOrder] != 17 || counts[SpanSecondOrder] != 5 {
+	if counts[SpanEntityLocal] != 25 || counts[SpanFirstOrder] != 17 || counts[SpanSecondOrder] != 5 {
 		t.Errorf("span distribution = %v, want entity-local:23 first-order:17 second-order:5", counts)
 	}
 }
@@ -69,7 +69,7 @@ func TestOOMSpanAuthored(t *testing.T) {
 // absolute/rate ⇒ flagged default).
 func TestThresholdRulesAttached(t *testing.T) {
 	g := loadKGWithOverlays(t)
-	if len(g.Rules) != 27 {
+	if len(g.Rules) != 29 {
 		t.Fatalf("rules = %d, want 27 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE + 4 controlplane-metrics + 2 bucket-c)", len(g.Rules))
 	}
 	for i := 1; i < len(g.Rules); i++ {
@@ -136,7 +136,7 @@ func TestOverlayVersionPinning(t *testing.T) {
 	// v0.14.0 (PSI): + psi-pressure-v1 (the PSI saturation lane), so 21.
 	// v0.15.0 (PVC-fill): + pvc-filling-v1 (the per-PVC fill lane), so 22.
 	// v0.16.0 (control-plane): + controlplane-metrics-v1 (the apiserver + CoreDNS lane), so 23.
-	if len(merged.Overlays) != 24 {
+	if len(merged.Overlays) != 27 {
 		t.Fatalf("overlay provenance records = %d, want 24 (… + init-container-failure-v1, detection-status-v1, corrections-v1, psi-pressure-v1, pvc-filling-v1, controlplane-metrics-v1)", len(merged.Overlays))
 	}
 	if len(merged.ChecksFor("PHEN_MEMORY_LEAK")) != 1 {

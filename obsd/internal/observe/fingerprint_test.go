@@ -160,6 +160,81 @@ func TestMaterializeCounterRatio(t *testing.T) {
 	}
 }
 
+// workloadBinding builds a Workload-scoped binding on a StatefulSet INSTANCE CEI (docs/33
+// closure 1, v0.18.0). The instance key is the load-bearing fix: a role CEI's StreamUID() is
+// empty, so Materialize would drop the binding and PHEN_WORKLOAD_UNAVAILABLE could never fire.
+func workloadBinding() binding.Binding {
+	return binding.Binding{
+		CEIKey: "i|cl|shop|StatefulSet|historian|uid-sts",
+		Entity: "Workload", RuleID: "THR_STS_READY_BELOW_DESIRED",
+		Metric: "kube_statefulset_status_replicas_ready",
+		State:  binding.StateBound, Validation: binding.ValidationSuspect,
+		Bar: &binding.ResolvedBar{
+			Kind: graph.RuleAbsolute, Source: binding.SourceDefault, Value: 1.0, Direction: "below", Flagged: true,
+		},
+	}
+}
+
+// A StatefulSet-instance Workload binding materializes a ready/desired ratio variable — the
+// regression guard for the original blocker (an instance CEI has a non-empty StreamUID, so the
+// bar joins; a role CEI did not). ready 1 of desired 2 → 0.5, below the 1.0 bar → crossed.
+func TestMaterializeWorkloadReadyRatio(t *testing.T) {
+	b := workloadBinding()
+	res := &binding.Result{Bindings: []binding.Binding{b}}
+	rule := &graph.ThresholdRule{ID: b.RuleID, Metric: b.Metric, DivisorMetric: "kube_statefulset_replicas"}
+	rules := map[string]*graph.ThresholdRule{b.RuleID: rule}
+	base := evalNow.Add(-60 * time.Second)
+	r := fakeReader{
+		streams: map[string][]string{
+			"uid-sts|kube_statefulset_status_replicas_ready": {"ready1"},
+			"uid-sts|kube_statefulset_replicas":              {"desired1"},
+		},
+		typ: map[string]string{"ready1": "gauge", "desired1": "gauge"},
+		hist: map[string][]qss.Sample{
+			"ready1":   s(base, 0, 1, 30, 1, 60, 1), // 1 ready
+			"desired1": s(base, 0, 2, 30, 2, 60, 2), // of 2 desired
+		},
+	}
+	fps := Materialize(res, rules, r, fpParams(), evalNow)
+	if len(fps) != 1 || len(fps[0].Thresholds) != 1 {
+		t.Fatalf("StatefulSet-instance binding must materialize exactly one ratio variable (the StreamUID join); got %+v", fps)
+	}
+	vt := fps[0].Thresholds[0]
+	if vt.Deriv.How != "counter-ratio" || vt.Deriv.DivisorID != "desired1" {
+		t.Fatalf("ratio derivation wrong: %+v", vt.Deriv)
+	}
+	if vt.Value < 0.49 || vt.Value > 0.51 {
+		t.Errorf("ready/desired ratio = %v, want 0.5", vt.Value)
+	}
+	if !vt.State.Crossed() {
+		t.Errorf("0.5 below the 1.0 desired bar must be CROSSED (workload unavailable), got %s", vt.State)
+	}
+}
+
+// desired=0 (a StatefulSet scaled intentionally to zero) yields no finite ratio: the component is
+// DROPPED, never a fabricated "unavailable" (the overlay's stated guarantee, enforced in eval).
+func TestMaterializeWorkloadDesiredZeroDropped(t *testing.T) {
+	b := workloadBinding()
+	res := &binding.Result{Bindings: []binding.Binding{b}}
+	rule := &graph.ThresholdRule{ID: b.RuleID, Metric: b.Metric, DivisorMetric: "kube_statefulset_replicas"}
+	rules := map[string]*graph.ThresholdRule{b.RuleID: rule}
+	base := evalNow.Add(-60 * time.Second)
+	r := fakeReader{
+		streams: map[string][]string{
+			"uid-sts|kube_statefulset_status_replicas_ready": {"ready1"},
+			"uid-sts|kube_statefulset_replicas":              {"desired1"},
+		},
+		typ: map[string]string{"ready1": "gauge", "desired1": "gauge"},
+		hist: map[string][]qss.Sample{
+			"ready1":   s(base, 0, 0, 30, 0, 60, 0),
+			"desired1": s(base, 0, 0, 30, 0, 60, 0), // scaled to zero
+		},
+	}
+	if fps := Materialize(res, rules, r, fpParams(), evalNow); len(fps) != 0 {
+		t.Fatalf("desired=0 must drop the component (no fabricated unavailability), got %+v", fps)
+	}
+}
+
 // Rate-of-change guard (restarts): the reset-aware window delta vs the guard count.
 func TestMaterializeRateGuard(t *testing.T) {
 	b := containerBinding("uid-a", "server", "THR_CONTAINER_RESTARTS_RATE",

@@ -24,7 +24,7 @@ func loadGraph(t *testing.T) *graph.Graph {
 	if err != nil {
 		t.Fatalf("LoadWithOverlays: %v", err)
 	}
-	if len(g.Rules) != 27 {
+	if len(g.Rules) != 29 {
 		t.Fatalf("rules = %d, want 27 (... + 1 v5: THR_NODE_DISK_PRESSURE + 1 v6: THR_PVC_PENDING + 1 disk-filling: THR_CONTAINER_FS_USAGE_VS_EPHEMERAL_LIMIT + 1 init-container: THR_INIT_CONTAINER_RESTARTS_RATE + 3 psi-pressure: THR_CONTAINER_PSI_{CPU_WAITING,MEMORY_STALLED,IO_STALLED}_RATE + 1 pvc-filling: THR_PVC_USED_VS_REQUESTED_STORAGE + 4 controlplane-metrics: THR_COREDNS_SERVFAIL_RATIO/THR_COREDNS_CACHE_MISS_RATIO/THR_APISERVER_APF_REJECTED/THR_APISERVER_WEBHOOK_REJECTIONS + 2 bucket-c: THR_PDB_CURRENT_BELOW_DESIRED_HEALTHY/THR_KUBELET_IMAGE_GC_REMOVALS)", len(g.Rules))
 	}
 	return g
@@ -59,6 +59,15 @@ func pvc(t *testing.T, ns, name, uid string) identity.InstanceRecord {
 		t.Fatal(err)
 	}
 	return identity.InstanceRecord{CEI: cei, Kind: "PersistentVolumeClaim", Namespace: ns, Name: name, UID: uid}
+}
+
+func statefulSet(t *testing.T, ns, name, uid string) identity.InstanceRecord {
+	t.Helper()
+	cei, err := identity.MintInstance(identity.InstanceCoords{Cluster: cluster, Namespace: ns, Kind: "StatefulSet", Name: name, UID: uid}, compileAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return identity.InstanceRecord{CEI: cei, Kind: "StatefulSet", Namespace: ns, Name: name, UID: uid}
 }
 
 // fakeConfig is a deterministic EntityConfig backed by maps.
@@ -129,6 +138,41 @@ func find(t *testing.T, res *Result, ruleID, ceiSubstr string) *Binding {
 	return nil
 }
 
+// docs/33 closure 1 (v0.18.0): a StatefulSet instance in the inventory binds the Workload-scoped
+// availability rule on its REAL instance CEI (the key its KSM replica series use), so the bar can
+// join. The original pod-derived "role" approach bound a role key whose StreamUID() is empty, so
+// Materialize dropped it and the phenomenon never fired — this is the compile-layer regression guard.
+// A co-present Deployment-role pod must NOT produce the StatefulSet binding (kind guard + the pod is
+// not a workload instance).
+func TestWorkloadScopeBindsStatefulSetInstance(t *testing.T) {
+	g := loadGraph(t)
+	inv := []identity.InstanceRecord{
+		statefulSet(t, "shop", "historian", "uid-sts"),
+		pod(t, "shop", "web-a", "uid-a", "Deployment", "web"), // a Deployment-role pod: must NOT bind the STS rule
+	}
+	res := Compile(g, inv, fakeConfig{}, nil, compileAt)
+
+	var wl []*Binding
+	for i := range res.Bindings {
+		if res.Bindings[i].RuleID == "THR_STS_READY_BELOW_DESIRED" && res.Bindings[i].State == StateBound {
+			wl = append(wl, &res.Bindings[i])
+		}
+	}
+	if len(wl) != 1 {
+		t.Fatalf("the StatefulSet availability rule must bind exactly one workload instance, got %d", len(wl))
+	}
+	b := wl[0]
+	if b.Entity != "Workload" {
+		t.Errorf("entity = %q, want Workload", b.Entity)
+	}
+	if !strings.HasPrefix(b.CEIKey, "i|") || !strings.Contains(b.CEIKey, "|StatefulSet|historian|uid-sts") {
+		t.Errorf("binding CEIKey = %q, want the StatefulSet INSTANCE key (so its KSM series join)", b.CEIKey)
+	}
+	if b.StreamUID() == "" {
+		t.Error("a Workload binding must have a non-empty StreamUID (an instance CEI), else Materialize drops it")
+	}
+}
+
 // The doc 04 §3.3 worked example, exact: one authored line (limit x 0.95) becomes
 // per-instance bars auto-calibrated from each entity's own config.
 func TestPerInstanceConfigRelativeBars(t *testing.T) {
@@ -187,11 +231,11 @@ func TestResolvabilityHoleListedNeverSilent(t *testing.T) {
 	// config-bound = web x2 x2rules + node + pvc(2) = 7. v0.15.0 (pvc-filling-v1) added the
 	// THR_PVC_USED_VS_REQUESTED_STORAGE config-relative PVC bar — a second resolvable PVC pair
 	// on the fixture's declared-request PVC (8/6 -> 9/7, resolvability 0.75 -> 7/9).
-	if res.Coverage.ConfigEligible != 9 || res.Coverage.ConfigBound != 7 {
-		t.Errorf("eligible/bound = %d/%d, want 9/7", res.Coverage.ConfigEligible, res.Coverage.ConfigBound)
+	if res.Coverage.ConfigEligible != 12 || res.Coverage.ConfigBound != 9 {
+		t.Errorf("eligible/bound = %d/%d, want 12/9", res.Coverage.ConfigEligible, res.Coverage.ConfigBound)
 	}
-	if res.Coverage.Resolvability != 7.0/9.0 {
-		t.Errorf("resolvability = %v, want %v", res.Coverage.Resolvability, 7.0/9.0)
+	if res.Coverage.Resolvability != 9.0/12.0 {
+		t.Errorf("resolvability = %v, want %v", res.Coverage.Resolvability, 9.0/12.0)
 	}
 }
 

@@ -1,0 +1,104 @@
+# CPU aggressor — authored overlay v1 (docs/33 closure 2 —
+# "Are different services influencing each other's resource consumption?").
+#
+# Names the AGGRESSOR in a noisy-neighbour contention by the MECHANISTIC ASYMMETRY, not by
+# correlation: the aggressor is the one container whose CPU usage rate is sustained AT/ABOVE
+# 100% of its OWN declared CPU limit (it breaches its own bar), while co-located victims merely
+# suffer CPU pressure (PHEN_CPU_PRESSURE_SATURATION) without exceeding their own usage. This is
+# a MEASURED, directional fact — the over-limit container is the one generating the contention —
+# so it does NOT violate the charter ban on inventing direction from a bare correlation.
+#
+# REUSES the base CPU family signal (SIG_container_cpu_family_12_metrics_857b041d, the same
+# container_cpu_usage_seconds_total node THR_CONTAINER_CPU_USAGE_VS_LIMIT and the throttle ratio
+# already ride) — authors NO new signal node. It adds ONE config-relative rule at factor 1.0
+# (over the limit), distinct from the existing factor-0.90 near-limit/throttling-imminent bar.
+#
+# CHARTER: the bar is the container's OWN declared resources.limits.cpu (borrowed normativity,
+# never learned, never a guessed default — no limit declared ⇒ unbounded/listed). The
+# CPU_AGGRESSOR→CPU_PRESSURE_SATURATION relation is AUTHORED trigger→downstream knowledge,
+# strictly descriptive; the cross-service lane will NOT auto-link the aggressor to its co-located
+# victims (they share a node, not a call edge) — the contention answer is assembled from
+# CPU_AGGRESSOR + the victims' CPU_PRESSURE_SATURATION + this authored relation + the shared-node
+# fact. No new signal, no new kind, no agent write. BEHAVIOURAL governance class (doc 12): the new
+# phenomenon + rule + relation bump the graph hash; base + prior releases stay byte-identical.
+overlay: resource-contention
+version: 1
+author: vigil-engineering
+status: proposed-v1 (docs/33 closure 2 — name the CPU aggressor that induces co-located CPU pressure)
+
+phenomena:
+  - id: PHEN_CPU_AGGRESSOR
+    label: CPU aggressor (over own limit)
+    severity: medium
+    signals:
+      - ["container_cpu_usage_seconds_total", "required", "T0+", "the container's CPU usage rate is sustained AT/ABOVE 100% of its OWN declared CPU limit — the over-limit aggressor"]
+    notes: >-
+      Entity-local, Container-scoped. Fires on the one container whose CPU rate (cores, over the
+      window) sustains at/above its OWN declared resources.limits.cpu (factor 1.0 — over the limit,
+      not merely near it like the 0.90 throttling-imminent bar). This is the mechanistic asymmetry
+      that NAMES the aggressor in a noisy-neighbour contention: the aggressor breaches its own bar
+      while co-located victims merely suffer CPU pressure. Single required member; absent
+      corroboration is NAMED, never fabricated (degrade-never-fabricate, doc 07).
+
+members:
+  PHEN_CPU_AGGRESSOR:
+    - signal: SIG_container_cpu_family_12_metrics_857b041d
+      role: required
+      temporal: T0+
+      why: CPU usage rate sustained at/above the container's own declared CPU limit — the over-limit aggressor
+
+spans:
+  PHEN_CPU_AGGRESSOR:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      The usage-vs-own-limit member is observed AT the container itself (its CPU rate vs its own
+      declared limit) — no topology walk joins it. Entity-local, the direct analogue of the
+      throttling/PSI container phenomena.
+
+rules:
+  - id: THR_CONTAINER_CPU_OVER_OWN_LIMIT
+    signal: SIG_container_cpu_family_12_metrics_857b041d
+    metric: container_cpu_usage_seconds_total
+    kind: config-relative
+    config_path: container.resources.limits.cpu
+    factor: 1.0
+    direction: above
+    entity_scope: Container
+    window: 5m
+    rationale: >-
+      CPU rate (cores, over the window) sustained at/above 100% of the container's OWN declared
+      CPU limit means the container is genuinely OVER its budget — the aggressor in a shared-node
+      contention, distinct from the factor-0.90 throttling-imminent bar (THR_CONTAINER_CPU_USAGE_VS_LIMIT).
+      Counter: evaluated as rate over the window. Unset limit -> unbounded, listed, never a guessed
+      default. FLAGGED structural 1.0 factor (the limit itself is the bar).
+
+checks:
+  PHEN_CPU_AGGRESSOR:
+    - signal: SIG_container_cpu_family_12_metrics_857b041d
+      metric: container_cpu_usage_seconds_total
+      facet: level
+      expect: crossed
+      on: anchor
+      # A container that declares a CPU limit carries TWO config-relative bars on this metric:
+      # the base 0.90 near-limit/throttling-imminent bar (THR_CONTAINER_CPU_USAGE_VS_LIMIT) and
+      # this 1.0 over-limit aggressor bar. The rule discriminator names which one the aggressor
+      # check consults, so the second bar does not make the member ambiguous/unobservable.
+      rule: THR_CONTAINER_CPU_OVER_OWN_LIMIT
+      note: >-
+        CPU rate crossed AT/ABOVE the container's own declared CPU limit (THR_CONTAINER_CPU_OVER_OWN_LIMIT,
+        factor 1.0; named via the check rule discriminator so the co-existing 0.90 bar does not make this
+        member ambiguous). Single required member on the container itself; co-located victims'
+        CPU_PRESSURE_SATURATION is named corroboration over the shared node, never fabricated. Requires the
+        cAdvisor CPU lane and a declared CPU limit (no limit -> out-of-scope, never a fabricated reading).
+
+relations:
+  - src: PHEN_CPU_AGGRESSOR
+    dst: PHEN_CPU_PRESSURE_SATURATION
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      An over-limit container's sustained CPU burn saturates the shared node's run-queue, so
+      co-located containers wait on CPU and their CPU-PSI rises — the noisy-neighbour contention.
+      The aggressor anchors on its own container (over its declared limit) and the victims on
+      theirs (CPU-PSI), recognized when both light up on the same node, never an inferred link.

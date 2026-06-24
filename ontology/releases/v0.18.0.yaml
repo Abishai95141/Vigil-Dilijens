@@ -1,0 +1,69 @@
+# Graph release v0.18.0 — immutable (doc 12 §3.1). Nothing edits a released
+# graph; change means a NEW release. The pin below is the content hash of
+# base + overlays (sorted-path order) — release_test.go and `graphlint
+# -release-latest` (via `just lint`) refuse any drift, loudly.
+release: v0.18.0
+graph_version: "sha256:f13e51010e65aef29bf1a460e7458a71dca021fd3312ff5aea303b7103c94390"
+created: "2026-06-24"
+author: vigil-engineering
+base: ontology/graph/k8s_signal_kg.json
+overlays:
+  - bucket-c-v1.yaml
+  - controlplane-metrics-v1.yaml
+  - corrections-v1.yaml
+  - cross-service-v0.yaml
+  - detect-conditions-v1.yaml
+  - detect-conditions-v2.yaml
+  - detect-conditions-v3.yaml
+  - detect-conditions-v4.yaml
+  - detect-conditions-v5.yaml
+  - detect-conditions-v6.yaml
+  - detect-conditions-v7.yaml
+  - detection-status-v1.yaml
+  - disk-filling-v1.yaml
+  - init-container-failure-v1.yaml
+  - phenomenon-severity-v1.yaml
+  - psi-pressure-v1.yaml
+  - pvc-filling-v1.yaml
+  - pvc-probe-cascade-v1.yaml
+  - resource-contention-v1.yaml
+  - spans-v1.yaml
+  - threshold-rules-v1.yaml
+  - threshold-rules-v2.yaml
+  - threshold-rules-v3.yaml
+  - threshold-rules-v4.yaml
+  - threshold-rules-v5.yaml
+  - threshold-rules-v6.yaml
+  - workload-unavailable-v1.yaml
+summary: >-
+  Closes the three "fundamental causal answer" gaps (docs/33 closures) so Vigil can ANSWER, not
+  just hedge, on its three reactive questions — each via a MEASURED phenomenon and/or an AUTHORED
+  causal edge, never by inventing direction from correlation. Three new overlays:
+  (1) workload-unavailable-v1 — PHEN_WORKLOAD_UNAVAILABLE (StatefulSet ready<desired, the
+  structural mirror of PHEN_PDB_VIOLATION) + a companion CODE change making the StatefulSet a
+  FIRST-CLASS identity instance (apps/v1 informer Observe()s it; normalize routes kube_statefulset_*
+  to a StatefulSet INSTANCE CEI, the PVC/PDB pattern) + a Workload binding scope that binds that
+  instance + the AUTHORED WORKLOAD_UNAVAILABLE->DOWNSTREAM_IMPACT relation. The instance CEI is
+  load-bearing: a role CEI's stream UID is EMPTY, so the ready/desired bar could never join its
+  series (Materialize drops a role-keyed binding) — the informer is what lets the bar actually
+  fire. A crashed/unschedulable backbone workload now becomes a MEASURED degraded flow node, so the
+  transitive root-cause chain ROOTS ON THE REAL UPSTREAM instead of the nearest downstream symptom.
+  (2) resource-contention-v1 — PHEN_CPU_AGGRESSOR (a container sustained AT/ABOVE its OWN declared
+  CPU limit, factor 1.0, reusing the base CPU family signal) + the AUTHORED
+  CPU_AGGRESSOR->CPU_PRESSURE_SATURATION relation, so the noisy-neighbour AGGRESSOR is named by the
+  measured over-limit asymmetry, not a bare correlation. Because a CPU-limited container carries TWO
+  config-relative bars on container_cpu_usage_seconds_total (the base 0.90 near-limit bar and this
+  1.0 over-limit bar), the aggressor check names its rule via a new MemberCheck rule-discriminator so
+  the second bar does not make the member ambiguous/unobservable. (3) pvc-probe-cascade-v1 — the
+  AUTHORED PVC_FILLING->PROBE_FAILURE_RESTART and IO_PRESSURE_SATURATION->PROBE_FAILURE_RESTART edges
+  so a storage-starvation restart is reported as recognized causation. Live validation surfaced that
+  PHEN_PVC_FILLING itself was inert since v0.15.0 — the base threshold-rules-v1 already binds a PVC rule
+  (THR_PVC_USED_VS_REQUESTED) on kubelet_volume_stats_used_bytes, so PVC_FILLING's own bar
+  (THR_PVC_USED_VS_REQUESTED_STORAGE) collided on that metric and findThreshold withheld the member; its
+  check now names its rule via the same MemberCheck discriminator (so the cascade source can actually fire). CHARTER-CLEAN: the new bars
+  are honest KSM/cAdvisor gauges vs the entity's OWN declared config (borrowed normativity), IN-DIGEST
+  legitimate; the relations are AUTHORED trigger->downstream knowledge, strictly descriptive. No agent
+  write. Both new phenomena are unit-proven to FIRE (Materialize + matcher tests) and stay silent when
+  healthy. BEHAVIOURAL governance class (doc 12): the new phenomena + signal + rules + the Workload
+  binding scope + the check rule-discriminator bump the hash v0.17.0->v0.18.0; the base KG and every
+  prior release stay byte-identical and loadable.

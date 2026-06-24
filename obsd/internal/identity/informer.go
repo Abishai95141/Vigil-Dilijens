@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -90,6 +91,12 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 	// object-state series (kube_poddisruptionbudget_status_*) resolve to a real PDB CEI,
 	// the way PVC was added — making PHEN_PDB_VIOLATION detectable.
 	pdbInformer := f.Policy().V1().PodDisruptionBudgets().Informer()
+	// StatefulSet (docs/33 closure 1, v0.18.0): a first-class identity instance so its KSM
+	// object-state series (kube_statefulset_status_replicas_ready / kube_statefulset_replicas)
+	// resolve to a real instance CEI — the same treatment PVC/PDB got. Without it those series
+	// normalize to a ROLE CEI whose stream UID is empty, so the ready<desired ratio could never
+	// join its data and PHEN_WORKLOAD_UNAVAILABLE never fired.
+	stsInformer := f.Apps().V1().StatefulSets().Informer()
 
 	// Index pods by UID so the join audit can verify a container CEI's owning pod
 	// exists (doc 03 §6) without a full scan.
@@ -145,6 +152,11 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 			UpdateFunc: func(_, obj any) { w.upsertPDB(obj) },
 			DeleteFunc: w.deletePDB,
 		}},
+		{"statefulset", stsInformer, cache.ResourceEventHandlerFuncs{
+			AddFunc:    func(obj any) { w.upsertStatefulSet(obj) },
+			UpdateFunc: func(_, obj any) { w.upsertStatefulSet(obj) },
+			DeleteFunc: w.deleteStatefulSet,
+		}},
 	}
 	for _, h := range handlers {
 		if _, err := h.informer.AddEventHandler(h.funcs); err != nil {
@@ -155,7 +167,7 @@ func NewWatcher(client kubernetes.Interface, store *Store, edges *EdgeStore, clu
 	w.synced = []cache.InformerSynced{
 		rsInformer.HasSynced, jobInformer.HasSynced, pvcInformer.HasSynced, svcInformer.HasSynced,
 		podInformer.HasSynced, nodeInformer.HasSynced, sliceInformer.HasSynced, leaseInformer.HasSynced,
-		pdbInformer.HasSynced,
+		pdbInformer.HasSynced, stsInformer.HasSynced,
 	}
 	return w, nil
 }
@@ -354,6 +366,44 @@ func (w *Watcher) deletePDB(obj any) {
 		Name: pdb.Name, UID: string(pdb.UID),
 	}
 	w.store.TerminateInstance(inst, deletionTime(pdb.DeletionTimestamp, w.clock))
+}
+
+// upsertStatefulSet observes a StatefulSet into the lifecycle store (docs/33 closure 1, v0.18.0)
+// so its KSM object-state series (kube_statefulset_status_replicas_ready / kube_statefulset_replicas)
+// resolve to a real instance CEI — the same first-class-entity treatment PVC/PDB received. A
+// StatefulSet is a namespaced object whose own role layer IS itself, so RoleCEI stays zero (its
+// pods mint the matching role CEI independently); StateActive once it exists (its ready/desired
+// counts are separate MEASURED observations, not the identity state). The availability ratio
+// (ready < desired) is detected by the workload-unavailable overlay's rule over these series.
+func (w *Watcher) upsertStatefulSet(obj any) {
+	sts, ok := obj.(*appsv1.StatefulSet)
+	if !ok {
+		return
+	}
+	inst := InstanceCoords{
+		Cluster: w.cluster, Namespace: sts.Namespace, Kind: "StatefulSet",
+		Name: sts.Name, UID: string(sts.UID),
+	}
+	if _, err := w.store.Observe(inst, CEI{}, sts.CreationTimestamp.Time, StateActive); err != nil {
+		w.logger.Warn("identity: statefulset observe failed", "namespace", sts.Namespace, "statefulset", sts.Name, "err", err)
+	}
+}
+
+func (w *Watcher) deleteStatefulSet(obj any) {
+	sts, ok := obj.(*appsv1.StatefulSet)
+	if !ok {
+		if tomb, isTomb := obj.(cache.DeletedFinalStateUnknown); isTomb {
+			sts, ok = tomb.Obj.(*appsv1.StatefulSet)
+		}
+		if !ok {
+			return
+		}
+	}
+	inst := InstanceCoords{
+		Cluster: w.cluster, Namespace: sts.Namespace, Kind: "StatefulSet",
+		Name: sts.Name, UID: string(sts.UID),
+	}
+	w.store.TerminateInstance(inst, deletionTime(sts.DeletionTimestamp, w.clock))
 }
 
 // --- helpers -----------------------------------------------------------------

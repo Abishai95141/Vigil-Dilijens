@@ -212,8 +212,8 @@ func TestCompileAvailabilityGating(t *testing.T) {
 	if pvc.State != StateOutOfScope || !strings.Contains(pvc.Reason, "CAP_CSI_DRIVER") {
 		t.Errorf("pvc binding = %s (%q), want out-of-scope on CAP_CSI_DRIVER", pvc.State, pvc.Reason)
 	}
-	if res.Coverage.ConfigEligible != 6 || res.Coverage.ConfigBound != 4 {
-		t.Errorf("eligible/bound = %d/%d, want 6/4 (availability-gated pairs excluded)", res.Coverage.ConfigEligible, res.Coverage.ConfigBound)
+	if res.Coverage.ConfigEligible != 9 || res.Coverage.ConfigBound != 6 {
+		t.Errorf("eligible/bound = %d/%d, want 9/6 (availability-gated pairs excluded)", res.Coverage.ConfigEligible, res.Coverage.ConfigBound)
 	}
 	// The cAdvisor-backed rules still instantiate normally.
 	ws := find(t, res, "THR_CONTAINER_MEM_WORKING_SET_VS_LIMIT", "web-a")

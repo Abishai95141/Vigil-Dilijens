@@ -1,0 +1,131 @@
+# Workload unavailable — authored overlay v1 (docs/33 closure 1 —
+# "What's the cause of a failure?" must root on the REAL upstream, even when it has no
+# healthy pod emitting a container symptom).
+#
+# THE GAP: a crashed / unschedulable / image-pull-failing backbone workload (e.g. the
+# time-series historian StatefulSet) drops its ready replicas below its desired count, but until
+# now Vigil had no WORKLOAD-scoped phenomenon for that — so the deepest MEASURED-degraded node
+# was the nearest downstream symptom (asset-api staleness), and the transitive root-cause chain
+# named THAT, not the real root. PHEN_WORKLOAD_UNAVAILABLE makes the workload itself a MEASURED
+# degraded flow node so the chain roots on it, and the authored relation orients the blast radius.
+#
+# A workload is unavailable when its ready replicas drop below its OWN declared desired count —
+# the EXACT structural mirror of PHEN_PDB_VIOLATION (current<desired): a healthy workload sits at
+# ratio >= 1.0 (at/above the 1.0 bar, never crossed), an unavailable one drops below.
+#
+# v1 SCOPE: the StatefulSet path (kube_statefulset_status_replicas_ready / kube_statefulset_replicas)
+# — the backbone-datastore archetype (DB / broker / historian) whose outage roots a cascade. The
+# Deployment twin (kube_deployment_status_replicas_available / _spec_replicas) is a noted follow-up:
+# a single member's check binds ONE signal/metric (matcher indexes checks by signal), and a
+# crashing Deployment's pods ALSO fire PHEN_PROBE_FAILURE_RESTART / PHEN_OOM_KILL_CGROUP (already
+# wired), so a Deployment's degradation is already visible to the cascade.
+#
+# COMPANION CODE CHANGE (this build): the binding engine gains a Workload entity_scope, and the
+# StatefulSet becomes a FIRST-CLASS identity instance — the apps/v1 informer Observe()s it into the
+# lifecycle store, normalize routes kube_statefulset_* to a StatefulSet INSTANCE CEI (the PVC/PDB
+# pattern), and the Workload-scoped bar binds that instance. This is load-bearing: a ROLE CEI's
+# stream UID is EMPTY, so Materialize would drop the binding and the bar could never join the
+# ready/desired series — which is exactly why the first cut (a role CEI derived from the pod
+# inventory) never fired. The instance CEI is the only key whose StreamUID() is non-empty. The
+# graph loader + graphlint entity-scope vocab gain "Workload".
+#
+# CHARTER: the ratio is an honest KSM-gauge/KSM-gauge comparison against the workload's OWN
+# declared replica count — borrowed-normativity clean, IN-DIGEST legitimate (deterministic,
+# replay-byte-identical). A workload with desired=0 (intentionally scaled off) yields no finite
+# ratio and is dropped — never a fabricated "unavailable". The relation is AUTHORED
+# trigger->downstream knowledge, strictly descriptive. No agent write. BEHAVIOURAL governance
+# class (doc 12): the new phenomenon + signal + rule + the Workload binding scope bump the hash;
+# base + every prior release stay byte-identical and loadable.
+overlay: workload-unavailable
+version: 1
+author: vigil-engineering
+status: proposed-v1 (docs/33 closure 1 — StatefulSet ready<desired roots the cascade on the real upstream)
+
+signals:
+  - id: SIG_kube_workload_replicas_ready_wu1
+    name: Workload ready vs desired replicas
+    data_type: gauge
+    entity: Workload
+    modality: Metric
+    tools:
+      - kube-state-metrics
+    source: kube-state-metrics (workload .status)
+    collection_method: Prometheus scrape on KSM /metrics
+    notes: >-
+      The ready-vs-desired replica ratio per workload. v1 reads the StatefulSet pair
+      kube_statefulset_status_replicas_ready / kube_statefulset_replicas. When the ratio drops
+      below 1.0 the workload no longer has all its declared replicas Ready — a crash,
+      CrashLoopBackOff, image-pull failure, or unschedulable condition. KSM emits these on every
+      cluster; routed to the StatefulSet INSTANCE CEI by normalize (kube_statefulset_*), so the
+      ready/desired ratio joins a real per-workload key.
+
+phenomena:
+  - id: PHEN_WORKLOAD_UNAVAILABLE
+    label: Workload unavailable (ready < desired replicas)
+    severity: high
+    signals:
+      - ["kube_statefulset_status_replicas_ready", "required", "T0", "ready replicas dropped below the workload's own declared desired count — the workload is degraded at the controller level"]
+    notes: >-
+      The workload-level analogue of PHEN_PDB_VIOLATION: ready replicas below the workload's OWN
+      declared desired count. Makes a crashed/unschedulable backbone workload a MEASURED degraded
+      flow node so the transitive root-cause chain roots on it (instead of the nearest downstream
+      symptom), and the authored WORKLOAD_UNAVAILABLE->DOWNSTREAM_IMPACT relation orients its
+      blast radius. Single required member; desired=0 (scaled off) yields no finite ratio and is
+      dropped — never a fabricated unavailability.
+
+members:
+  PHEN_WORKLOAD_UNAVAILABLE:
+    - signal: SIG_kube_workload_replicas_ready_wu1
+      role: required
+      temporal: T0
+      why: ready replicas dropped below the workload's own declared desired count
+
+spans:
+  PHEN_WORKLOAD_UNAVAILABLE:
+    span: entity-local
+    traversal_edge_types: []
+    rationale: >-
+      The ready-vs-desired ratio is read AT the workload's own KSM .status (its own ready/desired
+      counters) — no topology walk joins it. Entity-local, the workload analogue of
+      PHEN_PDB_VIOLATION. The downstream blast radius rides the separate authored phenomenon_relation,
+      not a span traversal.
+
+rules:
+  - id: THR_STS_READY_BELOW_DESIRED
+    signal: SIG_kube_workload_replicas_ready_wu1
+    metric: kube_statefulset_status_replicas_ready
+    divisor_metric: kube_statefulset_replicas
+    kind: absolute
+    default: 1.0
+    direction: below
+    entity_scope: Workload
+    window: 5m
+    rationale: >-
+      A StatefulSet is unavailable when ready_replicas < desired (.spec.replicas). Evaluated as the
+      ratio ready/desired: a healthy StatefulSet sits at >= 1.0 (at/above the 1.0 bar, never
+      crossed), an unavailable one drops below. The denominator is the StatefulSet's OWN declared
+      replica count — borrowed normativity, never a guessed default; desired=0 yields no finite
+      ratio and is dropped. FLAGGED structural 1.0 bar.
+
+checks:
+  PHEN_WORKLOAD_UNAVAILABLE:
+    - signal: SIG_kube_workload_replicas_ready_wu1
+      metric: kube_statefulset_status_replicas_ready
+      facet: ratio
+      expect: at-or-above
+      on: anchor
+      note: >-
+        ready/desired replica ratio crossed BELOW 1.0 (THR_STS_READY_BELOW_DESIRED), on the
+        workload itself. Single required member; the workload's restarting pods are named
+        corroboration without a v1 check — surfaced as a DEGRADED match, never fabricated. Requires
+        the --ksm-enabled lane.
+
+relations:
+  - src: PHEN_WORKLOAD_UNAVAILABLE
+    dst: PHEN_DOWNSTREAM_IMPACT
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      A workload that loses its ready replicas can no longer serve the services that call it; per
+      the curated ontology its degradation propagates impact to its direct callers along the
+      observed call edge, so the caller's own latency/error/staleness signal degrades in turn.

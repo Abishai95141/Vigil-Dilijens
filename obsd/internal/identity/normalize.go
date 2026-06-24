@@ -105,15 +105,16 @@ const (
 	ReasonNonPodCgroup Reason = "non-pod-cgroup"    // cAdvisor system.slice etc.
 
 	// Quarantines (expected to join, could not).
-	ReasonMissingLabels  Reason = "missing-identity-labels"
-	ReasonUnknownPod     Reason = "unknown-pod"
-	ReasonUnknownNode    Reason = "unknown-node"
-	ReasonUnknownPVC     Reason = "unknown-pvc"
-	ReasonUnknownPDB     Reason = "unknown-pdb"
-	ReasonUnmappedMetric Reason = "unmapped-metric-class"
-	ReasonUnknownFamily  Reason = "unknown-exporter-family"
-	ReasonMissingSource  Reason = "missing-scrape-source"
-	ReasonMalformed      Reason = "malformed-coordinates"
+	ReasonMissingLabels      Reason = "missing-identity-labels"
+	ReasonUnknownPod         Reason = "unknown-pod"
+	ReasonUnknownNode        Reason = "unknown-node"
+	ReasonUnknownPVC         Reason = "unknown-pvc"
+	ReasonUnknownPDB         Reason = "unknown-pdb"
+	ReasonUnknownStatefulSet Reason = "unknown-statefulset"
+	ReasonUnmappedMetric     Reason = "unmapped-metric-class"
+	ReasonUnknownFamily      Reason = "unknown-exporter-family"
+	ReasonMissingSource      Reason = "missing-scrape-source"
+	ReasonMalformed          Reason = "malformed-coordinates"
 )
 
 // Series is one scraped series presented for identity normalization.
@@ -191,6 +192,12 @@ type Lookup interface {
 	// namespaced, lifecycle-tracked object, so its KSM object-state series join the real
 	// instance CEI, never a pseudo-key.
 	PDBUID(namespace, name string, at time.Time) (uid string, ok bool)
+	// StatefulSetUID returns the UID of the StatefulSet that was (namespace, name) at instant
+	// at (docs/33 closure 1, v0.18.0). Same time-aware contract as PDBUID — a StatefulSet is a
+	// namespaced, lifecycle-tracked object, so its KSM replica series join a REAL per-workload
+	// instance CEI (the ready/desired ratio can actually divide), never a role pseudo-key whose
+	// stream UID is empty.
+	StatefulSetUID(namespace, name string, at time.Time) (uid string, ok bool)
 }
 
 // Normalizer applies the per-family normalization maps.
@@ -423,15 +430,30 @@ func (n *Normalizer) ksm(s Series) Result {
 		}
 		return n.node(FamilyKSM, name, s.joinTime(), s.At)
 
-	// Workload metrics map to ROLE-layer CEIs whose keys match DeriveRole's
-	// anchors exactly, so workload series and pod role aggregation join by
-	// construction. Only kinds that are their own role anchor map directly.
+	// Deployment/DaemonSet metrics map to ROLE-layer CEIs whose keys match DeriveRole's
+	// anchors exactly, so workload series and pod role aggregation join by construction.
+	// (No rule binds these yet — they are ingested role series, not detection bars.)
 	case strings.HasPrefix(s.Metric, "kube_deployment_"):
 		return n.role(FamilyKSM, s, "Deployment", s.Labels["deployment"])
-	case strings.HasPrefix(s.Metric, "kube_statefulset_"):
-		return n.role(FamilyKSM, s, "StatefulSet", s.Labels["statefulset"])
 	case strings.HasPrefix(s.Metric, "kube_daemonset_"):
 		return n.role(FamilyKSM, s, "DaemonSet", s.Labels["daemonset"])
+
+	// StatefulSets are namespaced, lifecycle-tracked instances (docs/33 closure 1, v0.18.0):
+	// their KSM object-state series (status_replicas_ready / replicas) resolve to a StatefulSet
+	// instance CEI via the time-aware lookup, so the ready/desired ratio joins a REAL per-workload
+	// key. A ROLE CEI's stream UID is empty, so the bar could never divide — which is exactly why
+	// PHEN_WORKLOAD_UNAVAILABLE was dark before this fix. A row whose StatefulSet is not in the
+	// control-plane view quarantines — never a guessed identity.
+	case strings.HasPrefix(s.Metric, "kube_statefulset_"):
+		ns, name := s.Labels["namespace"], s.Labels["statefulset"]
+		if ns == "" || name == "" {
+			return n.quarantine(FamilyKSM, ReasonMissingLabels)
+		}
+		uid, ok := n.lookup.StatefulSetUID(ns, name, s.joinTime())
+		if !ok {
+			return n.quarantine(FamilyKSM, ReasonUnknownStatefulSet)
+		}
+		return n.statefulSet(FamilyKSM, ns, name, uid, s.At)
 
 	// PersistentVolumeClaims are namespaced, lifecycle-tracked instances (doc 03):
 	// their KSM object-state series (status_phase, status_condition, resource_requests)
@@ -508,6 +530,16 @@ func (n *Normalizer) pvc(f Family, ns, name, uid string, at time.Time) Result {
 func (n *Normalizer) pdb(f Family, ns, name, uid string, at time.Time) Result {
 	cei, err := MintInstance(InstanceCoords{
 		Cluster: n.cluster, Namespace: ns, Kind: "PodDisruptionBudget", Name: name, UID: uid,
+	}, at)
+	if err != nil {
+		return n.quarantine(f, ReasonMalformed)
+	}
+	return n.resolved(f, cei)
+}
+
+func (n *Normalizer) statefulSet(f Family, ns, name, uid string, at time.Time) Result {
+	cei, err := MintInstance(InstanceCoords{
+		Cluster: n.cluster, Namespace: ns, Kind: "StatefulSet", Name: name, UID: uid,
 	}, at)
 	if err != nil {
 		return n.quarantine(f, ReasonMalformed)

@@ -27,7 +27,14 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 	// first-class identity instances (the Watcher Observe()s them, doc 03), so they ride
 	// the SAME inventory as pods/nodes — their KSM object-state series join the real
 	// instance CEI, not a pseudo-key (the documented dark-bar fix).
-	var pods, nodes, pvcs, pdbs []identity.InstanceRecord
+	// Workload instances (docs/33 closure 1, fixed in v0.18.0): StatefulSets are first-class
+	// lifecycle-tracked instances (the Watcher's apps/v1 informer Observe()s them), so they ride
+	// the SAME inventory as PVC/PDB and carry a REAL instance CEI — the only key whose stream UID
+	// is non-empty, so the ready/desired bar can actually join the KSM replica series. (The earlier
+	// "derive a role CEI from the pod inventory" approach minted a role key whose StreamUID() is
+	// empty, so Materialize dropped the binding and the phenomenon never fired.) v1 binds the
+	// StatefulSet archetype; the Deployment twin is a noted follow-up.
+	var pods, nodes, pvcs, pdbs, workloads []identity.InstanceRecord
 	for _, r := range inventory {
 		switch r.Kind {
 		case "Pod":
@@ -38,12 +45,15 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 			pvcs = append(pvcs, r)
 		case "PodDisruptionBudget":
 			pdbs = append(pdbs, r)
+		case "StatefulSet", "Deployment":
+			workloads = append(workloads, r)
 		}
 	}
 	sort.Slice(pods, func(i, j int) bool { return pods[i].CEI.Key() < pods[j].CEI.Key() })
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].CEI.Key() < nodes[j].CEI.Key() })
 	sort.Slice(pvcs, func(i, j int) bool { return pvcs[i].CEI.Key() < pvcs[j].CEI.Key() })
 	sort.Slice(pdbs, func(i, j int) bool { return pdbs[i].CEI.Key() < pdbs[j].CEI.Key() })
+	sort.Slice(workloads, func(i, j int) bool { return workloads[i].CEI.Key() < workloads[j].CEI.Key() })
 
 	// Rules are already sorted by ID (graph loader invariant).
 	for _, rule := range g.Rules {
@@ -61,7 +71,7 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 		if avail != nil {
 			if av, ok := avail.PerSignal[rule.Signal]; ok && av.State == OutOfScopeUnobtainable {
 				reason := "signal unobtainable on this cluster: " + strings.Join(av.Reasons, "; ")
-				bindAllOutOfScope(res, &cov, rule, em, reason, pods, nodes, pvcs, pdbs)
+				bindAllOutOfScope(res, &cov, rule, em, reason, pods, nodes, pvcs, pdbs, workloads)
 				res.Coverage.PerRule = append(res.Coverage.PerRule, cov)
 				continue
 			}
@@ -89,6 +99,10 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 			for _, ref := range pdbs {
 				bindPDB(res, &cov, rule, em, ref, now)
 			}
+		case "Workload":
+			for _, wl := range workloads {
+				bindWorkload(res, &cov, rule, em, wl, now)
+			}
 		}
 		res.Coverage.PerRule = append(res.Coverage.PerRule, cov)
 	}
@@ -101,7 +115,7 @@ func Compile(g *graph.Graph, inventory []identity.InstanceRecord, cfg EntityConf
 // out-of-scope state with one stated reason (signal unobtainable here). The pairs
 // still EXIST in the report — "recorded as out-of-scope, not failure" and never
 // silently absent (doc 04 §3.1.1, §3.5).
-func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, reason string, pods, nodes, pvcs, pdbs []identity.InstanceRecord) {
+func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, reason string, pods, nodes, pvcs, pdbs, workloads []identity.InstanceRecord) {
 	add := func(b Binding) {
 		b.State = StateOutOfScope
 		b.Validation = ValidationSuspect
@@ -130,6 +144,13 @@ func bindAllOutOfScope(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule
 	case "PDB":
 		for _, rec := range pdbs {
 			add(Binding{CEIKey: rec.CEI.Key(), Entity: "PDB", RuleID: rule.ID, Metric: rule.Metric})
+		}
+	case "Workload":
+		for _, rec := range workloads {
+			if !workloadRuleApplies(rule, rec) {
+				continue
+			}
+			add(Binding{CEIKey: rec.CEI.Key(), Entity: "Workload", RuleID: rule.ID, Metric: rule.Metric})
 		}
 	}
 }
@@ -353,6 +374,41 @@ func bindPVC(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emiss
 func bindPDB(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, rec identity.InstanceRecord, now time.Time) {
 	b := Binding{
 		CEIKey: rec.CEI.Key(), Entity: "PDB",
+		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
+	}
+	cov.Instantiated++
+	b.Bar = defaultBar(rule, now)
+	cov.DefaultBound++
+	res.Bindings = append(res.Bindings, b)
+}
+
+// workloadRuleApplies guards a Workload-scoped rule to its own workload kind: KSM replica
+// metric names are kind-specific (kube_statefulset_* vs kube_deployment_*), so a StatefulSet
+// rule must not bind to a Deployment instance (its series would never exist there) and vice versa.
+// A rule whose metric carries no workload-kind prefix applies to every workload instance.
+func workloadRuleApplies(rule *graph.ThresholdRule, rec identity.InstanceRecord) bool {
+	switch {
+	case strings.HasPrefix(rule.Metric, "kube_statefulset_"):
+		return rec.Kind == "StatefulSet"
+	case strings.HasPrefix(rule.Metric, "kube_deployment_"):
+		return rec.Kind == "Deployment"
+	default:
+		return true
+	}
+}
+
+// bindWorkload instantiates a Workload-scoped rule against one workload INSTANCE (docs/33 closure 1,
+// fixed in v0.18.0). The workload is a first-class lifecycle-tracked instance (rec, from the apps/v1
+// informer), so its binding carries the REAL instance CEI key — the same key its KSM replica series
+// use, the only key whose StreamUID() is non-empty so Materialize can join the data. PHEN_WORKLOAD_UNAVAILABLE's
+// rule is an absolute ratio (ready/desired below 1.0), so the bar is a FLAGGED ontology default, exactly
+// like bindPDB; there is no customer config for workload availability, so no config-relative branch.
+func bindWorkload(res *Result, cov *RuleCoverage, rule *graph.ThresholdRule, em Emission, rec identity.InstanceRecord, now time.Time) {
+	if !workloadRuleApplies(rule, rec) {
+		return
+	}
+	b := Binding{
+		CEIKey: rec.CEI.Key(), Entity: "Workload",
 		RuleID: rule.ID, Metric: rule.Metric, State: StateBound, Validation: ValidationSuspect, Emission: em,
 	}
 	cov.Instantiated++

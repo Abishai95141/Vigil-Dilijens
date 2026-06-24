@@ -123,7 +123,7 @@ var knownSpans = map[string]bool{SpanEntityLocal: true, SpanFirstOrder: true, Sp
 // of the deterministic digest — adding it to the vocabulary changes no existing span.
 var knownTraversalEdgeTypes = map[string]bool{"runs-on": true, "mounts": true, "selects": true, "node-lease": true, "flow": true}
 
-var knownEntityScopes = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true, "PDB": true}
+var knownEntityScopes = map[string]bool{"Container": true, "Pod": true, "Node": true, "PVC": true, "PDB": true, "Workload": true}
 
 var knownDirections = map[string]bool{"above": true, "below": true}
 
@@ -190,6 +190,13 @@ type MemberCheck struct {
 	// across an absent edge (the degrade-never-fabricate contract).
 	On   string `yaml:"on"`   // "" | anchor | neighbour | two-hop
 	Note string `yaml:"note"` // honesty caveat surfaced on the finding
+	// Rule optionally disambiguates WHICH bound threshold variable this check consults when
+	// an entity carries more than one rule on the same metric (e.g. two config-relative CPU
+	// bars at different factors — a 0.90 near-limit bar and a 1.0 over-limit aggressor bar).
+	// Empty = the metric must be unambiguous (the default and common case). When set, the
+	// matcher resolves the variable by (metric, RuleID), so a second bar on the same metric
+	// no longer makes the member unobservable. The named rule must exist and carry this metric.
+	Rule string `yaml:"rule"` // "" | a ThresholdRule id
 }
 
 // OnAnchor reports whether the check evaluates on the anchor entity itself.
@@ -872,7 +879,7 @@ func (g *Graph) applyOverlay(name string, raw []byte) error {
 			return fmt.Errorf("anchor for unknown phenomenon %q", id)
 		}
 		if !knownEntityScopes[kind] {
-			return fmt.Errorf("phenomenon %s: unknown anchor kind %q (Container|Pod|Node|PVC|PDB)", id, kind)
+			return fmt.Errorf("phenomenon %s: unknown anchor kind %q (Container|Pod|Node|PVC|PDB|Workload)", id, kind)
 		}
 		if p.Anchor != "" && p.Anchor != kind {
 			return fmt.Errorf("phenomenon %s: anchor conflict (%q already declared, overlay says %q)", id, p.Anchor, kind)
@@ -953,6 +960,17 @@ func (g *Graph) validateCheck(p *Phenomenon, c *MemberCheck) error {
 	}
 	if !isMember {
 		return fmt.Errorf("signal %q is not a member of %s (a check cannot bind an undeclared member)", c.Signal, c.Phenomenon)
+	}
+	// A rule discriminator (used to pick one of several same-metric bars) must name a real
+	// rule carrying this check's metric — otherwise it would silently resolve to nothing.
+	if c.Rule != "" {
+		r := g.rulesByID[c.Rule]
+		if r == nil {
+			return fmt.Errorf("check rule discriminator %q references unknown rule", c.Rule)
+		}
+		if r.Metric != c.Metric {
+			return fmt.Errorf("check rule discriminator %q has metric %q but the check consults %q", c.Rule, r.Metric, c.Metric)
+		}
 	}
 	return nil
 }

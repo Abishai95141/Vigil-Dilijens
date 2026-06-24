@@ -1,0 +1,46 @@
+# PVC / I/O storage-starvation → probe-failure restart cascade — authored overlay v1
+# (docs/33 closure 3 — "How are PVC I/O patterns linked to pod restarts?").
+#
+# RELATIONS ONLY. Both endpoint phenomena already exist and are fully observable live on this
+# AWS EBS cluster (PHEN_PVC_FILLING observability=full, 4 PVCs bind their declared-storage bar;
+# PHEN_IO_PRESSURE_SATURATION observability=full, container PSI-io; PHEN_PROBE_FAILURE_RESTART
+# observability=full via the KSM restart counter). What was MISSING was the authored causal edge
+# that lets Vigil state the link instead of leaving it a bare co-occurrence: when a PVC fills (or
+# I/O stalls) AND the mounting pod restarts, the cascade recognizer (detect.Matcher.Cascades) now
+# surfaces ONE recognized cascade carrying this authored why — exactly as the
+# CONNTRACK_EXHAUSTION/MEMORY_HIGH_THROTTLE → PROBE_FAILURE_RESTART edges in bucket-c-v1.yaml.
+#
+# JOIN: PVC_FILLING anchors on the PVC, PROBE_FAILURE_RESTART on the mounting pod's container —
+# related over the authored `mounts` edge (pod→PVC, asserted at instance level). IO_PRESSURE and
+# PROBE both anchor entity-local on the SAME container (same-entity relatedness).
+#
+# CHARTER: these are AUTHORED trigger→downstream knowledge, strictly descriptive — the recognizer
+# never claims causation, it RECOGNIZES a cascade only when both phenomena actually light up on
+# related entities inside the window. No new phenomenon, no new signal, no new rule, no new kind,
+# no agent write. BEHAVIOURAL governance class (doc 12): two phenomenon_relation edges bump the
+# graph hash; the base KG and every prior release stay byte-identical and loadable.
+overlay: pvc-probe-cascade
+version: 1
+author: vigil-engineering
+status: proposed-v1 (docs/33 closure 3 — PVC fill / I/O stall → probe-failure restart cascade)
+
+relations:
+  - src: PHEN_PVC_FILLING
+    dst: PHEN_PROBE_FAILURE_RESTART
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      A persistent volume filling to its declared request fails writes with ENOSPC; the starved
+      application then crashes or its liveness probe fails, and the kubelet restarts the container
+      (the restart-counter member fires). The PVC fill anchors on the PVC and the restart on the
+      mounting pod's container — related over the authored mounts edge, so the cascade is
+      recognized when both light up, never an inferred cause.
+  - src: PHEN_IO_PRESSURE_SATURATION
+    dst: PHEN_PROBE_FAILURE_RESTART
+    role: downstream
+    temporal_order: "T0+sustained"
+    why: >-
+      Sustained I/O-PSI "full" stalls (the cgroup spending the window blocked on block I/O) slow
+      the application's event loop past the probe timeout; liveness probes fail and the container
+      is restarted. Both anchor entity-local on the SAME container (same-entity relatedness), so
+      the cascade is recognized, never inferred.

@@ -249,6 +249,11 @@ func expectedKind(entityScope string) string {
 		return "PersistentVolumeClaim"
 	case "PDB":
 		return "PodDisruptionBudget"
+	case "Workload":
+		// v1 binds the StatefulSet archetype (docs/33 closure 1, v0.18.0); the Deployment
+		// twin is a noted follow-up. A Workload binding must land on a StatefulSet instance
+		// stream, never a role pseudo-key.
+		return "StatefulSet"
 	default:
 		return ""
 	}

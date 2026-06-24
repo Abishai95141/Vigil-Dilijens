@@ -760,7 +760,7 @@ func unobservableLabel(mem graph.Member, metric, note string) string {
 func satisfies(c *graph.MemberCheck, fp observe.Fingerprint) (met bool, state string, fresh bool, at time.Time) {
 	switch c.Facet {
 	case "slope":
-		vt, ok := findThreshold(fp, c.Metric)
+		vt, ok := resolveThreshold(fp, c)
 		if !ok || vt.Stale || vt.SlopeInconclusive || vt.SlopeSamples < 2 {
 			return false, "no-slope", false, time.Time{}
 		}
@@ -778,7 +778,7 @@ func satisfies(c *graph.MemberCheck, fp observe.Fingerprint) (met bool, state st
 		}
 		return false, state, true, vt.Deriv.SampleAt
 	case "level", "ratio":
-		vt, ok := findThreshold(fp, c.Metric)
+		vt, ok := resolveThreshold(fp, c)
 		if !ok || vt.Stale {
 			return false, "no-sample", false, time.Time{}
 		}
@@ -813,11 +813,23 @@ func meetsMinState(s observe.ThresholdState, min string) bool {
 	return s >= rank[min]
 }
 
+// resolveThreshold picks the threshold variable a check consults: by EXACT (metric, RuleID)
+// when the check carries a rule discriminator (an entity legitimately holding more than one bar
+// on the same metric — e.g. a 0.90 near-limit and a 1.0 over-limit CPU bar), else by metric alone
+// (unambiguous-or-nothing, the default).
+func resolveThreshold(fp observe.Fingerprint, c *graph.MemberCheck) (observe.VariableThreshold, bool) {
+	if c.Rule != "" {
+		return findThresholdByRule(fp, c.Metric, c.Rule)
+	}
+	return findThreshold(fp, c.Metric)
+}
+
 // findThreshold returns the entity's threshold variable for a metric only if it is
 // UNAMBIGUOUS. Two variables on one entity sharing a metric is an ambiguity (mirrors
 // binding QA): rather than silently take the first (fp.Thresholds is sorted by
 // RuleID, not metric), treat it as no usable evidence so the member is unobserved,
-// never matched against an arbitrary bar.
+// never matched against an arbitrary bar. A check that legitimately needs one of several
+// same-metric bars names it via the Rule discriminator (resolveThreshold).
 func findThreshold(fp observe.Fingerprint, metric string) (observe.VariableThreshold, bool) {
 	var found observe.VariableThreshold
 	n := 0
@@ -827,6 +839,18 @@ func findThreshold(fp observe.Fingerprint, metric string) (observe.VariableThres
 		}
 	}
 	return found, n == 1
+}
+
+// findThresholdByRule returns the threshold variable for an EXACT (metric, RuleID) pair. A bound
+// rule produces at most one threshold per entity, so this is unambiguous by construction even when
+// another rule places a second bar on the same metric.
+func findThresholdByRule(fp observe.Fingerprint, metric, ruleID string) (observe.VariableThreshold, bool) {
+	for _, t := range fp.Thresholds {
+		if t.Metric == metric && t.RuleID == ruleID {
+			return t, true
+		}
+	}
+	return observe.VariableThreshold{}, false
 }
 
 func findRate(fp observe.Fingerprint, metric string) (observe.VariableRate, bool) {
@@ -850,7 +874,7 @@ func barFlagged(c *graph.MemberCheck, fp observe.Fingerprint) bool {
 		}
 		return false
 	}
-	if vt, ok := findThreshold(fp, c.Metric); ok {
+	if vt, ok := resolveThreshold(fp, c); ok {
 		return vt.Flagged
 	}
 	return false

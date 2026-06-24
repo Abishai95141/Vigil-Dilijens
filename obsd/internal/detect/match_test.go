@@ -156,13 +156,165 @@ func TestOnlyEntityLocalPhenomena(t *testing.T) {
 	// entity-local, each carries a rate-guard check, psi-pressure-v1).
 	// (19 after v0.9.0: + PHEN_DISK_FILLING, the hanging-signal wire; 18 after v0.4.0:
 	// + PHEN_UPSTREAM_DEGRADATION.) This count is a graph-structure assertion.
-	if m.EntityLocalCount() != 23 {
-		t.Errorf("entity-local phenomena = %d, want 23", m.EntityLocalCount())
+	if m.EntityLocalCount() != 25 {
+		t.Errorf("entity-local phenomena = %d, want 25", m.EntityLocalCount())
 	}
 	// OOM is first-order — must not be in the matcher's set.
 	for _, p := range m.entityLoc {
 		if p.ID == "PHEN_OOM_KILL_CGROUP" {
 			t.Error("first-order OOM must not be evaluated by the entity-local matcher")
+		}
+	}
+}
+
+// cpuAggressorFingerprint builds a CPU-limited container carrying BOTH config-relative CPU bars
+// on container_cpu_usage_seconds_total: the pre-existing 0.90 near-limit bar AND the new 1.0
+// over-limit aggressor bar (docs/33 closure 2, v0.18.0). overState is the over-limit bar's ladder
+// state. Two bars on one metric is exactly the ambiguity that made CPU_AGGRESSOR unobservable
+// before the check rule-discriminator fix.
+func cpuAggressorFingerprint(overState observe.ThresholdState) observe.Fingerprint {
+	return observe.Fingerprint{
+		CEIKey: "i|cl|shop|Pod|web-a|uid-a", Namespace: "shop", Name: "web-a", Kind: "Container",
+		EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{
+			{
+				RuleID: "THR_CONTAINER_CPU_USAGE_VS_LIMIT", // the co-existing 0.90 near-limit bar
+				Metric: "container_cpu_usage_seconds_total", State: observe.StateAbove, BarSource: "config",
+				Deriv: observe.DerivationRef{StreamID: "s-cpu", SampleAt: evalAt, How: "counter-rate"},
+			},
+			{
+				RuleID: "THR_CONTAINER_CPU_OVER_OWN_LIMIT", // the 1.0 over-limit aggressor bar
+				Metric: "container_cpu_usage_seconds_total", State: overState, BarSource: "config", Flagged: true,
+				Deriv: observe.DerivationRef{StreamID: "s-cpu", SampleAt: evalAt, How: "counter-rate"},
+			},
+		},
+	}
+}
+
+// CPU_AGGRESSOR fires on an over-limit container EVEN THOUGH the 0.90 near-limit bar is also bound
+// on the same metric — the check's rule discriminator resolves the right variable, so the second
+// bar no longer trips findThreshold's ambiguity guard. Without the fix this phenomenon was 100% inert.
+func TestCPUAggressorFiresDespiteCoexistingNearLimitBar(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	fps := m.MatchFingerprint(cpuAggressorFingerprint(observe.StateAbove))
+	var agg *Finding
+	for i := range fps {
+		if fps[i].Phenomenon == "PHEN_CPU_AGGRESSOR" {
+			agg = &fps[i]
+		}
+	}
+	if agg == nil {
+		t.Fatalf("CPU_AGGRESSOR must fire over its own limit despite the 0.90 bar present (rule discriminator); got %d findings", len(fps))
+	}
+	if agg.RequiredTotal != 1 || agg.RequiredMet != 1 {
+		t.Errorf("required accounting = total %d / met %d, want 1/1", agg.RequiredTotal, agg.RequiredMet)
+	}
+}
+
+// Under its own limit (the over-limit bar in the approach band, not crossed) CPU_AGGRESSOR must
+// NOT fire — even though the 0.90 near-limit bar IS crossed. The aggressor is the over-limit one.
+func TestCPUAggressorNoFireWhenUnderOwnLimit(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	for _, f := range m.MatchFingerprint(cpuAggressorFingerprint(observe.StateAtThreshold)) {
+		if f.Phenomenon == "PHEN_CPU_AGGRESSOR" {
+			t.Error("CPU_AGGRESSOR must not fire when under the container's own CPU limit")
+		}
+	}
+}
+
+// workloadFingerprint builds a StatefulSet-anchored Workload fingerprint carrying the ready/desired
+// ratio variable at the given ladder state (docs/33 closure 1, v0.18.0).
+func workloadFingerprint(state observe.ThresholdState) observe.Fingerprint {
+	return observe.Fingerprint{
+		CEIKey: "i|cl|shop|StatefulSet|historian|uid-sts", Namespace: "shop", Name: "historian", Kind: "Workload",
+		EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{{
+			RuleID: "THR_STS_READY_BELOW_DESIRED", Metric: "kube_statefulset_status_replicas_ready",
+			State: state, BarSource: "default", Flagged: true,
+			Deriv: observe.DerivationRef{StreamID: "ready1", DivisorID: "desired1", SampleAt: evalAt, How: "counter-ratio"},
+		}},
+	}
+}
+
+// WORKLOAD_UNAVAILABLE fires when ready/desired has crossed below the 1.0 bar (a StatefulSet with
+// fewer Ready replicas than declared) — the MEASURED degraded flow node that roots a cascade on the
+// real upstream. This is the matcher half of the closure-1 fix (the Materialize half is in observe).
+func TestWorkloadUnavailableFires(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	fps := m.MatchFingerprint(workloadFingerprint(observe.StateAbove)) // ratio crossed below 1.0
+	var wl *Finding
+	for i := range fps {
+		if fps[i].Phenomenon == "PHEN_WORKLOAD_UNAVAILABLE" {
+			wl = &fps[i]
+		}
+	}
+	if wl == nil {
+		t.Fatalf("WORKLOAD_UNAVAILABLE must fire when ready<desired; got %d findings", len(fps))
+	}
+	if wl.RequiredTotal != 1 || wl.RequiredMet != 1 {
+		t.Errorf("required accounting = total %d / met %d, want 1/1", wl.RequiredTotal, wl.RequiredMet)
+	}
+}
+
+// A fully-ready StatefulSet (ratio at the 1.0 bar, healthy approach band, never crossed) must NOT
+// fire WORKLOAD_UNAVAILABLE — no false positive on a healthy backbone workload.
+func TestWorkloadUnavailableNoFireWhenFullyReady(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	for _, f := range m.MatchFingerprint(workloadFingerprint(observe.StateAtThreshold)) {
+		if f.Phenomenon == "PHEN_WORKLOAD_UNAVAILABLE" {
+			t.Error("WORKLOAD_UNAVAILABLE must not fire when all declared replicas are Ready")
+		}
+	}
+}
+
+// pvcFillingFingerprint builds a PVC carrying BOTH PVC-scoped rules on kubelet_volume_stats_used_bytes
+// (the base THR_PVC_USED_VS_REQUESTED and pvc-filling's THR_PVC_USED_VS_REQUESTED_STORAGE) — the real
+// duplicate-rule collision that made PVC_FILLING inert on every live cluster since v0.15.0. The storage
+// rule's variable is rising over its bar; the check's rule discriminator must resolve it past the
+// findThreshold ambiguity guard.
+func pvcFillingFingerprint(slope float64, samples int) observe.Fingerprint {
+	return observe.Fingerprint{
+		CEIKey: "i|cl|shop|PersistentVolumeClaim|data-x|uid-pvc", Namespace: "shop", Name: "data-x", Kind: "PVC",
+		EvaluatedAt: evalAt,
+		Thresholds: []observe.VariableThreshold{
+			{ // the co-existing base PVC bar on the same metric — the source of the ambiguity
+				RuleID: "THR_PVC_USED_VS_REQUESTED", Metric: "kubelet_volume_stats_used_bytes",
+				State: observe.StateAbove, Slope: slope, SlopeSamples: samples,
+				Deriv: observe.DerivationRef{StreamID: "vol", SampleAt: evalAt, How: "gauge-level"},
+			},
+			{ // pvc-filling's own bar, named by the check discriminator
+				RuleID: "THR_PVC_USED_VS_REQUESTED_STORAGE", Metric: "kubelet_volume_stats_used_bytes",
+				State: observe.StateAbove, Slope: slope, SlopeSamples: samples, Flagged: true,
+				Deriv: observe.DerivationRef{StreamID: "vol", SampleAt: evalAt, How: "gauge-level"},
+			},
+		},
+	}
+}
+
+// PVC_FILLING fires on a rising volume EVEN THOUGH the base THR_PVC_USED_VS_REQUESTED bar is also bound
+// on the same metric — the check's rule discriminator resolves the right variable past findThreshold's
+// ambiguity guard. Without the fix this phenomenon was 100% inert on any cluster loading both overlays.
+func TestPVCFillingFiresDespiteDuplicateBaseRule(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	fps := m.MatchFingerprint(pvcFillingFingerprint(1500, 6)) // rising, enough samples
+	var pf *Finding
+	for i := range fps {
+		if fps[i].Phenomenon == "PHEN_PVC_FILLING" {
+			pf = &fps[i]
+		}
+	}
+	if pf == nil {
+		t.Fatalf("PVC_FILLING must fire on a rising volume despite the base PVC bar on the same metric (rule discriminator); got %d findings", len(fps))
+	}
+}
+
+// A full-but-flat volume (level over the bar, slope ~0) must NOT fire PVC_FILLING — it detects the
+// fill TREND (the write-failure precursor), not a full disk (that is STORAGE_SATURATION's job).
+func TestPVCFillingNoFireWhenNotRising(t *testing.T) {
+	m := NewMatcher(loadGraph(t))
+	for _, f := range m.MatchFingerprint(pvcFillingFingerprint(0, 6)) {
+		if f.Phenomenon == "PHEN_PVC_FILLING" {
+			t.Error("PVC_FILLING must not fire on a flat (full but not filling) volume")
 		}
 	}
 }

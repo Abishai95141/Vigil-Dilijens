@@ -137,7 +137,7 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// + psi-pressure-v1 (v0.14.0, the PSI saturation lane) = 21;
 	// + pvc-filling-v1 (v0.15.0, the PVC-fill lane) = 22;
 	// + controlplane-metrics-v1 (v0.16.0, the apiserver + CoreDNS lane) = 23.
-	if len(ovls) != 24 {
+	if len(ovls) != 27 {
 		t.Fatalf("overlays = %d, want 24", len(ovls))
 	}
 	res, err := lintFile(sch, realKGPath, ovls)
@@ -160,7 +160,7 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// 41 after v0.9.0: + PHEN_DISK_FILLING (entity-local span). (40 after v0.4.0: the
 	// cross-service overlay added 2 spanned phenomena.) + 3 PSI saturation phenomena
 	// (v0.14.0: CPU/MEMORY/IO) = 44; + PHEN_PVC_FILLING (v0.15.0) = 45.
-	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 45 {
+	if g.PhenomenaMissingSpan != 0 || g.PhenomenaWithSpan != 47 {
 		t.Errorf("merged spans = with %d / missing %d, want 45/0", g.PhenomenaWithSpan, g.PhenomenaMissingSpan)
 	}
 	// 8 v1 + 2 v2 + 2 v3 + 1 v4 (THR_POD_EVICTED) + 1 v5 (THR_NODE_DISK_PRESSURE) + 1 v6
@@ -168,7 +168,7 @@ func TestRealKGWithOverlaysStrictClean(t *testing.T) {
 	// + 1 init-container (THR_INIT_CONTAINER_RESTARTS_RATE) = 17; + 3 PSI rate guards
 	// (v0.14.0) = 20; + 1 PVC-fill bar (v0.15.0, THR_PVC_USED_VS_REQUESTED_STORAGE) = 21;
 	// + 4 control-plane bars (v0.16.0: SERVFAIL/cache-miss ratios + APF/webhook rate guards) = 25.
-	if g.ThresholdRulesStructured != 27 {
+	if g.ThresholdRulesStructured != 29 {
 		t.Errorf("structured rules = %d, want 27", g.ThresholdRulesStructured)
 	}
 	if g.hasGaps() {
