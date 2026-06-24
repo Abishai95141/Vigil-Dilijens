@@ -46,45 +46,65 @@ export function RightSizingPage() {
       />
       <DataState q={q}>
         {(d) => {
-          if (!d.enabled) return <LaneNote kind="off" title="Right-sizing advisory lane is off" note={d.note} />;
+          if (!d.enabled)
+            return <LaneNote kind="off" title="Right-sizing advisory lane is off" note={d.note} />;
           const rows = (d.advisories ?? []).filter((r) => filter === "all" || r.action === filter);
           const s = d.summary;
           return (
             <div className="flex flex-col gap-6">
               <Stat4
                 items={[
-                  { label: "analyzed", value: s.analyzed, sub: `sustained p95 over ${dur(d.windowSeconds)}` },
+                  {
+                    label: "analyzed",
+                    value: s.analyzed,
+                    sub: `sustained p95 over ${dur(d.windowSeconds)}`,
+                  },
                   { label: "reclaim", value: s.reclaim, sub: "over-provisioned request" },
                   { label: "resize-up", value: s.resizeUp, sub: "near/over the limit" },
-                  { label: "out of scope", value: s.outOfScope + s.unstable, sub: `${s.unstable} unstable · ${s.outOfScope} no bar/QoS` },
+                  {
+                    label: "out of scope",
+                    value: s.outOfScope + s.unstable,
+                    sub: `${s.unstable} unstable · ${s.outOfScope} no bar/QoS`,
+                  },
                 ]}
               />
 
               {/* recommendation distribution — every analyzed pair accounted in one bucket (monochrome) */}
               <div className="v-panel p-4">
                 <div className="mb-1.5 flex justify-between text-[10.5px] text-ink-low">
-                  <span className="v-eyebrow">recommendation distribution — every analyzed (workload, resource) accounted</span>
+                  <span className="v-eyebrow">
+                    recommendation distribution — every analyzed (workload, resource) accounted
+                  </span>
                   <span>
-                    {s.reclaim} reclaim · {s.resizeUp} resize-up · {s.withinHeadroom} within-headroom ·{" "}
-                    {s.unstable} unstable · {s.outOfScope} out-of-scope
+                    {s.reclaim} reclaim · {s.resizeUp} resize-up · {s.withinHeadroom}{" "}
+                    within-headroom · {s.unstable} unstable · {s.outOfScope} out-of-scope
                   </span>
                 </div>
                 <Bar
                   segments={[
                     { value: s.reclaim, color: ACTION_INK.reclaim, label: "reclaim" },
                     { value: s.resizeUp, color: ACTION_INK["resize-up"], label: "resize-up" },
-                    { value: s.withinHeadroom, color: ACTION_INK["within-headroom"], label: "within-headroom" },
+                    {
+                      value: s.withinHeadroom,
+                      color: ACTION_INK["within-headroom"],
+                      label: "within-headroom",
+                    },
                     { value: s.unstable, color: ACTION_INK.unstable, label: "unstable" },
-                    { value: s.outOfScope, color: ACTION_INK["out-of-scope"], label: "out-of-scope" },
+                    {
+                      value: s.outOfScope,
+                      color: ACTION_INK["out-of-scope"],
+                      label: "out-of-scope",
+                    },
                   ]}
                   height={12}
                 />
                 <div className="mt-3 border-t border-rule pt-2 text-[11px] leading-relaxed text-ink-low">
-                  {d.class}. A workload with no stable, declared-resource history in the window simply has no row — the
-                  advisory is silent rather than guessing.
+                  {d.class}. A workload with no stable, declared-resource history in the window
+                  simply has no row — the advisory is silent rather than guessing.
                   {d.rules && (
                     <span className="mt-1 block text-ink-low">
-                      <span className="text-ink-mid">Rules (fixed in code, never auto-tuned):</span> {d.rules}
+                      <span className="text-ink-mid">Rules (fixed in code, never auto-tuned):</span>{" "}
+                      {d.rules}
                     </span>
                   )}
                 </div>
@@ -95,26 +115,38 @@ export function RightSizingPage() {
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <span className="v-eyebrow">Per-workload advisory</span>
                   <div className="ml-auto flex gap-1">
-                    {(["all", "reclaim", "resize-up", "unstable", "out-of-scope"] as const).map((f) => (
-                      <button
-                        key={f}
-                        type="button"
-                        onClick={() => setFilter(f)}
-                        className={`cursor-pointer rounded-[5px] border px-2 py-0.5 font-mono text-[10px] uppercase transition-colors ${
-                          filter === f
-                            ? "border-ink-low text-ink"
-                            : "border-rule-strong text-ink-low hover:text-ink-mid"
-                        }`}
-                      >
-                        {f}
-                      </button>
-                    ))}
+                    {(["all", "reclaim", "resize-up", "unstable", "out-of-scope"] as const).map(
+                      (f) => (
+                        <button
+                          key={f}
+                          type="button"
+                          onClick={() => setFilter(f)}
+                          className={`cursor-pointer rounded-[5px] border px-2 py-0.5 font-mono text-[10px] uppercase transition-colors ${
+                            filter === f
+                              ? "border-ink-low text-ink"
+                              : "border-rule-strong text-ink-low hover:text-ink-mid"
+                          }`}
+                        >
+                          {f}
+                        </button>
+                      ),
+                    )}
                   </div>
                 </div>
-                <Table cols={["workload", "resource", "QoS", "p95 (measured)", "declared", "usage vs bar", "recommendation (advisory)"]}>
+                <Table
+                  cols={[
+                    "workload",
+                    "resource",
+                    "QoS",
+                    "p95 (measured)",
+                    "declared",
+                    "usage vs bar",
+                    "recommendation (advisory)",
+                  ]}
+                >
                   {rows.map((r: RightSizingRow, i) => {
                     // the bar the usage is judged against: the limit for resize-up, else the request.
-                    const barVal = r.action === "resize-up" ? r.limit ?? 0 : r.request ?? 0;
+                    const barVal = r.action === "resize-up" ? (r.limit ?? 0) : (r.request ?? 0);
                     const frac = barVal > 0 ? Math.min(1, r.p95 / barVal) : 0;
                     const actionable = r.action === "reclaim" || r.action === "resize-up";
                     return (
@@ -148,7 +180,8 @@ export function RightSizingPage() {
                                 height={8}
                               />
                               <div className="mt-0.5 v-mono text-[9.5px] text-ink-low">
-                                {Math.round(frac * 100)}% of {r.action === "resize-up" ? "limit" : "request"}
+                                {Math.round(frac * 100)}% of{" "}
+                                {r.action === "resize-up" ? "limit" : "request"}
                               </div>
                             </div>
                           ) : (
@@ -164,7 +197,9 @@ export function RightSizingPage() {
                                 ? `suggest ${r.action}${r.recommended ? ` → ${fmtVal(r.recommended, r.unit)}` : ""}`
                                 : r.action}
                             </Tag>
-                            <span className="text-[10.5px] leading-tight text-ink-low">{r.reason}</span>
+                            <span className="text-[10.5px] leading-tight text-ink-low">
+                              {r.reason}
+                            </span>
                           </span>
                         </Td>
                       </Tr>

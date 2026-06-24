@@ -63,9 +63,9 @@ type GovernanceItem struct {
 	// asserts no cause and drives no detection. Empty when there is no suggestion.
 	SuggestedLabel       string     `json:"suggestedLabel,omitempty"`
 	SuggestedDescription string     `json:"suggestedDescription,omitempty"`
-	SuggestedSeverity    string     `json:"suggestedSeverity,omitempty"` // a SUGGESTED harm level (hint, discarded at promotion)
+	SuggestedSeverity    string     `json:"suggestedSeverity,omitempty"`  // a SUGGESTED harm level (hint, discarded at promotion)
 	SuggestedDirection   string     `json:"suggestedDirection,omitempty"` // doc 33 P4: agent's suggested causal direction (a-to-b|b-to-a|not-causal); a hint, the human authors
-	SuggestedBy          string     `json:"suggestedBy,omitempty"`       // the model that produced the hint (provenance)
+	SuggestedBy          string     `json:"suggestedBy,omitempty"`        // the model that produced the hint (provenance)
 	DecidedBy            string     `json:"decidedBy,omitempty"`
 	Note                 string     `json:"note,omitempty"`
 	DecidedAt            *time.Time `json:"decidedAt,omitempty"`

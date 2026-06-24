@@ -191,6 +191,7 @@ type ControlPlaneFetcher interface {
 //     is never summed across nodes — deterministic single attribution).
 //   - each CoreDNS replica's :9153/metrics, attributed to its own pod (scrape-target
 //     identity, the pods/proxy sibling of the app lane).
+//
 // The caller gates this behind --controlplane-metrics-enabled; off ⇒ never fetched
 // (byte-identical replay). Per-source failures are carried, never fatal.
 func FetchControlPlaneMetrics(ctx context.Context, api ControlPlaneFetcher, controlPlaneNodes []string, pf PodFetcher, corednsTargets []PodTarget) []NodePayload {

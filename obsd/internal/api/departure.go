@@ -20,7 +20,7 @@ import (
 // tick (off the digest), withheld from the surface — exactly the Phase-E / cap-D posture.
 type DepartureView struct {
 	GeneratedAt time.Time             `json:"generatedAt"`
-	Class       string                `json:"class"`   // "PROJECTED band ⋈ MEASURED sample (joined, never fused)"
+	Class       string                `json:"class"`      // "PROJECTED band ⋈ MEASURED sample (joined, never fused)"
 	Enabled     bool                  `json:"enabled"`    // --departure-enabled is set
 	GatePassed  bool                  `json:"gatePassed"` // the live gate has flipped (operator-visible)
 	Active      bool                  `json:"active"`     // a departure is surfaced this tick (only once gate-passed)

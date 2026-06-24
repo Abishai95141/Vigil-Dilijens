@@ -62,10 +62,10 @@ func TestClassifyStrayMetric(t *testing.T) {
 		{"k3s_certificate_expiration_seconds", StrayControlPlaneInternal},
 		{"node_ipam_controller_cidrset_usage_cidrs", StrayControlPlaneInternal},
 		// …but genuine operational signals on the SAME providers stay operational (must bind):
-		{"node_cpu_seconds_total", StrayOperational},          // node-exporter, not node_collector_
-		{"node_memory_MemAvailable_bytes", StrayOperational},  // node-exporter
+		{"node_cpu_seconds_total", StrayOperational},         // node-exporter, not node_collector_
+		{"node_memory_MemAvailable_bytes", StrayOperational}, // node-exporter
 		{"container_cpu_usage_seconds_total", StrayOperational},
-		{"kubelet_volume_stats_used_bytes", StrayOperational}, // the PVC-fill signal
+		{"kubelet_volume_stats_used_bytes", StrayOperational},                 // the PVC-fill signal
 		{"container_pressure_memory_waiting_seconds_total", StrayOperational}, // PSI
 		// Defensive: a bare kube_ prefix with no kind, or non-stray noise
 		{"kube_", StrayOperational},
@@ -83,12 +83,12 @@ func TestPartitionStrays(t *testing.T) {
 		return StrayObservation{Family: "app", Metric: metric, Node: "n1", Labels: map[string]string{"x": "1"}}
 	}
 	strays := []StrayObservation{
-		mk("go_gc_duration_seconds"),                  // runtime → excluded
-		mk("apiserver_request_total"),                 // control-plane → excluded
-		mk("workqueue_depth"),                         // client → excluded
-		mk("kube_persistentvolume_capacity_bytes"),    // operational → staged
+		mk("go_gc_duration_seconds"),                     // runtime → excluded
+		mk("apiserver_request_total"),                    // control-plane → excluded
+		mk("workqueue_depth"),                            // client → excluded
+		mk("kube_persistentvolume_capacity_bytes"),       // operational → staged
 		mk("kube_replicaset_status_observed_generation"), // object-metadata → staged (counted, suppressed from queue)
-		mk("mysqld_global_status_threads_connected"),  // operational → staged
+		mk("mysqld_global_status_threads_connected"),     // operational → staged
 	}
 	stage, excluded := PartitionStrays(strays)
 	if len(stage) != 3 {

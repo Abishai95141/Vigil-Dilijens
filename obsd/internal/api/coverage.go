@@ -41,9 +41,9 @@ type CoverageSummary struct {
 	FrontierCovered      int `json:"frontierCovered"`
 	FrontierEmission     int `json:"frontierEmission"`
 	FrontierCompleteness int `json:"frontierCompleteness"`
-	QAVerified       int     `json:"qaVerified"`
-	QASuspect        int     `json:"qaSuspect"`
-	QAFailed         int     `json:"qaFailed"`
+	QAVerified           int `json:"qaVerified"`
+	QASuspect            int `json:"qaSuspect"`
+	QAFailed             int `json:"qaFailed"`
 }
 
 // severityRank mirrors graph.SeverityRank (the api surfaces the value but does not import the

@@ -93,9 +93,9 @@ type Report struct {
 	Proposed       int
 	Accepted       int
 	Rejected       []Rejection
-	ToolCalls      int    // tool calls dispatched this run (Phase 2)
-	Iterations     int    // tool-loop turns taken (Phase 2)
-	ThresholdGated int    // proposals rejected by a DECLARED support/capture floor (slice 5 telemetry)
+	ToolCalls      int // tool calls dispatched this run (Phase 2)
+	Iterations     int // tool-loop turns taken (Phase 2)
+	ThresholdGated int // proposals rejected by a DECLARED support/capture floor (slice 5 telemetry)
 	// doc 33 P4 telemetry: directional "why" suggestions on causal hypotheses.
 	DirectionsSuggested int // directions ADMITTED (dual-witness agreed) as a PROJECTED hint for a human
 	DirectionsWithheld  int // directions the model proposed but the dual-witness did NOT support

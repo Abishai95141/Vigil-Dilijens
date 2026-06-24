@@ -34,16 +34,16 @@ type AITriageOutcome struct {
 
 // AITriageResult is the triage response.
 type AITriageResult struct {
-	OK        bool              `json:"ok"`
-	Message   string            `json:"message"`
-	Model     string            `json:"model,omitempty"`
-	Reviewed  int               `json:"reviewed"`
-	Promoted  int               `json:"promoted"`
-	Rejected  int               `json:"rejected"`
-	Held      int               `json:"held"`
-	Outcomes  []AITriageOutcome `json:"outcomes,omitempty"`
-	DryRun    bool              `json:"dryRun,omitempty"`
-	Disclaimer string           `json:"disclaimer"`
+	OK         bool              `json:"ok"`
+	Message    string            `json:"message"`
+	Model      string            `json:"model,omitempty"`
+	Reviewed   int               `json:"reviewed"`
+	Promoted   int               `json:"promoted"`
+	Rejected   int               `json:"rejected"`
+	Held       int               `json:"held"`
+	Outcomes   []AITriageOutcome `json:"outcomes,omitempty"`
+	DryRun     bool              `json:"dryRun,omitempty"`
+	Disclaimer string            `json:"disclaimer"`
 }
 
 // AIAuditEntry is one row of the AI audit log (a plain mirror of candidate.AgentDecision).
