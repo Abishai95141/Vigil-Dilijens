@@ -17,13 +17,66 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import urllib.request
 
 import vigil
 
+# macOS python.org framework builds ship without a CA bundle, so HTTPS to api.deepseek.com fails
+# with CERTIFICATE_VERIFY_FAILED. Back the TLS context with certifi when available so the agent
+# works on a fresh machine; fall back to the default context otherwise.
+try:
+    import certifi
+
+    _SSL_CTX: ssl.SSLContext | None = ssl.create_default_context(cafile=certifi.where())
+except Exception:  # pragma: no cover - defensive
+    _SSL_CTX = None
+
+# Pydantic gives the "Ask" answer a VALIDATED structure (the operator-advisory card) on top of the
+# flexible narrative. It is OPTIONAL: if it is not installed the agent degrades to narrative-only,
+# so a missing dependency can never break the live demo.
+try:
+    from pydantic import BaseModel, Field, ValidationError
+
+    _HAS_PYDANTIC = True
+except Exception:  # pragma: no cover - defensive
+    _HAS_PYDANTIC = False
+
 DGX_BASE_URL = os.environ.get("DGX_BASE_URL", "https://api.deepseek.com")
 DGX_MODEL = os.environ.get("DGX_MODEL", "deepseek-chat")
 DGX_API_KEY = os.environ.get("DGX_API_KEY", "")
+
+
+# --------------------------------------------------------------------------- #
+# The structured operator advisory. The agentic loop stays flexible and context-aware
+# (a free-form markdown `narrative`); these fields are the WOW overlay — the WHAT / WHEN /
+# WHY / HOW / blast-radius / evidence / confidence / blind-spots a judge wants to see at a
+# glance. Every field has a default so a partial answer still validates (lenient, not strict).
+# --------------------------------------------------------------------------- #
+if _HAS_PYDANTIC:
+
+    class Evidence(BaseModel):
+        claim: str = ""
+        # MEASURED / PROJECTED / AUTHORED / ASSOCIATION / ADVISORY / HYPOTHESIS
+        provenance: str = "MEASURED"
+        source: str = ""  # the MCP tool / entity / metric the claim came from
+
+        model_config = {"extra": "ignore"}
+
+    class OperatorAdvisory(BaseModel):
+        headline: str = ""  # the one-line answer
+        what: str = ""  # what is happening, with named entities + numbers
+        when: str = ""  # when it happened, or the forecast lead-time / ETA
+        why: str = ""  # the cause (AUTHORED), a clearly-labeled hypothesis, or "no single cause"
+        why_provenance: str = "NONE"  # how we know the why
+        how: list[str] = Field(default_factory=list)  # ordered remediation steps
+        blast_radius: str = ""  # who/what is affected, and downstream
+        confidence: str = "medium"  # high | medium | low
+        evidence: list[Evidence] = Field(default_factory=list)
+        blind_spots: list[str] = Field(default_factory=list)  # what Vigil cannot see here
+        narrative: str = ""  # rich markdown — the flexible, context-aware explanation
+
+        model_config = {"extra": "ignore"}
 
 
 # --------------------------------------------------------------------------- #
@@ -32,6 +85,10 @@ DGX_API_KEY = os.environ.get("DGX_API_KEY", "")
 # fed the answer. "freeform" gathers the broad incident-context set.
 # --------------------------------------------------------------------------- #
 QUESTION_TOOLS: dict[str, list[str]] = {
+    "What is happening in our cluster right now — what, when, why, and how do I fix it?": [
+        "get_findings", "get_insights", "get_warnings", "get_onsets", "get_cross_service",
+        "get_root_cause_chain", "get_incidents", "get_departures", "get_timeline", "get_blindspots",
+    ],
     "How are PVC I/O patterns linked to pod restarts?": [
         "get_dependency", "get_causal_hypotheses", "get_events", "get_incidents", "get_findings",
     ],
@@ -124,7 +181,7 @@ def deepseek(system: str, user: str, timeout: int = 60) -> str:
         data=body,
         headers={"content-type": "application/json", "authorization": f"Bearer {DGX_API_KEY}"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as r:
         d = json.loads(r.read().decode())
     return d["choices"][0]["message"]["content"].strip()
 
@@ -208,7 +265,12 @@ def mcp_openai_tools() -> list[dict]:
     return out
 
 
-def _chat_raw(messages: list[dict], tools: list[dict] | None = None, timeout: int = 120) -> dict:
+def _chat_raw(
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    timeout: int = 120,
+    response_format: dict | None = None,
+) -> dict:
     """One OpenAI-compatible chat turn; returns the assistant message (may carry tool_calls)."""
     if not DGX_API_KEY:
         raise RuntimeError("DGX_API_KEY is not set — export it to enable the Ask page.")
@@ -216,22 +278,72 @@ def _chat_raw(messages: list[dict], tools: list[dict] | None = None, timeout: in
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
+    if response_format:
+        body["response_format"] = response_format
     req = urllib.request.Request(
         DGX_BASE_URL.rstrip("/") + "/chat/completions",
         data=json.dumps(body).encode(),
         headers={"content-type": "application/json", "authorization": f"Bearer {DGX_API_KEY}"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as r:
         d = json.loads(r.read().decode())
     return d["choices"][0]["message"]
 
 
-def chat_agentic(history: list[dict], max_iters: int = 8, on_step=None) -> dict:
+# The structured-advisory pass. After the flexible tool-use loop has gathered the grounded facts
+# AND written its narrative, this one extra call distils a VALIDATED operator advisory from the same
+# conversation — the WHAT / WHEN / WHY / HOW / blast-radius / evidence / confidence / blind-spots card.
+# It is best-effort: any failure (bad JSON, validation error, no pydantic) returns None and the UI
+# falls back to the narrative alone, so the demo is never broken by the structuring step.
+ADVISORY_INSTR = (
+    "Now distil everything you gathered into ONE operator advisory, as a single JSON object with "
+    "EXACTLY these keys (use the facts already in this conversation — do not call more tools):\n"
+    '  "headline": the one-line answer an on-call engineer reads first,\n'
+    '  "what":     what is happening, naming the specific workloads/pods/nodes and the numbers,\n'
+    '  "when":     when it started, or — if this is a forecast — the lead time / ETA before impact '
+    "(e.g. \"~7 min to the 243Mi bar\"); if not time-bound, say so,\n"
+    '  "why":      the cause. Use the AUTHORED relation if Vigil has one; otherwise give your '
+    "clearly-labeled hypothesis, or honestly say \"no single cause — independent faults\",\n"
+    '  "why_provenance": one of MEASURED | PROJECTED | AUTHORED | ASSOCIATION | HYPOTHESIS | NONE,\n'
+    '  "how":      an ORDERED array of concrete remediation steps the operator can run now,\n'
+    '  "blast_radius": who/what is affected and what is downstream,\n'
+    '  "confidence": high | medium | low,\n'
+    '  "evidence": array of {"claim","provenance","source"} — the grounded facts behind the answer,\n'
+    '  "blind_spots": array of strings — what Vigil CANNOT see here, so the operator knows the limits,\n'
+    '  "narrative": a rich markdown explanation (be expansive, context-aware, operator-useful here).\n'
+    "Preserve provenance honestly. Output ONLY the JSON object."
+)
+
+
+def _structured_advisory(convo: list[dict]) -> dict | None:
+    """Best-effort: ask once more for a JSON advisory and validate it with pydantic."""
+    msgs = list(convo) + [{"role": "user", "content": ADVISORY_INSTR}]
+    try:
+        msg = _chat_raw(msgs, tools=None, response_format={"type": "json_object"})
+        data = json.loads(msg.get("content") or "")
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if _HAS_PYDANTIC:
+        try:
+            return OperatorAdvisory.model_validate(data).model_dump()
+        except ValidationError:
+            # lenient: keep a partial answer if it at least carries a headline/narrative
+            return data if (data.get("headline") or data.get("narrative")) else None
+    return data
+
+
+def chat_agentic(history: list[dict], max_iters: int = 8, on_step=None, structured: bool = True) -> dict:
     """Run the tool-use loop. `history` is the prior [{role,content}] user/assistant turns
-    (most recent user message last). Returns {answer, trace} where trace is the tool calls made."""
+    (most recent user message last). Returns {answer, advisory, trace}:
+      - answer:   the flexible markdown narrative (always present),
+      - advisory: the pydantic-validated operator-advisory dict, or None (best-effort overlay),
+      - trace:    the tool calls made, for the auditable provenance panel."""
     tools = mcp_openai_tools()
     convo = [{"role": "system", "content": ASK_SYSTEM}] + list(history)
     trace: list[dict] = []
+    answer = ""
     for _ in range(max_iters):
         msg = _chat_raw(convo, tools=tools)
         am: dict = {"role": "assistant", "content": msg.get("content") or ""}
@@ -240,7 +352,8 @@ def chat_agentic(history: list[dict], max_iters: int = 8, on_step=None) -> dict:
             am["tool_calls"] = tcs
         convo.append(am)
         if not tcs:
-            return {"answer": am["content"], "trace": trace}
+            answer = am["content"]
+            break
         for tc in tcs:
             fn = tc.get("function", {}).get("name", "")
             try:
@@ -255,7 +368,12 @@ def chat_agentic(history: list[dict], max_iters: int = 8, on_step=None) -> dict:
                 except Exception:
                     pass
             convo.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": _compact(result, 12000)})
-    # iteration budget hit — force a grounded synthesis from what we have
-    convo.append({"role": "user", "content": "Enough tool calls. Give your final, comprehensive, actionable answer NOW, grounded only in the facts gathered."})
-    final = _chat_raw(convo, tools=None)
-    return {"answer": final.get("content") or "", "trace": trace}
+    else:
+        # iteration budget hit — force a grounded synthesis from what we have
+        convo.append({"role": "user", "content": "Enough tool calls. Give your final, comprehensive, actionable answer NOW, grounded only in the facts gathered."})
+        final = _chat_raw(convo, tools=None)
+        answer = final.get("content") or ""
+        convo.append({"role": "assistant", "content": answer})
+
+    advisory = _structured_advisory(convo) if structured else None
+    return {"answer": answer, "advisory": advisory, "trace": trace}

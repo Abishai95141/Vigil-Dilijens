@@ -1,9 +1,12 @@
 # Vigil Scenario Studio
 
 A **scenario-first** showcase console for the live `abb-genix` cluster. Where the original
-`simulator/` is a fault catalog, this studio is built around **six operator questions** — each
+`simulator/` is a fault catalog, this studio is built around **operator questions** — each
 scenario injects a real fault, shows which Vigil pages light up, and lets you **ask the
 MCP-connected agent** the question and get an answer grounded only in what Vigil measured.
+The **💬 Ask Vigil** page is a full agentic copilot: it calls Vigil's MCP tools live and returns a
+**pydantic-validated operator advisory** — WHAT · WHEN · WHY · HOW · blast-radius · evidence ·
+blind-spots — on top of a flexible narrative.
 
 It is a fresh, self-contained app (it does not depend on `simulator/`), but it reuses the same
 honest principle: every fault is a genuine `kubectl` operation, shown verbatim before it runs.
@@ -17,10 +20,15 @@ The point of the studio is to make Vigil's **reasoning discipline** legible:
   operator authors the arrow. Vigil refuses to invent causal direction.
 - **It admits what it can't see** (Coverage / Silence-ledger / Blindspots).
 
-## The six scenarios → questions
+## The scenarios → questions
+
+The **🎷 Grand Tour** is the flagship: two independent real faults at once that light up the whole
+console and let the Ask agent answer **what · when · why · how** in one advisory — while Vigil
+keeps the two faults *separate* (it never merges coincident-but-unrelated incidents).
 
 | Scenario | Question it answers | Real fault(s) | Vigil surfaces |
 |---|---|---|---|
+| 🎷 The Grand Tour — full-suite | *What is happening — what, when, why, how do I fix it?* | historian image-pull **+** pdm-analyzer memory leak (independent) | Findings, Early-warnings, Onsets, Departures, Root-cause/Cross-service, Incidents, Timeline, Coverage, Topology |
 | 🌋 Multi-level cascade → root cause | *What's the cause of a failure in our cluster?* | historian outage (+ stream queue) | Root-cause chain, Cross-service, Insights |
 | 📈 Which pod is spiking CPU? | *Which pod is causing unexpected CPU spikes?* | CPU burn on stream-processor | Onsets, Findings (THROTTLING), Insights |
 | 🔀 Services influencing each other | *Are different services influencing each other's resource consumption?* | CPU burn (noisy aggressor) | Dependency, Causal-hypotheses, Onsets |
@@ -37,7 +45,7 @@ The point of the studio is to make Vigil's **reasoning discipline** legible:
 
 ```bash
 cd sim-studio
-pip install -r requirements.txt           # streamlit + pandas (kubectl must be on PATH)
+pip install -r requirements.txt           # streamlit + pandas + pydantic + certifi (kubectl on PATH)
 export DGX_API_KEY=<deepseek key>          # same key obsd uses; enables the agent pane
 streamlit run studio.py                    # opens http://localhost:8501
 ```

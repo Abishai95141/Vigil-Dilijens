@@ -43,6 +43,57 @@ class Scenario:
 
 SCENARIOS: list[Scenario] = [
     Scenario(
+        id="full_suite",
+        name="The Grand Tour — full-suite incident (what · when · why · how)",
+        icon="🎷",
+        question="What is happening in our cluster right now — what, when, why, and how do I fix it?",
+        principle=(
+            "TWO independent real faults at once. Vigil sees both, keeps them SEPARATE (it never "
+            "merges coincident-but-unrelated faults), and answers each operator question from a "
+            "different lane: WHAT = a MEASURED finding; WHEN = a PROJECTED forecast with a lead "
+            "time; WHY = an AUTHORED relation + the cross-service cascade; HOW = the agent's "
+            "grounded remediation. The whole console lights up — and the agent, asked on the Ask "
+            "page, returns one advisory covering both problems without conflating them."
+        ),
+        timeline=(
+            "t+0  historian image-pull failure → genix-historian ready 0/1 (desired 1) → "
+            "PHEN_WORKLOAD_UNAVAILABLE + a cross-service cascade to its callers (asset-api, "
+            "pdm-analyzer, operations-dashboard) over observed-flow edges — the down-NOW root "
+            "(WHAT + WHY are immediate).\n"
+            "t+10s  a sustained memory leak is armed on pdm-analyzer → within ~1 window a CUSUM "
+            "onset marks the step (the anomaly — WHEN it STARTED, immediately).\n"
+            "t+10–15m  as the climb sustains and fills the forecast window, a PROJECTED early-warning "
+            "card gives the lead time to the ~243Mi bar — the WHEN it WILL breach, before impact "
+            "(forecasting needs history; arm this first and let it mature while you walk the other "
+            "pages). The two incidents stay SEPARATE in the incident store (the anti-false-chain rule)."
+        ),
+        levers=[
+            Lever("db_outage", "Historian image-pull failure (the down-NOW root)"),
+            Lever("mem_leak_medium", "Arm the pdm-analyzer memory leak (the forecastable risk — matures into an early-warning card)", delay=10),
+        ],
+        pages=[
+            "Findings (WORKLOAD_UNAVAILABLE)", "Early warnings (BandBar — the WHEN)",
+            "Anomalies / Onsets", "Departures", "Root cause / Cross-service cascade (the WHY)",
+            "Incidents (two, kept separate)", "Timeline", "Insights", "Coverage",
+            "Silence ledger", "Right-sizing", "Cluster graph / Topology",
+        ],
+        mcp_tools=[
+            "get_findings", "get_warnings", "get_onsets", "get_cross_service", "get_root_cause_chain",
+            "get_incidents", "get_insights", "get_departures", "get_timeline", "get_rightsizing_advice",
+        ],
+        expected=(
+            "TWO independent problems surfaced and NOT conflated: (1) genix-historian is DOWN NOW "
+            "(image-pull) — PHEN_WORKLOAD_UNAVAILABLE, its callers impacted over observed-flow "
+            "edges (the WHY/cross-service, immediate); (2) pdm-analyzer has a MEMORY LEAK — an onset "
+            "marks WHEN it started right away, and as it sustains a PROJECTED early-warning card "
+            "gives the lead time to the ~243Mi bar (the WHEN it will breach). On the Ask page, ask "
+            "'what is happening, when, why and how do I fix it?' → the agent returns ONE advisory "
+            "with WHAT / WHEN / WHY / HOW and a per-issue remediation, labelling each fact's "
+            "provenance and refusing to merge the two."
+        ),
+        mode="sequence",
+    ),
+    Scenario(
         id="cascade_rootcause",
         name="Multi-level cascade → root cause",
         icon="🌋",

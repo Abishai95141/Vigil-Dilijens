@@ -42,6 +42,50 @@ def _refresh():
     st.rerun()
 
 
+_PROV_ICON = {
+    "MEASURED": "🟢 MEASURED", "PROJECTED": "🔵 PROJECTED", "AUTHORED": "🟣 AUTHORED",
+    "ASSOCIATION": "🟡 ASSOCIATION", "ADVISORY": "🟠 ADVISORY", "HYPOTHESIS": "⚪ HYPOTHESIS",
+    "NONE": "⚫ —",
+}
+_CONF_BADGE = {"high": "🟢 high confidence", "medium": "🟡 medium confidence", "low": "🟠 low confidence"}
+
+
+def _render_advisory(adv: dict) -> None:
+    """Render the pydantic-validated operator advisory as a WHAT/WHEN/WHY/HOW card."""
+    if not adv:
+        return
+    head = adv.get("headline") or "Advisory"
+    conf = _CONF_BADGE.get((adv.get("confidence") or "medium").lower(), adv.get("confidence", ""))
+    st.markdown(f"### 🛰️ {head}")
+    st.caption(conf)
+    c1, c2 = st.columns(2)
+    with c1:
+        if adv.get("what"):
+            st.markdown(f"**WHAT** — {adv['what']}")
+        if adv.get("when"):
+            st.markdown(f"**WHEN** — {adv['when']}")
+    with c2:
+        if adv.get("why"):
+            prov = _PROV_ICON.get((adv.get("why_provenance") or "NONE").upper(), adv.get("why_provenance", ""))
+            st.markdown(f"**WHY** — {adv['why']}  \n`{prov}`")
+        if adv.get("blast_radius"):
+            st.markdown(f"**BLAST RADIUS** — {adv['blast_radius']}")
+    if adv.get("how"):
+        st.markdown("**HOW — remediation**")
+        for i, step in enumerate(adv["how"], 1):
+            st.markdown(f"{i}. {step}")
+    if adv.get("evidence"):
+        with st.expander(f"📎 Evidence ({len(adv['evidence'])} grounded facts)"):
+            for e in adv["evidence"]:
+                prov = _PROV_ICON.get((e.get("provenance") or "MEASURED").upper(), e.get("provenance", ""))
+                src = f" · _{e['source']}_" if e.get("source") else ""
+                st.markdown(f"- {e.get('claim','')}  `{prov}`{src}")
+    if adv.get("blind_spots"):
+        st.markdown("**🕳️ What Vigil cannot see here**")
+        for b in adv["blind_spots"]:
+            st.caption(f"• {b}")
+
+
 # ============================ SIDEBAR ======================================
 with st.sidebar:
     st.title("🛰️ Vigil Scenario Studio")
@@ -321,6 +365,9 @@ with tab_ask:
 
     for m in st.session_state["ask_history"]:
         with st.chat_message(m["role"]):
+            if m.get("advisory"):
+                _render_advisory(m["advisory"])
+                st.divider()
             st.markdown(m["content"])
             if m.get("trace"):
                 with st.expander(f"🔧 {len(m['trace'])} live Vigil tool calls (the grounding)"):
@@ -346,9 +393,12 @@ with tab_ask:
             try:
                 res = agent.chat_agentic(agent_msgs, on_step=_on_step)
                 status.update(label=f"✓ synthesised from {len(steps)} grounded tool calls", state="complete", expanded=False)
+                if res.get("advisory"):
+                    _render_advisory(res["advisory"])
+                    st.divider()
                 st.markdown(res["answer"])
                 st.session_state["ask_history"].append(
-                    {"role": "assistant", "content": res["answer"], "trace": res["trace"]}
+                    {"role": "assistant", "content": res["answer"], "trace": res["trace"], "advisory": res.get("advisory")}
                 )
             except Exception as e:
                 status.update(label="synthesis error", state="error")

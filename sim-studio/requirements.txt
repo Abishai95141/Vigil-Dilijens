@@ -1,2 +1,4 @@
 streamlit>=1.36
 pandas>=2.0
+pydantic>=2          # validates the structured operator advisory in the Ask page
+certifi>=2024.0      # CA bundle for HTTPS to the DeepSeek API on framework-python builds
