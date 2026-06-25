@@ -154,6 +154,17 @@ CATALOG: dict[str, Fault] = {
         inject_fn=lambda: _leak(ANALYZER, 4096), heal_fn=lambda: _leak_off(ANALYZER),
         preview_fn=lambda: f"exec deploy/{ANALYZER} -- GET /ctl?leak=on&leak_kb=4096",
     ),
+    "mem_leak_demo": Fault(
+        "mem_leak_demo", "Memory leak — DEMO-tuned (fast, confident early-warning card)", "🔮",
+        what=f"Arms a demo-tuned heap leak in {ANALYZER} (/ctl?leak=on&leak_kb=1024): ~7.6 MB/min.",
+        effect="Climbs fast enough that the forecaster projects a crossing well INSIDE the 1h horizon "
+        "within ~6-10 min → a CONFIDENT early-warning card with a multi-minute lead; reaches the "
+        "~243Mi bar ~22 min in (so the card persists through a demo before any OOM).",
+        signal="PROJECTED early-warning on container_memory_working_set_bytes (confident band, "
+        "~15-20 min lead) → MEMORY_LEAK → eventually OOM_KILL_CGROUP.",
+        inject_fn=lambda: _leak(ANALYZER, 1024), heal_fn=lambda: _leak_off(ANALYZER),
+        preview_fn=lambda: f"exec deploy/{ANALYZER} -- GET /ctl?leak=on&leak_kb=1024",
+    ),
     "cpu_burn": Fault(
         "cpu_burn", "CPU aggressor — over its own limit (noisy neighbour)", "🔥",
         what=f"Starts a busy CPU spin in {STREAM} (/ctl?cpuburn=1) that drives usage AT/ABOVE its own 250m CPU limit.",
@@ -263,9 +274,11 @@ def global_reset() -> list[tuple[str, cluster.Result]]:
     for name in ("genix-historian",):
         if cluster.get_replicas(name) == 0:
             out.append((f"scale {name}=1", cluster.scale(name, 1)))
-    # restore the historian image (idempotent: kubectl set image is a no-op if unchanged; roll=False
-    # so a healthy historian's pod is not needlessly recycled)
-    out.append(("restore genix-historian image", cluster.set_image("genix-historian", "influxdb", "influxdb:2.7", roll=False)))
+    # restore the historian image AND force a clean re-pull: roll=True deletes genix-historian-0 so the
+    # StatefulSet recreates it on influxdb:2.7 immediately. Without this a pod stuck in ImagePullBackOff
+    # stays stuck (kubelet back-off) even after the image is restored — the HEAL ALL gap. A brief
+    # recycle of an already-healthy historian is an acceptable cost for a reset operation.
+    out.append(("restore genix-historian image + repull", cluster.set_image("genix-historian", "influxdb", "influxdb:2.7", roll=True)))
     # tear down the PVC-cascade workload + its volume
     out.append(("delete vigil-pvcfill", cluster.delete_resource("statefulset", "vigil-pvcfill")))
     out.append(("delete vigil-pvcfill PVC", cluster.delete_resource("pvc", "data-vigil-pvcfill-0")))

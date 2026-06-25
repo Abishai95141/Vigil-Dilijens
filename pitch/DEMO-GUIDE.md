@@ -158,6 +158,20 @@ Open the **🧭 Working Principle** tab to anchor this, then go to **🎬 Scenar
 
 ---
 
+## 4b. MEASURED timeline (from a full clean rehearsal — what to expect after you click)
+
+Verified live, click → fire time:
+
+| Signal | Page | Fires at |
+|---|---|---|
+| `WORKLOAD_UNAVAILABLE` (historian) | `/insights`, `/root-cause` | **~t+1 min** |
+| Cross-service cascade | `/root-cause` | **~t+2 min** |
+| Memory-leak **onset** (anomaly) | `/anomalies` | **~t+7 min** |
+| **Forecast early-warning CARD** | `/forecast` | **~t+13 min** (≈34-min lead, then it **counts down** as it climbs) |
+| OOM (if left running) | — | ~t+30 min |
+
+So: **click Grand Tour ~13–15 min before you want to land on `/forecast`** (or pre-warm it before the judges sit down). Everything except the forecast is solid by ~t+3 min. The forecast card persists from ~t+13 min until OOM (~t+30 min) — a ~15-min window — and the **shrinking lead time** ("34 min → 10 min") is a great thing to point at live. Ask the agent **after** the card is up and it folds the forecast into its answer (verified).
+
 ## 5. The demo flow (act by act)
 
 ### Act 1 — Inject the incident (Studio → 🎬 Scenarios)
@@ -239,6 +253,22 @@ Type these into **💬 Ask Vigil** (`:8501`). Each is grounded; the agent calls 
 
 > Tip: the agent is conversational — you can follow up ("tell me more about the asset-api errors",
 > "what's the kubectl command for #1") and it keeps context.
+
+### ✅ These prompts were live-validated against the mid-incident cluster
+All scored **5/5 actionable + charter-clean** (grounded entities/numbers, provenance labelled, no invented cause, runnable kubectl). What each actually returned:
+
+| # | Prompt | Tool calls | What it returned |
+|---|---|---|---|
+| 1 | what/when/why/how | 20 | "Two independent faults: genix-historian down (ImagePullBackOff) + asset-api stale → operations-dashboard." MEASURED/AUTHORED/HYPOTHESIS labelled, 5 kubectl steps. |
+| 2 | root cause + downstream | 16 | Names historian (0/1, image-pull) + the asset-api→operations-dashboard cascade; labels the pull reason "unobservable" instead of inventing it; 7 steps. |
+| 3 | trending toward failure | 19 | Historian down + recurring CPU throttling that escalated to probe-failure/OOM yesterday; flags historian→asset-api as HYPOTHESIS; 6 steps. |
+| 4 | correlation vs cause | 18 | Cleanly separates the one AUTHORED cross-service cause from independent faults + node co-occurrences; 5 steps. |
+| 5 | over/under-provisioned | 6 | "31 over-provisioned, 0 under, **do not touch 32 unstable**" with p95-vs-request numbers + patch commands. |
+| 6 | what Vigil can't see | 11 | 10 critical phenomena invisible, 146/493 pairs silent, etcd/scheduler/CNI/logs unmonitored — 23 blind spots, all grounded. |
+
+**Important demo nuance:** the agent leads with **firing phenomena** (historian down, asset-api staleness, throttling). The **pdm-analyzer memory leak** only becomes prominent once its **forecast card fires** (or it OOMs) — so ask the WHAT/WHEN/WHY/HOW prompt **after** you've shown the `/forecast` page, and the agent will fold the early-warning into its answer. Ask it earlier and you still get a strong multi-fault answer (historian + asset-api + throttling), just without the leak headline.
+
+**Expect chronic background faults** (asset-api↔asset-registry staleness, node CPU throttling) — they're real conditions of this small single-node cluster, not bugs. Narrate them as a *strength*: "Vigil sees all of these and keeps them as **separate incidents** — it never merges unrelated faults." The agent does exactly that in every answer above.
 
 ---
 

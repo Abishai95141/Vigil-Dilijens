@@ -62,14 +62,15 @@ SCENARIOS: list[Scenario] = [
             "(WHAT + WHY are immediate).\n"
             "t+10s  a sustained memory leak is armed on pdm-analyzer → within ~1 window a CUSUM "
             "onset marks the step (the anomaly — WHEN it STARTED, immediately).\n"
-            "t+10–15m  as the climb sustains and fills the forecast window, a PROJECTED early-warning "
-            "card gives the lead time to the ~243Mi bar — the WHEN it WILL breach, before impact "
-            "(forecasting needs history; arm this first and let it mature while you walk the other "
-            "pages). The two incidents stay SEPARATE in the incident store (the anti-false-chain rule)."
+            "t+6–10m  as the climb fills the forecast window, a PROJECTED early-warning card gives the "
+            "lead time to the ~243Mi bar — the WHEN it WILL breach, before impact (forecasting needs "
+            "history; arm this first and let it mature while you walk the other pages). The card "
+            "persists for ~10+ min before any OOM. The two incidents stay SEPARATE in the incident "
+            "store (the anti-false-chain rule)."
         ),
         levers=[
             Lever("db_outage", "Historian image-pull failure (the down-NOW root)"),
-            Lever("mem_leak_medium", "Arm the pdm-analyzer memory leak (the forecastable risk — matures into an early-warning card)", delay=10),
+            Lever("mem_leak_demo", "Arm the pdm-analyzer memory leak (demo-tuned → confident early-warning card in ~6-10 min)", delay=10),
         ],
         pages=[
             "Findings (WORKLOAD_UNAVAILABLE)", "Early warnings (BandBar — the WHEN)",
